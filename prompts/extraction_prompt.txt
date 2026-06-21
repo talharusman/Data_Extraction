@@ -6,19 +6,18 @@ Rules:
 3. Extract only information explicitly stated in the evidence.
 4. Return null when a field is unavailable.
 5. Preserve the source wording for text values.
-6. Return valid JSON only.
+6. Return one valid JSON object only. No markdown fences, no commentary.
 7. Every non-null value must include evidence from the retrieved chunks.
+8. You MUST include every field listed below as a top-level JSON key, even when the value is null.
 
-Return JSON with this exact shape:
+Use the exact field names below as JSON keys. For each field return this object shape:
 {
-  "FIELD_NAME": {
-    "value": "explicit value or null",
-    "confidence": 0.0,
-    "source_chunk": "chunk id or null",
-    "source_page": null,
-    "source_file": "file name or null",
-    "evidence": "short copied phrase from source or null"
-  }
+  "value": "explicit value or null",
+  "confidence": 0.0,
+  "source_chunk": "chunk id or null",
+  "source_page": null,
+  "source_file": "file name or null",
+  "evidence": "short copied phrase from source or null"
 }
 
 Fields to extract:

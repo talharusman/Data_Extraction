@@ -104,14 +104,40 @@ class ExcelExportAgent:
         combined_rows = self._merge_rows(normalized_new_rows)
         workbook = self._build_workbook(combined_rows)
         self._save_workbook(workbook, self.products_path)
+        if self.review_path:
+            review_rows = [row for product, row in zip(products, normalized_new_rows, strict=True) if product.needs_review]
+            review_workbook = self._build_workbook(review_rows or normalized_new_rows[:0])
+            self._save_workbook(review_workbook, self.review_path)
 
     def _merge_rows(self, new_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         existing_rows = self._load_existing_rows()
         combined = existing_rows + new_rows
         deduped: dict[str, dict[str, Any]] = {}
         for row in combined:
-            deduped[self._row_key(row)] = row
+            key = self._row_key(row)
+            if key in deduped:
+                deduped[key] = self._merge_row_values(deduped[key], row)
+            else:
+                deduped[key] = row
         return list(deduped.values())
+
+    @staticmethod
+    def _merge_row_values(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(existing)
+        for column, value in incoming.items():
+            if ExcelExportAgent._has_value(value):
+                merged[column] = value
+            elif column not in merged:
+                merged[column] = value
+        return merged
+
+    @staticmethod
+    def _has_value(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str) and not value.strip():
+            return False
+        return True
 
     def _load_existing_rows(self) -> list[dict[str, Any]]:
         if not self.products_path.exists():

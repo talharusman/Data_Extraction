@@ -23,6 +23,7 @@ class QdrantVectorStore:
     ) -> None:
         self.collection_name = collection_name
         self.storage_path = storage_path
+        self.vector_size = vector_size
         self.client = self._build_client(url, api_key, storage_path)
         self._ensure_collection(vector_size, recreate_collection)
 
@@ -54,6 +55,26 @@ class QdrantVectorStore:
                 )
         except ResponseHandlingException as exc:
             raise RuntimeError("Qdrant could not be initialized.") from exc
+
+    def clear_collection(self) -> None:
+        try:
+            self.client.delete_collection(collection_name=self.collection_name)
+        except Exception:
+            pass
+        self.client.create_collection(
+            collection_name=self.collection_name,
+            vectors_config=models.VectorParams(size=self.vector_size, distance=models.Distance.COSINE),
+        )
+
+    def delete_by_source_path(self, source_path: str) -> None:
+        self.client.delete(
+            collection_name=self.collection_name,
+            points_selector=models.FilterSelector(
+                filter=models.Filter(
+                    must=[models.FieldCondition(key="source_path", match=models.MatchValue(value=source_path))]
+                )
+            ),
+        )
 
     def upsert_chunks(self, chunks: list[DocumentChunk], vectors: list[list[float]]) -> None:
         points = [

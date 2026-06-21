@@ -12,7 +12,7 @@ from app.chunking import ChunkingEngine
 from app.config import AppConfig
 from app.document_reader import DocumentReader
 from app.excel_exporter import ExcelExportAgent
-from app.models import ProcessingStatus, ProductExtraction
+from app.models import ProcessingStatus, ProductExtraction, ExtractedField
 from embeddings.generator import EmbeddingGenerator
 from parsers.factory import ParserFactory
 from retrievers.semantic_retriever import SemanticRetriever
@@ -60,6 +60,7 @@ class BankingExtractionPipeline:
     def process_folder(self, root_folder: str | Path) -> list[ProductExtraction]:
         files = self.reader.scan(root_folder)
         self.status = ProcessingStatus(state="running", files_discovered=len(files))
+        self.store.clear_collection()
         products = []
         for path in files:
             try:
@@ -75,19 +76,29 @@ class BankingExtractionPipeline:
         return products
 
     def process_file(self, path: str | Path, export: bool = True) -> ProductExtraction:
-        path = Path(path)
+        path = Path(path).resolve()
         logger.info("Processing file: %s", path)
         parser = self.parser_factory.get_parser(path)
         parsed = parser.parse(path)
         chunks = self.chunker.chunk(parsed)
         vectors = self.embedder.embed_texts([chunk.text for chunk in chunks])
+        source_path = str(path)
+        try:
+            self.store.delete_by_source_path(source_path)
+        except Exception:
+            logger.debug("Could not delete prior chunks for %s; continuing with upsert.", source_path)
         self.store.upsert_chunks(chunks, vectors)
 
         fields = {}
         retrieval_scores: dict[str, float] = {}
         for group_name, group_fields in self.config.extraction_groups.items():
             query = f"Banking product fields for {group_name}: {', '.join(group_fields)}"
-            retrieved = self.retriever.retrieve(query, source_file=path.name)
+            retrieved = self.retriever.retrieve(query, source_path=source_path)
+            if not retrieved:
+                logger.warning("No chunks retrieved for %s group '%s'; skipping LLM calls.", path.name, group_name)
+                for field_name in group_fields:
+                    fields.setdefault(field_name, ExtractedField())
+                continue
             retrieval_scores.update({chunk.chunk_id: score for chunk, score in retrieved})
             extracted = self.extractor.extract(group_fields, retrieved)
             validated = self.validator.validate(extracted, retrieved)
