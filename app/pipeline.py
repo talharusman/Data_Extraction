@@ -6,7 +6,7 @@ from pathlib import Path
 
 from agents.confidence_agent import ConfidenceScoringAgent
 from agents.extraction_agent import ExtractionAgent
-from agents.groq_llm import GroqLLM
+from agents.local_llm import LocalGGUFLLM
 from agents.validation_agent import ValidationAgent
 from app.chunking import ChunkingEngine
 from app.config import AppConfig
@@ -42,10 +42,14 @@ class BankingExtractionPipeline:
             recreate_collection=config.get("qdrant", "recreate_collection", default=False),
         )
         self.retriever = SemanticRetriever(self.embedder, self.store, config.get("retrieval", "top_k"))
-        llm = GroqLLM(
-            api_key=config.runtime.groq_api_key,
-            base_url=config.runtime.groq_base_url,
-            model=config.runtime.groq_model,
+        llm = LocalGGUFLLM(
+            model_path=config.runtime.llm_model_path,
+            n_ctx=config.runtime.llm_n_ctx,
+            n_threads=config.runtime.llm_n_threads,
+            n_gpu_layers=config.runtime.llm_n_gpu_layers,
+            temperature=config.runtime.llm_temperature,
+            max_tokens=config.runtime.llm_max_tokens,
+            chat_format=config.runtime.llm_chat_format,
         )
         self.extractor = ExtractionAgent(llm)
         self.validator = ValidationAgent(llm)

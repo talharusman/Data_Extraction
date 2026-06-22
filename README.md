@@ -9,7 +9,7 @@ Command-line Python RAG pipeline for extracting banking product fields from docu
 - Splits parsed content into chunks
 - Creates local hashing embeddings by default
 - Stores and searches chunks with Qdrant client fallback memory storage
-- Uses Groq for JSON field extraction and validation
+- Uses a local GGUF Qwen 2.5 model for JSON field extraction and validation
 - Exports results to Excel
 
 ## Kept Project Structure
@@ -17,7 +17,7 @@ Command-line Python RAG pipeline for extracting banking product fields from docu
 ```text
 main.py                 CLI entry point
 app/                    pipeline, config, chunking, Excel export
-agents/                 Groq extraction, validation, confidence scoring
+agents/                 local GGUF extraction, validation, confidence scoring
 embeddings/             local hashing embeddings
 parsers/                document parsers
 retrievers/             semantic retrieval
@@ -36,16 +36,32 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
-Edit `.env` and set your Groq key:
+Edit `.env` and set your local GGUF model path:
 
 ```env
-GROQ_API_KEY=your-key
-GROQ_BASE_URL=https://api.groq.com/openai/v1
-GROQ_MODEL=openai/gpt-oss-20b
+LLM_MODEL_PATH=models/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+LLM_N_CTX=4096
+LLM_N_THREADS=8
+LLM_N_GPU_LAYERS=0
+LLM_TEMPERATURE=0
+LLM_MAX_TOKENS=1024
 QDRANT_URL=http://localhost:6333
 ```
 
 If Qdrant is not running, the app falls back to in-memory vector storage for the current run.
+
+## Local Model Setup
+
+1. Download a Qwen 2.5 GGUF file, such as `Qwen2.5-7B-Instruct-Q4_K_M.gguf`.
+2. Put it somewhere on disk, for example `models/Qwen2.5-7B-Instruct-GGUF/`.
+3. Set `LLM_MODEL_PATH` in `.env` to the full file path.
+4. Install the Python dependency:
+
+```bash
+pip install -r requirements.txt
+```
+
+If `llama-cpp-python` fails to install on Windows, you may need a prebuilt wheel or C++ build tools.
 
 ## Run
 
