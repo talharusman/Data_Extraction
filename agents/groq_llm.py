@@ -54,12 +54,14 @@ class GroqLLM:
         model: str,
         timeout: float = 60.0,
         max_retries: int = 3,
+        max_retry_after_seconds: float = 30.0,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
         self.max_retries = max_retries
+        self.max_retry_after_seconds = max_retry_after_seconds
         self._disabled = False
         self._warned_disabled = False
         self._min_request_interval = 0.75
@@ -115,6 +117,14 @@ class GroqLLM:
                         if response.status_code == 429:
                             retry_after = response.headers.get("retry-after")
                             sleep_for = float(retry_after) if retry_after else min(2**attempt, 8)
+                            if sleep_for > self.max_retry_after_seconds:
+                                logger.warning(
+                                    "Groq asked for %s seconds of backoff, but the client cap is %s seconds. Returning empty output so the pipeline can continue.",
+                                    sleep_for,
+                                    self.max_retry_after_seconds,
+                                )
+                                return {}
+                            sleep_for = max(0.0, sleep_for)
                             logger.warning(
                                 "Groq rate limit hit; waiting %s seconds (attempt %s/%s).",
                                 sleep_for,

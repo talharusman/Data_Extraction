@@ -527,3 +527,743 @@ For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/St
 2026-06-21 13:36:42,955 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 11.0 seconds (attempt 1/4).
 2026-06-21 13:36:55,988 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
 2026-06-21 13:36:57,857 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 09:59:10,784 | WARNING | vectorstore.qdrant_store | Qdrant server at http://localhost:6333 is unavailable; using in-memory embedded storage instead.
+2026-06-22 09:59:10,788 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Islamic Banking\Islamic Banking Free Takaful Coverage.docx
+2026-06-22 09:59:13,869 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 09:59:16,676 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 09:59:18,807 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 09:59:20,077 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 09:59:20,773 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 09:59:20,774 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 3.0 seconds (attempt 1/4).
+2026-06-22 09:59:25,614 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 09:59:26,376 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 09:59:26,377 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 1/4).
+2026-06-22 09:59:36,800 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 09:59:37,609 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 09:59:37,610 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 7.0 seconds (attempt 1/4).
+2026-06-22 09:59:46,639 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 09:59:47,404 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 09:59:47,405 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 14.0 seconds (attempt 1/4).
+2026-06-22 10:00:03,358 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 10:00:04,096 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 10:00:04,098 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 10.0 seconds (attempt 1/4).
+2026-06-22 10:00:14,925 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 10:00:14,926 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 2.0 seconds (attempt 2/4).
+2026-06-22 10:00:18,477 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 10:00:19,297 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 10:00:19,299 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 10:00:27,102 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 10:00:27,854 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 10:00:27,855 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 5.0 seconds (attempt 1/4).
+2026-06-22 10:00:34,596 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 10:00:35,335 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 10:00:35,336 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 4.0 seconds (attempt 1/4).
+2026-06-22 10:00:40,418 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 10:49:05,293 | WARNING | vectorstore.qdrant_store | Qdrant server at http://localhost:6333 is unavailable; using in-memory embedded storage instead.
+2026-06-22 10:49:05,300 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Conventional Current Accounts\Alfalah Asaan Current Account.docx
+2026-06-22 10:49:08,459 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 10:49:10,713 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 10:49:12,454 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 10:49:14,092 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 10:49:14,093 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 511.0 seconds (attempt 1/4).
+2026-06-22 11:03:39,510 | WARNING | vectorstore.qdrant_store | Qdrant server at http://localhost:6333 is unavailable; using in-memory embedded storage instead.
+2026-06-22 11:03:39,518 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Conventional Current Accounts\Alfalah Asaan Current Account.docx
+2026-06-22 11:03:42,545 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 11:03:43,465 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 11:03:43,467 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 735.0 seconds (attempt 1/4).
+2026-06-22 11:08:24,872 | WARNING | vectorstore.qdrant_store | Qdrant server at http://localhost:6333 is unavailable; using in-memory embedded storage instead.
+2026-06-22 11:08:24,886 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Banca Takaful\IGI LIFE WTO Tadbeer Multipurpose Savings Plan.docx
+2026-06-22 11:08:25,985 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 11:08:25,986 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 353.0 seconds (attempt 1/4).
+2026-06-22 11:14:39,457 | WARNING | vectorstore.qdrant_store | Qdrant server at http://localhost:6333 is unavailable; using in-memory embedded storage instead.
+2026-06-22 11:14:39,465 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Banca Takaful\IGI LIFE WTO Tadbeer Multipurpose Savings Plan.docx
+2026-06-22 11:14:41,843 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 11:14:42,969 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 11:14:42,970 | WARNING | agents.groq_llm | Groq asked for 515.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 11:14:44,044 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 11:14:44,047 | WARNING | agents.groq_llm | Groq asked for 164.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 11:14:45,068 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 11:14:45,069 | WARNING | agents.groq_llm | Groq asked for 456.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 11:14:46,044 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 11:14:46,049 | WARNING | agents.groq_llm | Groq asked for 105.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 11:14:47,065 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 11:14:47,070 | WARNING | agents.groq_llm | Groq asked for 469.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 11:14:48,089 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 11:14:48,089 | WARNING | agents.groq_llm | Groq asked for 115.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 11:14:49,010 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 11:14:49,010 | WARNING | agents.groq_llm | Groq asked for 120.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 11:14:49,885 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 11:14:49,886 | WARNING | agents.groq_llm | Groq asked for 465.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 11:14:50,760 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 11:14:50,761 | WARNING | agents.groq_llm | Groq asked for 108.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 13:25:04,920 | WARNING | vectorstore.qdrant_store | Qdrant server at http://localhost:6333 is unavailable; using in-memory embedded storage instead.
+2026-06-22 13:25:04,927 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Conv Consumer\Convetional Debit Card.docx
+2026-06-22 13:25:08,620 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:25:10,274 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:25:12,080 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:25:14,704 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:25:16,574 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:25:19,528 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:25:20,555 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:25:20,556 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 5.0 seconds (attempt 1/4).
+2026-06-22 13:25:26,390 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:25:26,392 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 8.0 seconds (attempt 2/4).
+2026-06-22 13:25:36,065 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:25:37,087 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:25:37,088 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 7.0 seconds (attempt 1/4).
+2026-06-22 13:25:45,842 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:25:46,734 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:25:46,735 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 8.0 seconds (attempt 1/4).
+2026-06-22 13:25:57,372 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:25:58,341 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:25:58,342 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 15.0 seconds (attempt 1/4).
+2026-06-22 13:26:14,767 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:26:15,609 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:26:15,610 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 7.0 seconds (attempt 1/4).
+2026-06-22 13:26:23,936 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:26:24,725 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:26:24,726 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 5.0 seconds (attempt 1/4).
+2026-06-22 13:26:31,972 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:26:32,949 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:26:32,950 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 7.0 seconds (attempt 1/4).
+2026-06-22 13:26:43,472 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:26:44,475 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:26:44,476 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 8.0 seconds (attempt 1/4).
+2026-06-22 13:26:54,756 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:26:55,597 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:26:55,598 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 1/4).
+2026-06-22 13:27:05,490 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:27:05,491 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 1.0 seconds (attempt 2/4).
+2026-06-22 13:27:07,832 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:31:51,784 | WARNING | vectorstore.qdrant_store | Qdrant server at http://localhost:6333 is unavailable; using in-memory embedded storage instead.
+2026-06-22 13:31:51,788 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Conv Consumer\Convetional Debit Card.docx
+2026-06-22 13:31:54,830 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:31:56,254 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:31:57,813 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:32:00,401 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:32:01,787 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:32:02,812 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:32:02,813 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 2.0 seconds (attempt 1/4).
+2026-06-22 13:32:08,164 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 400 Bad Request"
+2026-06-22 13:32:08,167 | WARNING | agents.groq_llm | Groq JSON validation failed (attempt 2/4): {"error":{"message":"Failed to validate JSON. Please adjust your prompt. See 'failed_generation' for more details.","type":"invalid_request_error","code":"json_validate_failed","failed_generation":""}}
+
+2026-06-22 13:32:12,899 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:32:13,918 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:32:13,919 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 5.0 seconds (attempt 1/4).
+2026-06-22 13:32:19,877 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:32:19,880 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 2/4).
+2026-06-22 13:32:30,992 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:32:31,917 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:32:31,919 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 7.0 seconds (attempt 1/4).
+2026-06-22 13:32:40,500 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:32:41,499 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:32:41,499 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 1/4).
+2026-06-22 13:32:52,747 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:32:53,718 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:32:53,719 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 12.0 seconds (attempt 1/4).
+2026-06-22 13:33:07,414 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:33:08,314 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:33:08,317 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 5.0 seconds (attempt 1/4).
+2026-06-22 13:33:14,661 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:33:15,482 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:33:15,482 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 13:33:23,114 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:33:24,142 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:33:24,183 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 13:33:32,071 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:33:32,989 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:33:32,990 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 1/4).
+2026-06-22 13:33:44,712 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:33:45,579 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 13:33:45,586 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 10.0 seconds (attempt 1/4).
+2026-06-22 13:33:57,264 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 13:33:57,411 | WARNING | app.excel_exporter | Could not write output\nbo_master_dataset.xlsx because it is open or locked; writing output\nbo_master_dataset_local.xlsx instead.
+2026-06-22 14:40:35,002 | WARNING | vectorstore.qdrant_store | Qdrant server at http://localhost:6333 is unavailable; using in-memory embedded storage instead.
+2026-06-22 14:40:35,021 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Orbits\Conventional Banking Orbit.docx
+2026-06-22 14:40:35,991 | WARNING | agents.groq_llm | Groq network error (attempt 1/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:40:38,445 | WARNING | agents.groq_llm | Groq network error (attempt 2/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:40:40,974 | WARNING | agents.groq_llm | Groq network error (attempt 3/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:40:45,503 | WARNING | agents.groq_llm | Groq network error (attempt 4/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:40:46,273 | WARNING | agents.groq_llm | Groq network error (attempt 1/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:40:47,789 | WARNING | agents.groq_llm | Groq network error (attempt 2/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:40:50,317 | WARNING | agents.groq_llm | Groq network error (attempt 3/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:40:55,424 | WARNING | agents.groq_llm | Groq network error (attempt 4/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:40:55,447 | WARNING | agents.groq_llm | Groq request exhausted retries for this call; returning empty result. Last error: [Errno 11001] getaddrinfo failed
+2026-06-22 14:40:56,197 | WARNING | agents.groq_llm | Groq network error (attempt 1/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:40:57,808 | WARNING | agents.groq_llm | Groq network error (attempt 2/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:41:00,439 | WARNING | agents.groq_llm | Groq network error (attempt 3/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:41:05,170 | WARNING | agents.groq_llm | Groq network error (attempt 4/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:41:05,876 | WARNING | agents.groq_llm | Groq network error (attempt 1/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:41:07,509 | WARNING | agents.groq_llm | Groq network error (attempt 2/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:41:10,079 | WARNING | agents.groq_llm | Groq network error (attempt 3/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:41:14,658 | WARNING | agents.groq_llm | Groq network error (attempt 4/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:41:14,659 | WARNING | agents.groq_llm | Groq request exhausted retries for this call; returning empty result. Last error: [Errno 11001] getaddrinfo failed
+2026-06-22 14:41:15,374 | WARNING | agents.groq_llm | Groq network error (attempt 1/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:41:17,040 | WARNING | agents.groq_llm | Groq network error (attempt 2/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:41:19,721 | WARNING | agents.groq_llm | Groq network error (attempt 3/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:41:24,481 | WARNING | agents.groq_llm | Groq network error (attempt 4/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:41:25,134 | WARNING | agents.groq_llm | Groq network error (attempt 1/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:41:26,864 | WARNING | agents.groq_llm | Groq network error (attempt 2/4): [Errno 11001] getaddrinfo failed
+2026-06-22 14:42:12,612 | WARNING | vectorstore.qdrant_store | Qdrant server at http://localhost:6333 is unavailable; using in-memory embedded storage instead.
+2026-06-22 14:42:12,669 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Orbits\Conventional Banking Orbit.docx
+2026-06-22 14:42:15,729 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:42:18,731 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:42:21,061 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:42:23,079 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:42:25,858 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:42:26,805 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:42:26,806 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 7.0 seconds (attempt 1/4).
+2026-06-22 14:42:35,867 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:42:37,044 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:42:37,045 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 18.0 seconds (attempt 1/4).
+2026-06-22 14:42:56,499 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:42:57,250 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:42:57,254 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 4.0 seconds (attempt 1/4).
+2026-06-22 14:43:02,025 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:43:02,029 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 4.0 seconds (attempt 2/4).
+2026-06-22 14:43:07,447 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:43:08,307 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:43:08,308 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 14:43:16,700 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:43:18,553 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:43:18,553 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 3.0 seconds (attempt 1/4).
+2026-06-22 14:43:23,205 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:43:24,037 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:43:24,038 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 14.0 seconds (attempt 1/4).
+2026-06-22 14:43:39,877 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:43:40,724 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:43:40,728 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 8.0 seconds (attempt 1/4).
+2026-06-22 14:43:50,325 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:43:51,181 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:43:51,182 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 10.0 seconds (attempt 1/4).
+2026-06-22 14:44:04,825 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:44:05,783 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:44:05,783 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 7.0 seconds (attempt 1/4).
+2026-06-22 14:44:14,389 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:44:15,260 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:44:15,260 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 12.0 seconds (attempt 1/4).
+2026-06-22 14:44:28,901 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:44:28,938 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Orbits\Islamic Banking Orbit.docx
+2026-06-22 14:44:29,915 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:44:29,915 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 8.0 seconds (attempt 1/4).
+2026-06-22 14:44:40,385 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:44:41,521 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:44:41,522 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 14.0 seconds (attempt 1/4).
+2026-06-22 14:44:57,868 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:44:58,667 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:44:58,668 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 10.0 seconds (attempt 1/4).
+2026-06-22 14:45:16,802 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:45:17,744 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:45:17,745 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 3.0 seconds (attempt 1/4).
+2026-06-22 14:45:23,445 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:45:24,255 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:45:24,299 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 8.0 seconds (attempt 1/4).
+2026-06-22 14:45:34,505 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:45:35,962 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:45:35,963 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 14:45:45,305 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:45:46,421 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:45:46,422 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 16.0 seconds (attempt 1/4).
+2026-06-22 14:46:04,231 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:46:05,074 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:46:05,075 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 12.0 seconds (attempt 1/4).
+2026-06-22 14:46:18,619 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:46:19,415 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:46:19,415 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 1/4).
+2026-06-22 14:46:29,788 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:46:30,616 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:46:30,617 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 8.0 seconds (attempt 1/4).
+2026-06-22 14:46:40,717 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:46:41,655 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:46:41,659 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 11.0 seconds (attempt 1/4).
+2026-06-22 14:46:54,643 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:46:55,463 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:46:55,465 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 5.0 seconds (attempt 1/4).
+2026-06-22 14:47:01,990 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:47:02,872 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:47:02,873 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 8.0 seconds (attempt 1/4).
+2026-06-22 14:47:12,723 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:47:13,715 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:47:13,717 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 7.0 seconds (attempt 1/4).
+2026-06-22 14:47:23,122 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:47:24,203 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:47:24,204 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 11.0 seconds (attempt 1/4).
+2026-06-22 14:47:37,133 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:47:38,018 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:47:38,019 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 8.0 seconds (attempt 1/4).
+2026-06-22 14:47:47,626 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:55:47,904 | WARNING | vectorstore.qdrant_store | Qdrant server at http://localhost:6333 is unavailable; using in-memory embedded storage instead.
+2026-06-22 14:55:47,916 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Banca Takaful\Alfalah Insurance Zaamin Takaful Plan.docx
+2026-06-22 14:55:51,043 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:55:52,785 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:55:54,801 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:55:56,719 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:55:57,486 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:55:57,487 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 7.0 seconds (attempt 1/4).
+2026-06-22 14:56:06,208 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:56:08,956 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:56:09,769 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:56:09,769 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 18.0 seconds (attempt 1/4).
+2026-06-22 14:56:29,576 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:56:30,410 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:56:30,413 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 7.0 seconds (attempt 1/4).
+2026-06-22 14:56:39,326 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:56:40,211 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:56:40,212 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 10.0 seconds (attempt 1/4).
+2026-06-22 14:56:52,422 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:56:53,754 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:56:53,758 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 10.0 seconds (attempt 1/4).
+2026-06-22 14:57:05,692 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:57:07,022 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:57:07,023 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 5.0 seconds (attempt 1/4).
+2026-06-22 14:57:13,008 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:57:13,017 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 1.0 seconds (attempt 2/4).
+2026-06-22 14:57:16,080 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:57:16,980 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:57:16,981 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 3.0 seconds (attempt 1/4).
+2026-06-22 14:57:20,764 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:57:20,765 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 3.0 seconds (attempt 2/4).
+2026-06-22 14:57:25,683 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:57:26,527 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:57:26,527 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 4.0 seconds (attempt 1/4).
+2026-06-22 14:57:32,425 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:57:32,431 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Banca Takaful\Banca IBG.txt
+2026-06-22 14:57:33,431 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:57:33,432 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 11.0 seconds (attempt 1/4).
+2026-06-22 14:57:47,627 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:57:48,494 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:57:48,494 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 21.0 seconds (attempt 1/4).
+2026-06-22 14:58:11,869 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:58:12,727 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:58:12,729 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 14.0 seconds (attempt 1/4).
+2026-06-22 14:58:28,646 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:58:29,481 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:58:29,483 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 12.0 seconds (attempt 1/4).
+2026-06-22 14:58:43,104 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:58:43,976 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:58:43,977 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 1/4).
+2026-06-22 14:58:54,509 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:58:55,439 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:58:55,440 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 14:59:03,761 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:59:04,563 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:59:04,563 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 12.0 seconds (attempt 1/4).
+2026-06-22 14:59:18,256 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:59:19,207 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:59:19,208 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 10.0 seconds (attempt 1/4).
+2026-06-22 14:59:30,746 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:59:31,689 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:59:31,692 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 8.0 seconds (attempt 1/4).
+2026-06-22 14:59:42,081 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 14:59:42,990 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 14:59:42,990 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 14.0 seconds (attempt 1/4).
+2026-06-22 14:59:58,293 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:00:00,171 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:00:00,187 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 2.0 seconds (attempt 1/4).
+2026-06-22 15:00:03,206 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:00:03,207 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 5.0 seconds (attempt 2/4).
+2026-06-22 15:00:10,043 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:00:11,640 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:00:11,650 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 8.0 seconds (attempt 1/4).
+2026-06-22 15:00:22,235 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:00:23,111 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:00:23,112 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 15:00:35,277 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:00:36,168 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:00:36,169 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 1/4).
+2026-06-22 15:00:46,880 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:00:47,908 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:00:47,909 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 12.0 seconds (attempt 1/4).
+2026-06-22 15:01:02,102 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:01:02,107 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Banca Takaful\IGI LIFE WTO Danish Education Plan.docx
+2026-06-22 15:01:03,227 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:01:03,228 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 1/4).
+2026-06-22 15:01:14,105 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:01:15,005 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:01:15,005 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 7.0 seconds (attempt 1/4).
+2026-06-22 15:01:22,766 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:01:22,767 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 5.0 seconds (attempt 2/4).
+2026-06-22 15:01:30,369 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:01:31,268 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:01:31,269 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 15:01:40,912 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:01:41,844 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:01:41,845 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 15:01:49,689 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:01:50,597 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:01:50,598 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 15:01:58,790 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:02:00,313 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:02:00,323 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 15:02:08,212 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:02:10,490 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:02:11,846 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:02:11,866 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 15:02:19,038 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:02:19,039 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 4.0 seconds (attempt 2/4).
+2026-06-22 15:02:25,262 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:02:26,186 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:02:26,187 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 15:02:35,541 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:02:38,958 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:02:39,809 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:02:39,810 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 14.0 seconds (attempt 1/4).
+2026-06-22 15:02:55,082 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:02:55,877 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:02:55,878 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 8.0 seconds (attempt 1/4).
+2026-06-22 15:03:05,814 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:03:05,822 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Banca Takaful\IGI LIFE WTO Saholat Savings and Protection Plan.docx
+2026-06-22 15:03:09,649 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:03:10,501 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:03:10,503 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 16.0 seconds (attempt 1/4).
+2026-06-22 15:03:28,992 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:03:29,976 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:03:29,977 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 4.0 seconds (attempt 1/4).
+2026-06-22 15:03:36,700 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:03:37,501 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:03:37,502 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 11.0 seconds (attempt 1/4).
+2026-06-22 15:03:50,599 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:03:51,397 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:03:51,400 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 3.0 seconds (attempt 1/4).
+2026-06-22 15:03:55,208 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:03:55,209 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 1.0 seconds (attempt 2/4).
+2026-06-22 15:03:58,579 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:03:59,428 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:03:59,429 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 8.0 seconds (attempt 1/4).
+2026-06-22 15:04:10,161 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:04:11,045 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:04:11,046 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 3.0 seconds (attempt 1/4).
+2026-06-22 15:04:16,571 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:04:17,381 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:04:17,384 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 15:04:24,874 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:04:25,710 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:04:25,711 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 15:04:34,320 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:04:35,133 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:04:35,134 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 11.0 seconds (attempt 1/4).
+2026-06-22 15:04:49,709 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:04:50,810 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:04:50,810 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 15:04:58,311 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:04:59,198 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:04:59,198 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 1/4).
+2026-06-22 15:05:10,224 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:05:10,234 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Banca Takaful\IGI LIFE WTO Shifa Takaful Plan.docx
+2026-06-22 15:05:11,510 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:05:11,511 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 15:05:20,599 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:05:21,444 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:05:21,445 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 12.0 seconds (attempt 1/4).
+2026-06-22 15:05:34,312 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:05:34,314 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 2.0 seconds (attempt 2/4).
+2026-06-22 15:05:39,204 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:05:40,068 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:05:40,069 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 1/4).
+2026-06-22 15:05:51,414 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:05:52,247 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:05:52,248 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 7.0 seconds (attempt 1/4).
+2026-06-22 15:06:01,122 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:06:02,053 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:06:02,054 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 11.0 seconds (attempt 1/4).
+2026-06-22 15:06:14,636 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:06:15,507 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:06:15,508 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 7.0 seconds (attempt 1/4).
+2026-06-22 15:06:24,693 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:06:25,465 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:06:25,465 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 8.0 seconds (attempt 1/4).
+2026-06-22 15:06:34,925 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:06:36,087 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:06:36,088 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 15:06:43,692 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:06:44,490 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:06:44,491 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 7.0 seconds (attempt 1/4).
+2026-06-22 15:06:53,575 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:06:54,420 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:06:54,421 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 15:07:02,714 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:07:03,550 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:07:03,551 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 4.0 seconds (attempt 1/4).
+2026-06-22 15:07:09,890 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:07:10,713 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:07:10,714 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 5.0 seconds (attempt 1/4).
+2026-06-22 15:07:17,996 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:07:18,973 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:07:18,974 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 7.0 seconds (attempt 1/4).
+2026-06-22 15:07:29,510 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:07:29,516 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Banca Takaful\IGI LIFE WTO Tadbeer Multipurpose Savings Plan.docx
+2026-06-22 15:07:30,830 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:07:30,830 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 1.0 seconds (attempt 1/4).
+2026-06-22 15:07:36,280 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:07:37,210 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:07:37,210 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 15:07:44,015 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:07:44,018 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 1.0 seconds (attempt 2/4).
+2026-06-22 15:07:46,898 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:07:47,698 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:07:47,699 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 7.0 seconds (attempt 1/4).
+2026-06-22 15:07:57,127 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:07:57,955 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:07:57,957 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 10.0 seconds (attempt 1/4).
+2026-06-22 15:08:09,906 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:08:10,724 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:08:10,726 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 3.0 seconds (attempt 1/4).
+2026-06-22 15:08:14,494 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:08:14,495 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 2.0 seconds (attempt 2/4).
+2026-06-22 15:08:18,635 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:08:19,406 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:08:19,407 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 5.0 seconds (attempt 1/4).
+2026-06-22 15:08:25,887 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:08:26,817 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:08:26,819 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 4.0 seconds (attempt 1/4).
+2026-06-22 15:08:32,664 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:08:33,512 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:08:33,513 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 4.0 seconds (attempt 1/4).
+2026-06-22 15:08:38,371 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:08:38,372 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 1.0 seconds (attempt 2/4).
+2026-06-22 15:08:41,394 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:08:42,349 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:08:42,351 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 4.0 seconds (attempt 1/4).
+2026-06-22 15:08:49,175 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:08:50,210 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:08:50,211 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 11.0 seconds (attempt 1/4).
+2026-06-22 15:09:02,428 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:02,429 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 1.0 seconds (attempt 2/4).
+2026-06-22 15:09:05,551 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:09:06,399 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:06,401 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 7.0 seconds (attempt 1/4).
+2026-06-22 15:09:18,139 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:09:21,875 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:09:21,906 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Banca Takaful\IGI LIFE WTO Uroos Marriage Plan.docx
+2026-06-22 15:09:25,330 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:25,330 | WARNING | agents.groq_llm | Groq asked for 148.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:26,589 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:26,590 | WARNING | agents.groq_llm | Groq asked for 281.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:27,738 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:27,739 | WARNING | agents.groq_llm | Groq asked for 52.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:29,497 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 15:09:30,472 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:30,472 | WARNING | agents.groq_llm | Groq asked for 513.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:31,593 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:31,594 | WARNING | agents.groq_llm | Groq asked for 536.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:32,563 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:32,564 | WARNING | agents.groq_llm | Groq asked for 696.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:33,491 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:33,492 | WARNING | agents.groq_llm | Groq asked for 755.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:34,359 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:34,360 | WARNING | agents.groq_llm | Groq asked for 756.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:35,492 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:35,495 | WARNING | agents.groq_llm | Groq asked for 692.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:35,502 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Banca Takaful\IGI LIFE WTO Zeenat Takaful Plan.docx
+2026-06-22 15:09:36,956 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:36,962 | WARNING | agents.groq_llm | Groq asked for 738.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:38,231 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:38,231 | WARNING | agents.groq_llm | Groq asked for 798.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:39,190 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:39,190 | WARNING | agents.groq_llm | Groq asked for 791.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:40,391 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:40,391 | WARNING | agents.groq_llm | Groq asked for 737.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:41,190 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:41,191 | WARNING | agents.groq_llm | Groq asked for 679.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:42,061 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:42,062 | WARNING | agents.groq_llm | Groq asked for 533.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:42,925 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:42,938 | WARNING | agents.groq_llm | Groq asked for 745.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:43,831 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:43,832 | WARNING | agents.groq_llm | Groq asked for 529.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:44,947 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:44,948 | WARNING | agents.groq_llm | Groq asked for 700.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:45,811 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:45,812 | WARNING | agents.groq_llm | Groq asked for 688.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:45,818 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Banca Takaful\IGI LIFE WTO Zindagi Premier Takaful Savings Plan.docx
+2026-06-22 15:09:46,752 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:46,754 | WARNING | agents.groq_llm | Groq asked for 527.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:47,651 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:47,652 | WARNING | agents.groq_llm | Groq asked for 577.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:48,489 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:48,492 | WARNING | agents.groq_llm | Groq asked for 740.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:49,511 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:49,512 | WARNING | agents.groq_llm | Groq asked for 747.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:50,375 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:50,376 | WARNING | agents.groq_llm | Groq asked for 519.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:51,296 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:51,297 | WARNING | agents.groq_llm | Groq asked for 757.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:52,146 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:52,148 | WARNING | agents.groq_llm | Groq asked for 696.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:53,068 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:53,083 | WARNING | agents.groq_llm | Groq asked for 755.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:54,550 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:54,551 | WARNING | agents.groq_llm | Groq asked for 756.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:55,718 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:55,719 | WARNING | agents.groq_llm | Groq asked for 691.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:55,729 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Banca Takaful\JUBILEE KAMIL TAKAFUL SAVINGS PLAN.docx
+2026-06-22 15:09:57,578 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:57,582 | WARNING | agents.groq_llm | Groq asked for 512.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:09:58,810 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:09:58,811 | WARNING | agents.groq_llm | Groq asked for 579.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:10:00,196 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:10:00,197 | WARNING | agents.groq_llm | Groq asked for 792.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:10:01,117 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:10:01,118 | WARNING | agents.groq_llm | Groq asked for 730.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:10:01,969 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:10:01,971 | WARNING | agents.groq_llm | Groq asked for 724.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:10:03,272 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:10:03,273 | WARNING | agents.groq_llm | Groq asked for 591.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:10:04,467 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:10:04,467 | WARNING | agents.groq_llm | Groq asked for 803.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:10:05,594 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:10:05,594 | WARNING | agents.groq_llm | Groq asked for 513.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:10:06,648 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:10:06,649 | WARNING | agents.groq_llm | Groq asked for 736.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:10:07,730 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:10:07,731 | WARNING | agents.groq_llm | Groq asked for 723.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:10:07,737 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\Banca Takaful\SLIC Tayyab Takaful Endowment Plan.docx
+2026-06-22 15:10:09,098 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:10:09,099 | WARNING | agents.groq_llm | Groq asked for 481.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:10:10,760 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:10:10,761 | WARNING | agents.groq_llm | Groq asked for 501.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:10:12,213 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:10:12,216 | WARNING | agents.groq_llm | Groq asked for 493.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:10:13,260 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:10:13,262 | WARNING | agents.groq_llm | Groq asked for 477.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:10:14,215 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:10:14,216 | WARNING | agents.groq_llm | Groq asked for 471.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:10:15,076 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:10:15,077 | WARNING | agents.groq_llm | Groq asked for 747.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:10:16,101 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:10:16,102 | WARNING | agents.groq_llm | Groq asked for 737.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:10:17,312 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:10:17,313 | WARNING | agents.groq_llm | Groq asked for 496.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:10:18,398 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:10:18,400 | WARNING | agents.groq_llm | Groq asked for 719.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 15:10:19,319 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 15:10:19,320 | WARNING | agents.groq_llm | Groq asked for 484.0 seconds of backoff, but the client cap is 30.0 seconds. Returning empty output so the pipeline can continue.
+2026-06-22 23:19:49,161 | WARNING | vectorstore.qdrant_store | Qdrant server at http://localhost:6333 is unavailable; using in-memory embedded storage instead.
+2026-06-22 23:19:49,170 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\SBP Covid 19 Schemes\SBP Schemes for Covid-19  Annexure C.docx
+2026-06-22 23:19:51,878 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:19:54,415 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:19:56,024 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:19:57,528 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:19:58,986 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:19:59,629 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:19:59,629 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 23:20:07,611 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:20:08,212 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:20:08,213 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 1/4).
+2026-06-22 23:20:18,669 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:20:19,260 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:20:19,263 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 1/4).
+2026-06-22 23:20:30,224 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:20:30,790 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:20:30,793 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 8.0 seconds (attempt 1/4).
+2026-06-22 23:20:41,353 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:20:42,270 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:20:42,271 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 1/4).
+2026-06-22 23:20:53,603 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:20:54,313 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:20:54,314 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 10.0 seconds (attempt 1/4).
+2026-06-22 23:21:06,161 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:21:06,727 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:21:06,728 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 1/4).
+2026-06-22 23:21:17,567 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:21:18,146 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:21:18,147 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 1/4).
+2026-06-22 23:21:29,605 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:21:30,198 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:21:30,199 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 1/4).
+2026-06-22 23:21:40,462 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:21:40,479 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\SBP Covid 19 Schemes\SBP Schemes for Covid-19  SBP Financial Relief For Consumers.docx
+2026-06-22 23:21:41,177 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:21:41,178 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 1/4).
+2026-06-22 23:21:52,443 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:21:53,106 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:21:53,106 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 18.0 seconds (attempt 1/4).
+2026-06-22 23:22:13,018 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:22:13,615 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:22:13,625 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 12.0 seconds (attempt 1/4).
+2026-06-22 23:22:28,320 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:22:28,985 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:22:28,986 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 15.0 seconds (attempt 1/4).
+2026-06-22 23:22:44,724 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:22:44,726 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 1.0 seconds (attempt 2/4).
+2026-06-22 23:22:48,363 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:22:48,977 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:22:48,979 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 15.0 seconds (attempt 1/4).
+2026-06-22 23:23:04,569 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:23:04,571 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 1.0 seconds (attempt 2/4).
+2026-06-22 23:23:07,327 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:23:08,007 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:23:08,007 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 11.0 seconds (attempt 1/4).
+2026-06-22 23:23:20,971 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:23:21,598 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:23:21,601 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 15.0 seconds (attempt 1/4).
+2026-06-22 23:23:38,815 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:23:39,473 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:23:39,484 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 11.0 seconds (attempt 1/4).
+2026-06-22 23:23:52,834 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:23:53,549 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:23:53,552 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 1.0 seconds (attempt 1/4).
+2026-06-22 23:23:56,432 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:23:57,019 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:23:57,019 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 17.0 seconds (attempt 1/4).
+2026-06-22 23:24:15,419 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:24:16,058 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:24:16,059 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 1/4).
+2026-06-22 23:24:22,616 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:24:22,616 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 4.0 seconds (attempt 2/4).
+2026-06-22 23:24:29,133 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:24:29,683 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:24:29,685 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 11.0 seconds (attempt 1/4).
+2026-06-22 23:24:41,266 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:24:41,266 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 6.0 seconds (attempt 2/4).
+2026-06-22 23:24:49,561 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:24:50,285 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:24:50,286 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 15.0 seconds (attempt 1/4).
+2026-06-22 23:25:07,343 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:25:08,024 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:25:08,025 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 13.0 seconds (attempt 1/4).
+2026-06-22 23:25:23,009 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:25:23,022 | INFO | app.pipeline | Processing file: C:\Users\Dell\Desktop\BankAlfala\dataextrction\Documents\SBP Covid 19 Schemes\SBP Schemes for Covid-19 Annexure B.docx
+2026-06-22 23:25:23,835 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:25:23,837 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 1/4).
+2026-06-22 23:25:35,055 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:25:35,675 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:25:35,677 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 12.0 seconds (attempt 1/4).
+2026-06-22 23:25:49,259 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:25:49,873 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:25:49,873 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 1/4).
+2026-06-22 23:26:00,312 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:26:00,952 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:26:00,953 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 7.0 seconds (attempt 1/4).
+2026-06-22 23:26:09,556 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:26:10,106 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:26:10,108 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 9.0 seconds (attempt 1/4).
+2026-06-22 23:26:20,774 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:26:21,382 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:26:21,387 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 10.0 seconds (attempt 1/4).
+2026-06-22 23:26:32,798 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:26:33,381 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:26:33,382 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 4.0 seconds (attempt 1/4).
+2026-06-22 23:26:39,461 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:26:40,041 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:26:40,041 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 5.0 seconds (attempt 1/4).
+2026-06-22 23:26:45,664 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:26:45,665 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 4.0 seconds (attempt 2/4).
+2026-06-22 23:26:51,380 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:26:52,001 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:26:52,002 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 5.0 seconds (attempt 1/4).
+2026-06-22 23:26:57,655 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:26:57,656 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 3.0 seconds (attempt 2/4).
+2026-06-22 23:27:03,672 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:27:04,374 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:27:04,375 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 12.0 seconds (attempt 1/4).
+2026-06-22 23:27:19,075 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:27:19,636 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:27:19,638 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 13.0 seconds (attempt 1/4).
+2026-06-22 23:27:34,263 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:27:34,817 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:27:34,818 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 14.0 seconds (attempt 1/4).
+2026-06-22 23:27:50,921 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22 23:27:51,478 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-06-22 23:27:51,479 | WARNING | agents.groq_llm | Groq rate limit hit; waiting 8.0 seconds (attempt 1/4).
+2026-06-22 23:28:00,622 | INFO | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"

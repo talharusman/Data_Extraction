@@ -10,7 +10,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from app.models import ProductExtraction
+from app.models import ExtractedField, ProductExtraction
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,28 @@ class ExcelExportAgent:
             review_workbook = self._build_workbook(review_rows or normalized_new_rows[:0])
             self._save_workbook(review_workbook, self.review_path)
 
+    def normalize_product(self, product: ProductExtraction) -> ProductExtraction:
+        normalized = product.model_copy(deep=True)
+        row = {column: None for column in self.columns}
+
+        for column in self.columns:
+            field = normalized.fields.get(column)
+            value = field.value if field else None
+            row[column] = self._normalize_value(column, value, row, product=normalized)
+
+        updated_fields: dict[str, ExtractedField] = {}
+        for column in self.columns:
+            field = normalized.fields.get(column)
+            if field is None:
+                field = ExtractedField()
+            else:
+                field = field.model_copy(deep=True)
+            field.value = row.get(column)
+            updated_fields[column] = field
+
+        normalized.fields = updated_fields
+        return normalized
+
     def _merge_rows(self, new_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         existing_rows = self._load_existing_rows()
         combined = existing_rows + new_rows
@@ -193,11 +215,11 @@ class ExcelExportAgent:
 
         summary_rows = [
             ("Purpose", "Consolidated eligibility dataset for model training built from all processed product batches."),
-            ("How to use", "Use MASTER_DATASET as the base training table. Blank cells indicate attributes not explicitly identified in the source batch."),
+            ("How to use", "Use MASTER_DATASET as the base training table. Blank cells indicate attributes that could not be safely extracted or inferred."),
             ("Dynamic record count", len(rows)),
             ("Dynamic BNK count", sum(1 for row in rows if self._lead_code(row) == "BNK")),
             ("Dynamic IBG count", sum(1 for row in rows if self._lead_code(row) == "IBG")),
-            ("Notes", "BNK/IBG are inferred from the product family and source folder. Re-run export to upsert matching products."),
+            ("Notes", "BNK/IBG are inferred from the product family and source folder. Compact inferred values are used when the document strongly implies a field."),
         ]
 
         for idx, (field, value) in enumerate(summary_rows, start=2):
@@ -323,6 +345,8 @@ class ExcelExportAgent:
         if column in BINARY_FIELDS:
             return self._normalize_binary(value)
         if column in NUMERIC_FIELDS:
+            if column in {"MIN_AGE", "MAX_AGE"}:
+                return self._normalize_age(column, value, row, product)
             return self._normalize_numeric(value)
         if column == "GENDER":
             return self._normalize_gender(value)
@@ -367,6 +391,59 @@ class ExcelExportAgent:
         if column == "SPECIAL_CONDITIONS":
             return self._normalize_special_conditions(value)
         return self._compact_label(value)
+
+    def _normalize_age(
+        self,
+        column: str,
+        value: Any,
+        row: dict[str, Any],
+        product: ProductExtraction | None = None,
+    ) -> int | None:
+        if value is not None:
+            text = self._clean_text(value)
+            range_match = re.search(r"(\d{1,3})\s*(?:-|to|–|—)\s*(\d{1,3})", text, flags=re.I)
+            if range_match:
+                low = int(range_match.group(1))
+                high = int(range_match.group(2))
+                return low if column == "MIN_AGE" else high
+            numeric = self._normalize_numeric(value)
+            if isinstance(numeric, (int, float)):
+                return int(numeric)
+
+        inferred = self._infer_age_range(row, product)
+        if not inferred:
+            return None
+        return inferred[0] if column == "MIN_AGE" else inferred[1]
+
+    def _infer_age_range(
+        self,
+        row: dict[str, Any],
+        product: ProductExtraction | None = None,
+    ) -> tuple[int | None, int | None] | None:
+        parts = [
+            row.get("CUSTOMER_TYPE"),
+            row.get("EMPLOYMENT_TYPE"),
+            row.get("TARGET_GOAL"),
+            row.get("TARGET_SEGMENT"),
+            row.get("SEGMENT"),
+            row.get("SPECIAL_CONDITIONS"),
+            row.get("PRODUCT_NAME"),
+            row.get("SOURCE_FILE_PRODUCT"),
+        ]
+        if product:
+            parts.extend([product.product_id, product.source_file, product.source_path])
+        haystack = " ".join(self._clean_text(part) for part in parts if part is not None).lower()
+        if not haystack:
+            return None
+        if any(token in haystack for token in ["student", "education", "school", "college", "university"]):
+            return (18, 25)
+        if any(token in haystack for token in ["senior citizen", "retired", "pensioner", "senior"]):
+            return (60, 75)
+        if any(token in haystack for token in ["teen", "teenager", "adolescent"]):
+            return (13, 17)
+        if any(token in haystack for token in ["child", "children", "kid", "kids", "minor"]):
+            return (0, 17)
+        return None
 
     def _normalize_product_name(self, value: Any, product: ProductExtraction | None) -> Any:
         text = self._compact_label(value)
@@ -445,7 +522,7 @@ class ExcelExportAgent:
         return None
 
     def _normalize_numeric(self, value: Any) -> int | float | None:
-        if value is None:
+        if value is None or pd.isna(value):
             return None
         if isinstance(value, bool):
             return int(value)
@@ -702,7 +779,13 @@ class ExcelExportAgent:
             return None
         text = re.sub(r"\s+", " ", text)
         text = text.split("\n", 1)[0].strip()
-        text = re.split(r"[;.,]", text)[0].strip()
+        text = re.split(r"[;.,/|:]", text)[0].strip()
+        text = re.sub(
+            r"\b(this product|this account|this service|the product|the account|the service|is designed for|designed for|meant for|offers?|provides?|available to|suitable for|for the purpose of|for)\b",
+            "",
+            text,
+            flags=re.I,
+        )
         text = re.sub(r"\b(customers?|account holders?|holders?|members?|applicants?|for|with|subject to)\b", "", text, flags=re.I)
         text = re.sub(r"\s+", " ", text).strip()
         if not text:
@@ -713,7 +796,7 @@ class ExcelExportAgent:
 
     @staticmethod
     def _clean_text(value: Any) -> str:
-        if value is None:
+        if value is None or pd.isna(value):
             return ""
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             if float(value).is_integer():

@@ -113,6 +113,7 @@ class BankingExtractionPipeline:
             fields=fields,
             needs_review=any(field.value is not None and field.confidence < threshold for field in fields.values()),
         )
+        product = self.exporter.normalize_product(product)
         if export:
             self.exporter.export([product])
             self._write_trace([product])
