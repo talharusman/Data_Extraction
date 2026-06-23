@@ -1,0 +1,88 @@
+ALFA Goal-Based Saving
+Product Features
+A hassle free savings facility that allows customers to save for their specific goals by
+breaking down a big savings amount into small micro instalments which are debited
+from customer’s account automatically on a daily/weekly/monthly basis as instructed by
+the customer.
+Product Feature / Benefits / Unique Selling Points:
+
+Secured deposit (Saved amount gets secured/locked until the goal is completed,
+ensuring that the savings is not utilized before the entire goal is completed)
+
+Flexible savings plan (Customers can select any amount to save, duration to complete
+saving, desirable frequency of deduction for saving – daily, weekly, monthly, fortnightly)
+
+Automated Savings (Based on customer’s savings plan, saving will be done
+automatically with the auto debit feature and deducted amount will be saved for the
+created goal without any manual input unless auto debit is unselected. Customer will
+have both options)
+
+Trackability/Transparency of Saved amount (With goal tracker option, customer will be
+able to see the progress of his saving goal - % completed, amount paid, amount left –
+and will have option to make extra payments for early completion of goal)
+
+Free Insurance (Customers get free insurance of their goals upto Rs.500k in case of
+death or permanent disability where the bank completes the goal of the customer max
+up to Rs.500k and gives the amount to the next of kin).
+Eligibility Criteria
+All Alfa customers (Branch Account holders, Digital Account holders)
+Registration Process
+Download and Login on Alfa. Go to “Savings”. Tap on “Goal-Based Saving”
+Transaction Information
+Minimum Goal Amount is Rs. 5,000 and Maximum amount is Rs. 500,000.
+Transactional Limits for Wallets will apply as defined under Branchless Banking
+regulations laid by State Bank of Pakistan.
+Related TATs
+All TATs are on Real-Time basis.
+
+FAQs
+What is the purpose of Goal-Based savings product? What does it do?
+With Goal-Based saving, you can easily save towards your goals. First you set any
+desirable goal on Alfa for example Car, Bike, Child education, Hajj, Umrah, Vacations
+etc, then you enter a goal amount which is required to complete your goal, you select
+the duration to complete the goal and Alfa automatically deducts payments from your
+account with its Auto debit feature to help you complete the goal. Furthermore, you get
+free reminders of your payments due. 100% free insurance coverage is also given to
+customers for their remaining instalments of the goal. You can create multiple goals
+and easily track their completion/ remaining instalments and manage them accordingly.
+What are the sources from which we can use Goal-Based Saving?
+Wallet and Account
+What type of insurance is given?
+Upon permanent disability or in case of death, remaining amount for the goal up to Rs
+500,000 is insured.
+What is the amount limit for Goal-Based Saving?
+Min 5,000 and Max 500,000.
+Can payments be made from all types of Accounts? What about Credit card,
+Debit Card, and Orbits?
+All accounts available in Alfa except for credit card, debit card and orbit.
+Is there any limit on number of Goals creation?
+No limit, but the sum of all the goals should not be greater than 500,000.
+Are there any charges associated with, non-auto debit, late deduction of
+installment, cancellation etc.
+No charges yet.
+What happens with Auto debit?
+With auto debit, your goal instalment payments are deducted automatically from your
+account based on your payment details. No manual payments are required
+What is length of characters of creating Goal Saving name?
+Modified name can be created by selecting others and Max length is 24 character
+including space
+Are Islamic Accounts eligible to use Goal-Based Saving?
+Yes
+
+How much amount should be there in customer’s account or wallet for
+creating a goal?
+Amount of at least first instalment of the goal should be in customer’s account for goal
+creation
+How much amount should be maintained in the account for completing the
+goal?
+Amount of at least the next instalment amount should be maintained at all times during
+the goal tenure.
+How do I fund my wallet account to create a goal?
+You can deposit money in your wallet account through FT/IBFT, or by depositing money
+through any Bank Alfalah branch, Easypaisa or Jazzcash agent.
+Can I complete a goal before the duration/tenure that I have set for it?
+Yes. You can top up your instalment payments from “Goal tracker” section to early
+complete a goal.
+What will happen when my goal is completed?
+Upon successful completion of the goal, the entire goal amount collected will be
+credited back in your account.

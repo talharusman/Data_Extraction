@@ -1,0 +1,110 @@
+Alfalah Bundles
+Product Features
+Cross selling multiple products not just increases the overall Products per Customer
+(PPC) but also results in long-term customer stickiness thereby resulting in higher
+revenue per customer. Alfalah Bundle Offering is one of such initiatives wherein, where
+Bank Alfalah will offer the existing and NTB customers (at the time of onboarding)
+product packages with attractive incentives in the form of discounts on applicable
+charges as per bank’s Schedule of Charges.
+Feature of Bundle Offering Program / Packages
+By subscribing to the bundle categories, the customers would be able to avail
+percentage discounts on the below services (where applicable as per product features)
+subject to maintenance of minimum balance requirement:
+Products/Services:
+Alfalah Bundle- Go
+Classic Debit Card
+25% off
+Alfa App / Net Banking
+25% off
+SMS Alerts
+25% off
+Small/Medium Locker annual rent
+25% off
+Procedures:
+S.No
+Description
+4.1. Enrollment of New Customers
+1
+NTB customers will open their account as per existing process.
+The concerned relationship officer will guide them regarding bundle offerings and if customer
+2
+Customer will fill out the subscription form.
+Once filled, branch will ensure the form is completely filled and duly signed along with related
+Branch will verify the signatures on the enrollment/subscription form and related T&Cs against
+Silver/Gold bundle account at the time of account number generation and obtain approval of O
+Please refer Annexure – A for Subscription form.
+Note: Customers will be able to avail relevant waivers and discounts during the first three mon
+maintain the required average balance, discounts availed in the last three months will be recov
+3
+Once all formalities have been fulfilled, Branch will mark the account
+with the relevant bundle pack selected in the subscription form and file the
+
+same for record.
+4.2.
+Enrollment of Existing Customers
+1
+Existing customers will be allowed to subscribe his/her account by filling/signing the Subscript
+2
+Verify the signature on the Subscription Form and related T&Cs against the Signature Specime
+4.3.
+Discounts recovery
+1
+Recovery of discounts will be made by the system in case of nonmaintenance of required aver
+Note: The customer’s account will not be closed until recovery of the discount amount in case
+case where bank is unable to recover this amount, and then decides to reverse the income du
+Otherwise, it should be booked as an Operational Loss.
+In case a customer subscribes and then unsubscribes the amount before the first three month
+through tracking of relevant reports on insights.
+4.4.
+De-tagging/Un-subscription of accounts
+1
+In case the customer does not wish to continue with the bundled offering, they can request to
+Form to submit the request.
+Branch shall ensure that un-subscription form is duly completed and signed as per mandate of
+If the customer requests to unsubscribe from these bundles, then any previous charges may b
+average balance.
+Please refer Annexure – B for Un-subscription form.
+Note: If the customer requests to convert his/her bundled account in another product categor
+the account’s bundle subscription will be removed prior to conversion. Current account would
+2
+BM/OM will approve the un-subscription form and sign accordingly.
+3
+Upon completion of all formalities, de-tag the customer from their existing bundle.
+Notes:
+a)
+Branch designated officer will ensure that If the customer requests to close his/her accou
+non-maintenance of required average balance;
+Prior to unsubscribing the bundle, system will check whether any outstanding discount amoun
+then allow to close.
+4.5 Change of Discount Rates
+1
+In case discount rates of respective bundles are required to be changed, relevant approval wil
+2
+Relevant changes will be shared with IT to implement as per existing change request process.
+
+Eligibility Criteria
+a) Bank Alfalah will offer bundle program to Individuals / Joint account holders, aged 18
+and above;
+b) Two different packages i.e. Silver and Gold will be offered. In order to subscribe for
+bundle offering program, customer must have either an Alfalah PKR current account or
+Alfalah Kamyab Karobar with following minimum average balance requirements:
+Bundle Category
+Alfalah Bundle-
+Silver
+Alfalah Bundle-
+Gold
+Average
+Balance
+requirement
+to maintain
+discount
+eligibility
+Rs.1,000,000
+Rs.1,500,000
+c)
+The customer can either open new account in these product categories and apply
+at the time of account opening or subscribe their existing account to this bundle.
+d)
+After subscription of bundles, incoming of funds greater than the limit described in
+the account opening will be allowed to credit in order to permit average balance
+requirement.

@@ -1,0 +1,21 @@
+Home Remittance Wallet Account
+Product Features
+This service allows the customers to open their HRA wallet either through any of our
+branches or by downloading Alfa. This account is governed by the regulations set out
+by SBP under the ambit of Branchless Banking. As such, the branches are required to
+perform following activities related to this product.
+
+Opening of HRA wallet via E-Smart. The account is only opened upon customer’s
+positive BVS verification
+
+Redirecting over the counter (cash) remittances into customer’s wallet account.
+
+Cash withdrawal transaction from customers Alfa Remittance Account
+
+Onetime Biometric verification of customers who have already opened their account via
+Alfa App
+Alfa Home remittance account has been assigned a higher balance & transaction limit in
+line with SBP regulations.
+Balance Limit: 1.5 M PKR
+Withdrawals
+: PKR 500,000/- in a month

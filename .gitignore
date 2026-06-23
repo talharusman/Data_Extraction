@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+extracted_data.jsonl
+bank_products_extracted.xlsx
+*.log

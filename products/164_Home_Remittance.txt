@@ -1,0 +1,392 @@
+Home Remittance
+Product Features
+HOME REMITTANCE:
+Bank Alfalah (BAFL) is offering home remittance services to customers where we
+partner with various international banks and remittance service providers, including
+MoneyGram.
+Product Features / Benefits:
+For Pakistan
+
+Boost foreign exchange reserves
+
+Foster national economic growth
+
+Promotes access to financial services
+
+Stabilize currency exchange rates
+For Financial Institutions (Banks):
+
+Fee / Rebate , Float, & FX Margin Revenue
+
+Potential New-to-Bank leads as walk-in customers (CA/SA Deposit) and other cross Sell
+opportunities for bank products
+Types of Transactions
+Funds Credit to Bank Alfalah Account:
+Beneficiaries (customers) maintaining an account (relationship) with Bank Alfalah can
+receive home remittances directly in their accounts via auto credit facility.
+Cash Over the Counter (COTC) Transactions:
+Beneficiaries (customers) who do not maintain an account (relationship) within the
+banking network, and/or would like to receive their funds in the form of cash can use
+“Cash Over the Counter” facility where funds are available for beneficiaries to collect
+from all branches of BAFL in real time.
+Funds Credit to Other Bank Accounts (IBFT, RTGS, PO/DD):
+Remittances can be received by the beneficiaries maintaining account relationships with
+banks other than Bank Alfalah. Payments to such beneficiaries can be made through
+IBFT (Interbank Funds Transfer), Real Time Gross Settlement (RTGS), Pay Orders (PO),
+and Demand Drafts (DD).”
+
+Funds Credit from Other Bank to BAFL Accounts (IBFT, RTGS, PO/DD):
+Remittances can be received in BAFL accounts from other banks via through IBFT
+(Interbank Funds Transfer), Real Time Gross Settlement (RTGS), Pay Orders (PO), and
+Demand Drafts (DD).”
+Product Types
+The transfer of money by an individual migrant worker to an individual in his/her home
+country is called “Home Remittances”.Pakistan Remittance Initiative (PRI):
+It is a joint initiative for facilitation of home remittances through legal banking channels
+by State Bank of Pakistan, Ministry of Overseas Pakistanis, and Ministry of Finance.
+Home Remittance beneficiaries can receive their money completely free of charge.
+Note: “Inward Wire Transfers” [received via SWIFT message including Mail Transfers
+(MTs), Telegraphic Transfers (TTs), Drafts, Bills of Exchange etc.] are separate from
+“Home Remittances” and handled by Centralized Remittance Department (CRD).
+FAQs
+What is home remittance?
+Home remittance is the transfer of money by a migrant worker to his/her family/loved
+ones back in Pakistan, through legal banking channels.
+Who is eligible to receive home remittances?
+Anyone who is a legal resident of the Islamic Republic of Pakistan and holds a valid
+government issued photo ID may receive home remittance payments from abroad.
+What are the available modes of payment?
+Bank Alfalah home remittance beneficiaries can receive payments sent by our dedicated
+partners via the following payment modes: Cash-over-Counter payments for walk-in
+customers at Bank Alfalah branches[TAT: Real time] Account Credit to Bank Alfalah
+account holders[TAT: Real time] Account Credit to 1Link member bank account
+holders[TAT: Real time] Account Credit to other bank account holders via RTGS[TAT:
+Same day]
+How do I receive my remittance?
+For Cash-over-Counter, you can visit any one of Bank Alfalah branches and present the
+unique reference number (given to you by the remitter) and a valid government issued
+photo ID to collect your payment. Bank account transfers are directly credited to your
+bank account so please ensure to provide your complete and correct account number,
+preferably IBAN, to your remitter.
+
+What will be the currency in which I receive my payment?
+All home remittance payments are disbursed in Pak Rupees.
+What are the fee charges for this service?
+Our service is free of charges.
+Where should I go to collect my payments?
+You can visit any of Bank Alfalah 620 branches across Pakistan. The complete list of
+Bank Alfalah branches can be found here (branch locator).
+What documents are required while collecting money?
+Please remember to bring your valid and original government issued photo ID (Passport,
+Driving License, National Identity Card) along with one clear copy for bank records.
+What is the maximum amount that can be received in cash?
+A customer may receive a maximum of Rs. 500,000/- on any given day.
+Remittance Partners - Tie-Ups List & RIN Formats
+S
+No
+.
+Partner Name
+Corridor
+Type
+Format
+Lengt
+h
+1
+XOOM CORPORATION
+USA
+Worldwid
+e
+Alpha
+Numeri
+c
+XXXXXXXXXX
+10
+digits
+2
+Remitly INC
+USA
+Alpha
+Numeri
+c
+RXXXXXXXXXXX
+12
+digits
+3
+RAK Bank
+UAE
+Alpha
+Numeri
+c
+RAKXXXXXXXX
+11
+digits
+4
+TRANGLO SDN BHD
+Malaysia
+Alpha
+Numeri
+c
+GXXXXXXXXXXXXX
+14
+digits
+5
+Oman Exchange
+Company
+Kuwait
+Alpha
+Numeri
+c
+OECXXXXXXXX
+11
+digits
+6
+I-Transfer
+Global
+Payments
+Spain
+Alpha
+Numeri
+c
+ALF001XXXXXXXX
+14
+digits
+7
+Trans-Fast Remittance
+LLC
+Worldwid
+e
+Numeri
+c
+3399XXXXXXXXX
+13
+digits
+
+Alpha
+Numeri
+c
+33TFXXXXXXXXX
+8
+LCC Trans-Sending
+(Small
+World)
+UK
+Numeri
+c
+XXXXXXXXXXX
+11
+digits
+XXXXXXXXXXXX
+12
+digits
+9
+HelloPaisa
+UK &
+GCC
+Numeri
+c
+XXXXXXXXXXXXXXX
+XX
+17
+digits
+XXXXXXXXXXXXXX
+14
+digits
+10
+Aftab
+Currency
+Exchange
+Europe
+Numeri
+c
+0460XXXXXXXXX
+13
+digits
+11
+Al Ansari
+Exchange
+(CashExpres
+s)
+UAE
+Numeri
+c
+XXXXXXXXX
+9 digits
+12
+Al Zaman Exchange
+Qatar
+Numeri
+c
+00XXXXXXXXXXXX
+14
+digits
+13
+Al-Fardan
+Exchange
+(Qatar)
+Qatar
+Numeri
+c
+XXXXXXXXX
+9 digits
+14
+Alfardan Exchange
+LLC
+(UAE)
+UAE
+Numeri
+c
+5610XXXXXXXXX
+13
+digits
+15
+BFC Bank Limited
+UK &
+GCC
+Numeri
+c
+666XXXXXXXXXXXX
+15
+digits
+16
+Choice Money Transfer
+USA
+Numeri
+c
+XXXXXXXXXXXX
+12
+digits
+17
+IME Malaysia
+Worldwid
+e
+Numeri
+c
+955XXXXXXXX
+11
+digits
+18
+Index Exchange
+UAE
+Numeri
+c
+20XXXXXXXXX
+11
+digits
+19
+LARI EXCHANGE
+UAE
+Numeri
+c
+2005XXXXXXX
+11
+digits
+20
+LM Exchange
+UAE
+Numeri
+c
+12180XXXXXXXXX
+14
+digits
+21
+Lulu
+International
+Exchang
+e LLC
+UAE
+Numeri
+c
+1XXXXXXXXXXXXXXX
+16
+digits
+22
+Modern
+Exchange
+Company
+LLC
+Oman
+Numeri
+c
+2190XXXXXXXXXX
+14
+digits
+23
+MoneyGram
+Worldwid
+e
+Numeri
+c
+XXXXXXXX
+8 digits
+24
+National
+Europe
+Numeri
+XXXXXXXXXXXXX
+13
+
+Exchange
+Company
+s.r.l
+c
+digits
+25
+NEC Money
+Transfer
+Ltd
+UK &
+Europe
+Numeri
+c
+XXXXXXXXXXXXXXX
+15
+digits
+26
+PLACID
+USA
+Numeri
+c
+XXXXXXXXXXXX
+12
+digits
+27
+RIA
+FINANCIAL
+SERVICES
+USA
+Worldwid
+e
+Numeri
+c
+129XXXXXXXX
+11
+digits
+28
+UAE Exchange
+UAE
+Numeri
+c
+XXXXXXXXXXXXXX
+14
+digits
+29
+Valutrans SPA
+Spain
+Numeri
+c
+XXXXXXXXXXX
+11
+digits
+30
+Xpress Money
+Services
+Limited
+Worldwid
+e
+Numeri
+c
+XXXXXXXXXXXXXXX
+X
+16
+digits
+Copyright © 20

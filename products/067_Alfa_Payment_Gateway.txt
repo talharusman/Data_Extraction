@@ -1,0 +1,875 @@
+Alfa Payment Gateway
+Product Features
+Alfa Payment gateway is one of the most secure and innovative payment gateway
+designed to facilitate the modern ecommerce. Any ecommerce business in Pakistan can
+collect payments online through Alfa Payment Gateway. Alfa Payment gateway caters
+all sorts of businesses, from small and medium merchants to large enterprises.
+Merchants can digitally signup for a full fledge account or an instant merchant account
+with limits defined. Merchants are also provided integration plugins for easy hassle free
+integration with Alfa Payment Gateway. As of now 3 payment modes are enabled on
+Alfa payment gateway; Alfa wallet, Bank Alfalah Account, & Credit/Debit cards (Intl and
+local Visa & Master Card). In the future, new payment modes will be added to Alfa
+Payment Gateway such as other bank account payments. The aim is to create merchant
+acceptance, assist the development and growth of the online payments industry and
+overall Ecommerce in Pakistan.
+Bank Alfalah has launched Alfa Payment Gateway that will enable customers to shop
+online and pay online securely, with ease within a few clicks. This program also aims to
+tap into digitizing the cash collection at Ecommerce where the customers directly pay
+online to the Ecommerce merchant/store and the merchant receives the payment
+directly in his account without any cash collection and cash settlement delays and
+related challenges involved. This product will contribute significantly to the growth of
+the Ecommerce industry and digital payments eco system.
+Product Features / Unique Selling Points:
+Customer Features:
+1- Multiple Payment Modes: Offering flexible payment options for the customer to
+choose as per convenience
+2- Payment Notification and Receipt Customer is prompted with transaction success and
+failure messages on web screen plus email and SMS notifications are also sent on
+customer’s mobile number and email with transaction receipt
+Merchant Features:
+1- Digital onboarding Merchants will be able to auto signup and register themselves
+online for a merchant account without the need to go to a branch. Entire onboarding
+will be automated and digital. (*Depending on L0 merchant account opening
+regulations from SBP. Will only be initiated once the regulation is effective) At least L2
+account onboarding can still be done through this digital channel
+2- Staging Merchants will also have a test environment where they can create an
+
+account and complete integration with the test environment parallel to onboarding
+process
+3- Analytics Merchant will see business insights on the dashboard screen in the form of
+graphs and numeric counters. In a glance merchant can overview the business
+performance through this dashboard
+4- Reports Transaction report, settlement report and reversal reports will be accessible
+to the merchant at all times. Through the transaction report, merchant can see all paid,
+failed, pending transactions. He can see the transactions and their settlement status
+through the settlement report. Reversals and their statuses can be viewed through the
+reversal report
+5- Refund Merchants can refund the transactions through the refund module provided
+to them in the merchant portal. Transactions can be full and partially refunded
+6- Settlement Merchant can also select the mode of settlement on how he wishes his
+funds to be settled with him. He can select the mode of settlement from a range of
+options such as Alfa wallet, T24, Other bank account, and cheque
+7- Chargeback Credit/Debit card fraud/disputes will be reported to the merchant
+through the chargeback management feature. All cases and its related correspondence
+will be done through this powerful feature
+8- Integration To automate the integration part and make it self-sufficient for the
+merchant, he will be provided with special tools such as multi lingual integration
+working codes, API’s and CMS plugins for easy installation/integration with APG
+9- IPN Merchants will get a notification service for APG that will update the merchant’s
+system after every order with the transaction status. APG will send this notification after
+the completion of every transaction. Merchant will also have the option to enquire the
+status of transaction on their own as well through APG transaction status enquiry API.
+Upon receiving the paid response from APG, merchant’s system will process the order,
+keeping the entire journey automated
+Product Benefits:
+Benefits to Customers
+Shop online with convenience
+Pay online, securely
+Cashless payment. No need to keep cash to pay to courier at time of delivery
+Flexible payment options
+Get service delivered instantly after making payment in case of ticketing or any other service. No
+wait involved
+
+Consumer financing
+Avail discounts on pre prepayment
+Use cases for Alfa Payment Gateway
+Few use cases for launching Alfa Payment Gateway are:
+Ecommerce purchase and payment for
+
+Bus, cinema, event tickets purchase
+
+School/University Fee payment
+
+Travel payments
+
+Ecommerce shopping payments
+
+Insurance payments
+
+Restaurant payments
+
+Any domain where purchase is done over the internet
+Product Types
+Alfa Payment Gateway offers 3 payment modes for customer to receive payment:
+
+Payment via Alfa Wallet
+
+Payment via Bank Alfalah Account
+
+Payment via Any bank local/international credit/debit card
+Alfa Payment Gateway has two types of customers:
+
+Merchants (Using Alfa Payment Gateway for online payment collection on their
+ecommerce website)
+
+Transacting customers (Shoppers who purchase on merchant website and pay online
+using Alfa Payment Gateway)
+Target Market
+
+Bus, cinema, event tickets purchase
+
+School/University Fee payment
+
+Travel payments
+
+Ecommerce shopping payments
+
+Insurance payments
+
+Restaurant payments
+
+Any domain where purchase is done over the internet
+
+FAQs
+Question
+Answer
+Party
+Settlement
+Account linking
+option in
+navigation
+menu is frozen
+and not working
+It will remain frozen until merchant application is
+approved. Once registration status appears as
+active, settlement option will be accessible
+Merchant
+Settlement
+Account is not
+being linked and
+giving error
+For a merchant who has signed up for corporate
+account: Account title should be same as legal
+entity name, as submitted in application form.
+Account number should be non IBAN (Just the
+account number)
+Merchant
+Not able to
+access the
+digital
+agreement
+option in
+navigation
+menu
+Digital agreement is enabled and accessible after
+settlement account has been linked successfully
+Merchant
+What is the
+pricing for Alfa
+Payment
+Gateway
+Pricing is different for merchants settling
+transactions with Bank Alfalah and with other
+banks.
+Settlement in Bank Alfalah:
+Alfa wallet: 0%
+Bank Alfalah Account: 0%
+Credit/Debit Card: 2%
+Settlement in Other Banks:
+Alfa wallet: 1%
+Bank Alfalah Account: 1%
+Credit/Debit Card: 2.25%
+**Charges are exclusive of FED
+Merchant
+What are the
+settlement
+All payments are settled in 3 working days for both
+merchants settling funds in Bank Alfalah and those
+Merchant
+
+timelines
+settling funds in other bank accounts
+Do you support
+International
+cards
+Yes all international Visa/Mastercard, debit and
+credit cards
+Merchant/Customer
+What payment
+schemes are
+supported on
+Alfa Payment
+gateway
+Visa & Mastercard
+Merchant/Customer
+What is the
+requirement to
+sign up for Alfa
+Payment
+Gateway
+Merchant needs to fill in his personal info, business
+info and submit the application along the legal
+documents as stated in the merchant onboarding
+portal
+Merchant
+How to sign up
+for Alfa
+Payment
+Gateway
+merchant
+account
+Merchant can sign up and submit merchant
+application online via:
+https://merchants.bankalfalah.com/MerchantSignup
+Merchant
+Can I charge
+amount in USSD
+No. Only PKR is supported
+Merchant
+Can a foreign
+business
+(Outside
+Pakistan) avail
+this service
+No. APG service is only valid for businesses
+registered in Pakistan
+Merchant
+Will BAFL settle
+in dollars if I am
+collecting
+payments in
+USD
+No. Payment will be settled in PKR
+Merchant
+Can I charge
+customer in PKR
+No, as per local regulations on payment gateways,
+merchants must only charge amount in PKR and no
+other currency
+Merchant
+What payment
+modes are
+available on Alfa
+Payment
+Gateway
+Alfa wallet, Bank Alfalah Account, Credit/Debit Card
+Merchant/Customer
+Is it mandatory
+to open a bank
+account in Bank
+Alfalah to use
+No, merchant can settle his payments in any other
+bank account via IBFT option as well but for that
+pricing is higher
+Merchant
+
+Alfa Payment
+Gateway service
+Can I use 1 Alfa
+Payment
+Gateway
+merchant
+account for
+multiple
+websites/stores
+Yes. Multiple stores can be integrated with 1
+merchant account and funds for all stores will settle
+in same account
+Merchant
+Does APG offer
+integration
+plugins
+Integration plugins are available in the sandbox
+portal in the plugins section where they can be
+downloaded
+Merchant
+Why are many
+international
+card
+transactions
+failing
+This depends on issuing bank of the card holder.
+There is a possible reason that many international
+issuing banks have blocked Pakistan for online
+transaction/internet based on high risk
+Merchant/Customer
+International
+card holders are
+not able to pay
+through their
+cards
+This will be checked however due to fraud
+monitoring tool and other details, system sometime
+does block international transactions
+Merchant
+Does APG
+support API's
+for integration
+Yes API's are available for Alfa wallet and Alfalah
+bank account. For credit card API's, merchant
+platform should be PCI DSS Certified
+Merchant
+Does APG
+support on page
+checkout
+Not at the moment but it will be introduced shortly
+Merchant
+Need merchant
+on boarding
+portal signup
+link
+Share the
+link: https://merchants.bankalfalah.com/MerchantSi
+gnup
+Merchant
+My business is
+based outside
+Pakistan, can I
+procure APG
+services
+To avail Alfa Payment Gateway service, the
+business needs to be registered in Pakistan with
+SECP
+Merchant
+How can I get
+an integration
+guide
+Login to the APG merchant portal and go to the Go
+Live section. In that section click on the button
+‘Download integration guide’ to get the guide PDF
+file
+Merchant
+How many days
+does it take for
+transaction
+For Alfa wallet and Bank Account transactions,
+refund is processed at day end when request is
+received from merchant and they have sufficient
+Customer
+
+refund
+funds in their account. Once refund is processed, a
+SMS notification is sent to customer notifying the
+same and the amount is settled in account in real
+time
+For card transactions, refund is processed at day
+when request is received from merchant and they
+have sufficient funds in their account. Once refund
+is processed, a SMS notification is sent to customer
+notifying the same and the amount is settled in
+customer account between 1-3 weeks, depending
+on the card issuing bank
+Complaint Handling Mechanism/Process flow & FAQs
+Alfa Payment Gateway complaints are classified in two types:
+157.
+Customer complaints
+158.
+Merchant Complaints
+Customer Complaint Handling
+**Mandatory probing for all complaints/queries:
+Since Bank Alfalah also offers a similar product (MPGS) with similar use case restricted
+to card processing, hence first of all probing is done to determine which product the
+customer is referring to.
+Probing Question #1: Which payment mode were using while shopping and paying
+online?
+A: Alfa Wallet/Bank Alfalah Account (In this case query pertains to Alfa Payment
+gateway)
+A: Credit/Debit (Could be either APG or MPGS – Move to the next question)
+Question # 2: On which store was the customer shopping on? (Preceding question)
+Action: Agent will login to the APG back office portal and go to manage merchant tab
+and search the store name using the filters. If store name is found, query pertains to
+APG. If store not found, query pertains to MPGS and should be handled accordingly
+Complaint Types
+
+185.
+Financial
+186.
+Non-Financial
+Financial Complaints
+S.
+No
+Complaint
+Answers/Rebut
+Owners
+1
+Need to know
+transaction status
+Inquire the order ID, transaction
+date and webstore name from
+customer and search for the
+transaction in APG portal
+transaction history. Whatever
+status is visible, communicate
+the same to customer. The
+status can be as follow:
+Paid: Transaction is paid by
+customer and complete Failed:
+Transaction is failed and didn't
+go through
+Dropped: Transaction was failed
+and didn't go through since the
+payment session was
+closed/ended by customer
+Pending: Transaction is being
+processed and not complete yet
+CC
+2
+Need to know
+transaction refund
+status
+Inquire the order ID, transaction
+id, transaction date and
+webstore name from customer
+and search for the transaction in
+APG portal refund report.
+Whatever status is visible,
+communicate the same to
+customer. The status that can
+appear are as follow:
+Refund not initiated: Refund has
+not been initiated by merchant.
+Customer should get in touch
+with merchant for the same
+Refund in process: Refund has
+been initiated by merchant on
+system, as soon merchant has
+the next settlement due with
+equivalent funds available, the
+refund will be processed
+CC
+
+Refund Complete: Refund has
+been successfully processed. In
+case of cards the refund amount
+might credit in a few days
+dependent on the customer's
+issuing bank
+3
+Merchant has
+confirmed that refund
+has been processed
+but funds haven't
+credited into my
+account
+Inquire the order ID, transaction
+id, transaction date and
+webstore name from customer
+and search for the transaction in
+APG portal refund report. If the
+refund status shows ‘not
+initiated’ or ‘in process’ explain
+what it means as stated above.
+If it shows ‘Complete’ tell the
+customer it has been processed
+as per confirmation from
+system. If customer’s paid
+through card, refund could take
+a few days for the refund to
+settle in his account depending
+on the issuing bank
+CC
+4
+Transaction failed but
+amount has been
+deducted from
+wallet/account/card
+Ask customer for order ID,
+transaction id transaction date
+and store name. Search the
+transaction in APG portal
+transaction history. If the
+transaction status is appearing
+as paid then its fine, confirm the
+same to customer. If the status
+is failed or any other than paid
+in that case ask customer to
+share the bank statement
+indicating debit on the
+transaction. CMU will then lock
+the complaint tagging Digital
+Operations
+CMU, Digital
+Operations
+5
+Duplication in fund
+deduction from
+wallet/account/card
+Ask customer to share a
+snapshot of his
+wallet/account/card statement
+indicating the duplicate
+transactions and also ask for
+transaction id, order id, amount,
+transaction date, store name.
+CMU, Digital
+Operations
+
+CMU will then assign the
+complaint to Digital Operations
+Non-Financial
+S. No
+Complaint
+Answers/Rebut
+Owners
+1
+Failed credit card
+payment
+Ask the customer if he checked
+the reason for transaction failure
+mentioned in the email
+transaction notification or on the
+payment page web screen. They
+should check that and take
+action accordingly. Enquire if the
+card was visa or MasterCard, if
+the card belongs to any other
+payment scheme, tell customer
+that our payment gateway
+doesn’t support it and we only
+process Visa/MasterCard cards
+In case it was a credit card
+transaction, guide the customer
+to make sure the card they are
+trying to use is activated and
+authorized for online/internet
+transactions by calling their
+issuing bank. In most cases card
+issuing bank blocks the
+transaction which happens
+mostly in case of International
+cards. Again, guide customer to
+call their issuing bank and report
+issue to them. Lastly, ask them if
+they entered the 3ds code wrong
+or didn’t get the 3ds code at all
+in which case again they should
+talk to their bank and complain
+CC
+2
+Failed debit card
+payment
+Ask the customer if he checked
+the reason for transaction failure
+mentioned in the email
+transaction notification or on the
+payment page web screen. They
+should check that and take
+CC
+
+action accordingly.
+Secondly ask if his debit card is
+activated by his/her bank for
+online transactions. Debit card
+transactions fail due to following
+reasons:
+41.
+Cards not activated for
+online transaction
+42.
+Insufficient funds in
+account
+43.
+Transaction declined
+by issuing bank
+3
+Failed Alfa Wallet
+payment
+Ask the customer if he checked
+the reason for transaction failure
+mentioned in the email
+notification and on the payment
+page web screen. All failure
+reasons are self-explanatory and
+Call center should be aware with
+them as those errors pertain to
+Alfa Wallet. In case error is
+unique, can fwd it to business to
+respond back
+CC
+4
+Failed Bank Alfalah
+Account Payment
+Ask the customer if he checked
+the reason for transaction failure
+mentioned in the email
+notification and on the payment
+page web screen. All failure
+reasons are self-explanatory and
+Call center should be aware with
+them as those errors pertain to
+Bank Alfalah Account
+CC
+5
+Payment page not
+opening
+Ask customer to share the store
+name where he/she is trying to
+transact and tell them we will
+investigate and get back to
+them. Take customer's email and
+mobile number. CMU will assign
+complaint with all info to
+business
+CMU, Business
+6
+Transaction Timeout
+Communicate to the customer
+CC
+
+that once customer has landed
+on the payment page, they need
+to fill all fields and complete
+payment within 10 minutes else
+page will timeout
+7
+Order related
+issue/product
+dispute
+Communicate to the customer
+that Alfa Payment Gateway is
+only the payment processor for
+the merchant and responsible for
+the processing of their payments.
+BAFL has no role to play related
+to product, delivery, returns etc
+hence the customer needs to get
+in touch with the merchant in
+regard to order/product. Close
+the complaint
+CC
+8
+Delivery related
+query
+Communicate to the customer
+that Alfa Payment Gateway is
+only the payment processor for
+the merchant and responsible for
+the processing of their payments.
+We have no role to play related
+to product, delivery, returns etc
+hence the customer needs to get
+in touch with the merchant in
+regard to shipment/delivery
+status
+CC
+9
+Need to refund
+item/transaction
+Communicate to the customer
+that as per T&C's mentioned on
+the payment page of Alfa
+Payment Gateway, it is the
+merchant's responsibility to
+initiate refunds. Please get in
+touch with the merchant and
+raise the request with them for
+refund. Close the complaint.
+CC
+10
+Merchant not
+responding
+Confirm from customer the name
+of web store where he/she
+transacted, get customer order
+ID and also confirm the medium
+where customer has tried
+contacting the merchant
+(Telephone/email/web chat). Let
+the customer know we will
+CMU, Business
+
+escalate the issue to merchant,
+however Alfa Payment Gateway
+is only the payment processor
+and merchant is independent of
+their business and related
+operations. BAFL cannot ensure
+any correspondence from the
+merchant. Forward the details
+and complaint to business.
+11
+Need to change
+shipment details
+Communicate to the customer
+that Alfa Payment Gateway is
+only the payment processor for
+the merchant and responsible for
+the processing of their payments.
+BAFL has no role to play related
+to product, delivery, returns etc
+hence the customer needs to get
+in touch with the merchant in
+regard to shipment/delivery
+related query. Close the
+complaint
+CC
+12
+Merchant is asking
+for CNIC/Driving
+license copy and
+saying the
+transaction has been
+marked suspicious
+Inquire from customer is he
+transacted from a credit/debit
+card. If yes, then guide him that
+transaction at times is marked as
+suspicious by the system's fraud
+guard and merchant is required
+to verify the identity of the
+customer before processing the
+order for which they might be
+asking for the CNIC/Driving
+license. Tell them to share a
+copy and write on its top corner
+that it’s only for Alfa payment
+Gateway transaction verification
+only. Close the complaint
+CC
+13
+No notification
+received for
+payment
+Ask customer to share store
+name, transaction date, amount,
+transaction id and order id.
+Search the transaction in APG
+transaction history and confirm
+the payment status to customer
+and close the complaint. In
+parallel report to DIT
+CMU, DIT
+
+Merchant Complaint Handling
+S.
+No
+Complaint
+Answers/Rebut
+Owners
+1
+Merchant
+Portal/Merchant Signup
+portal Login Issue
+Perform trouble shooting and advise
+to reset password. If still can’t login
+after password reset or unable to
+reset password, raise to DIT
+CC, CMU,
+DIT
+2
+Service/portal down
+Inquire the error and which portal are
+they accessing and get merchant
+details like user id, merchant name
+and email id to report to DIT for
+troubleshoot.
+CMU, DIT
+3
+Sandbox inaccessible
+Inquire the error and ask how
+merchant is trying to access it. For a
+merchant onboarding through online
+merchant signup portal, he should be
+able to do so through ‘Sandbox’ tab
+available in the portal. For a
+merchant using Live merchant portal
+should go to the ‘Go Live Tab’ and
+click on ‘access sandbox’. If they are
+following these steps still not able to
+access, report it to DIT along with
+merchant name, user ID, and email id
+CMU, DIT
+4
+Any Portal functionality
+issue
+Probe well about the function and
+know the error. Lodge a complaint.
+Also report the merchant name, user
+ID and email id. Tell merchant that
+we will look into it and resolve it
+asap. Close the complaint
+CMU, DIT
+5
+integration support
+Inquire merchant/web store name
+technical POC, email and mobile
+number and share with Business
+CMU,
+Business
+6
+Portal Credentials not
+received
+Inquire if merchant has checked his
+registered email and spam. If yes, get
+merchant's email ID, user ID and
+merchant name and share with
+Business
+CMU,
+Business
+7
+Chargebacks/suspicious
+transactions and hold
+payments
+Explain to the customer that a
+transaction that has been identified
+as suspicious and can be a potential
+fraudulent transaction is marked on
+hold by system till it has been
+CC
+
+verified.
+In case of chargeback, the
+transacting customer has raised a
+dispute with its card-issuing bank on
+the performed transaction. Merchant
+should go to merchant portal
+chargeback section and click on the
+chargeback and see the details and
+way forward
+8
+Portal performance
+Issue
+Tell the merchant that his complaint
+is being forwarded to relevant teams
+to investigate and resolve if there is
+an issue in performance. Merchant
+name, user id and web store name
+and email id to be shared with DIT
+CMU, DIT
+Complaint Type
+Product Type
+Sub-Product
+Current Sub Work Group
+Complaint Category
+Escalation Matrix:
+Escalation
+Level
+Complaint
+Escalation TAT
+Escalation
+addressed to:
+Alfa Payment
+Gateway
+Team
+Email
+*(post
+assignment)
+Level 1
+Escalation
+2nd Working
+Day (48 hours)
+Fahad Ibrahim
+& Khizer Zahid
+khizer.zahid@bankalfalah.com
+fahad.ibrahim@bankalfalah.com
+Level 2
+Escalation
+3rd Working
+Day (72 Hours)
+Khawaja
+Arsalan Arif
+arsalan.arif@bankalfalah.com
+Level 3
+Escalation
+5h Working
+Day (120
+Hours)
+Khurram Rauf
+Khurram.rauf@bankalfalah.com
+Level 4
+Escalation
+7th Working
+Day (168
+Hours)
+Adnan Nasir
+adnannasir@bankalfalah.com

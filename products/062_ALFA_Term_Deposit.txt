@@ -1,0 +1,100 @@
+ALFA Term Deposit
+Product Features
+Instant Term Deposit booking with an end to end digitized customer journey enabling
+customers to select any tenor, profit payment frequency, and maturity instructions of
+their choosing and enjoy multiple bookings, get digital term deposit receipt, real-time
+encashment, option to change maturity instructions post booking, and access to
+Withholding tax certificate.
+Product Feature / Benefits / Unique Selling Points:
+
+Instant Booking within 10 seconds
+
+Digital Term Deposit Receipt
+
+Real-time Encashment
+
+Option to update Maturity Instructions post booking
+
+Digital Withholding Tax Certificate
+Eligibility Criteria
+Branch banking customer having a conventional core account.
+*Islamic variant will be live for Islamic core accounts, and Bookings will be enabled
+through Wallets, soon.
+Registration Process
+Download and Login on Alfa. Go to “Savings”. Tap on “Alfa Term Deposit”
+Transactional Information
+Minimum booking amount allowed is Rs.500. Bookings can be done for any desirable
+amount. (No Maximum limits for Core account customers).
+Transactional Limits for Wallets will apply as defined under Branchless Banking
+regulations laid by State Bank of Pakistan.
+FAQs
+What is an Alfa Term Deposit?
+Alfa Term Deposit is a digitized Term Deposit product on Alfa which offers Term deposit
+booking within just 10 seconds.
+It also provides facilities such as digital Term deposit receipt, flexible maturity
+instructions, and option to early encash the term deposit. With this product, you can fix
+
+your saving deposit by booking a term deposit for 1 month to 1 year and earn profit as
+per the Bank’s prevailing rate sheet.
+Where can I find the product on the App?
+Log on to Alfa, Go to ‘Savings’ option and Tap on ‘Alfa Term Deposit’.
+How can I book an Alfa Term Deposit?
+Go to Alfa Term Deposit section in the app and tap on “Book a Term Deposit”, select
+the type of Term deposit (Conventional/Islamic) you want to book and proceed on the
+booking screen. *Islamic variant and booking from wallets will be launched soon.
+What is the minimum and maximum booking amount?
+Minimum amount is Rs.500. If you are a Bank Alfalah branch account holder then there
+is no maximum limit of booking, you can book a Term deposit of any amount you like.
+For Alfa Account (Wallet) customers, Daily/Monthly/Yearly limits will apply as per the
+directives issued by State Bank of Pakistan.
+Can Islamic account holders also book an Alfa Term Deposit?
+Islamic account holder will only be able to book the Islamic variant of the Term deposit
+which will be available on the app soon. Conventional account holders will be able to
+book conventional and Islamic, both variants of Term deposit, through Alfa.
+What rates are offered on the Alfa Term Deposit?
+The rates offered are as per the Bank’s prevailing rate sheet for LCY PKR Term deposits.
+For what durations are the Term Deposits being offered on Alfa?
+Alfa Term Deposit tenors are also as per the Bank’s rate sheet which are as below
+
+1 month
+
+3 months
+
+6 months
+
+1 year
+How frequently is the profit paid out on the Term Deposit?
+Profit payment frequency is as below Monthly Annually/Maturity
+What instructions on maturity are offered on Alfa Term Deposit?
+Below customizable instructions on maturity are offered. Instructions can later on be
+updated as well
+
+Encash at Maturity (Term Deposit will be encashed upon completion of the selected
+duration. Principal amount and net profit will be deposited into your account.)
+
+Rollover Principal (Term Deposit Principal amount will be automatically rolled over when
+the selected tenor is completed with the exact same instructions as initially booked and
+
+profit will be disbursed into your account. Rate to apply will be as per the prevailing
+rate sheet.)
+
+Rollover Principal + Profit (This option will only be available for Term deposits where
+profit payment frequency is set at Maturity and not Monthly. Upon completion of the
+selected tenor, Term deposit principal and net profit amount will be rolled over
+automatically with the same details as initially booked. Profit rate to apply will be as per
+the prevailing rate sheet)
+Will there be any zakat deduction on Alfa Term Deposit?
+Yes, Zakat will be deducted as per Zakat and Ushr ordinance
+How to get Zakat exemption?
+During Booking the Term Deposit, you will see an option for Zakat exemption. If you
+want to get Zakat exemption, then you will have to check-mark the option and identify
+yourself as a ‘Muslim’ or ‘Non-Muslim’ by selecting the given checks. If selected Muslim,
+you will have to email a soft copy of the CZ-50 form and your CNIC at
+Zakat@bankalfalah.com. If selected Non-Muslim, then you will be required to send a
+soft copy of your CNIC on the same email address.
+What is Withholding Tax Certificate?
+You can refer to this Certificate to see how much tax has been deducted on your profit
+payments against the booked Term deposit. Tax deduction will be automatic and based
+on Filer/Non-Filer status.
+Are there any charges on Early Encashment?
+Upon Early encashment, revised profit rate will be applicable as per Bank’s SOC.

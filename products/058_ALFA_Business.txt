@@ -1,0 +1,185 @@
+ALFA Business
+Product Features
+An exceptional out-of-the-box experience for merchants with real-time transaction
+reporting, activity dashboards, dynamic QR and virtual e-shop providing them enhanced
+tools for accepting digital payments, reconciliation and business expansion through
+lending.
+Product Features/ Benefits/ Unique Selling Points:
+
+Your phone is your POS!
+
+Accept payments from 17 payment Apps
+
+Get a chance to be featured on Alfa App Merchant Locator
+
+Instant dynamic QR Codes
+
+Funds settlement in 24 hours
+
+Perform Cash-in & earn more!
+
+Setup your own e-shop!
+
+Apply for Loan & expand your business!
+
+Real-time transaction notifications
+
+Access complete transaction history
+
+Easy reconciliation
+Alfa Business – The Merchant App
+Alfa Business is an Open App, you can accept payments from customers irrespective of
+the banking App they use. As long as their banking App can read Bank Alfalah-
+partnered scheme, you can accept customer payments via scanning the QR.
+Merchant Financing
+With Alfa Business App, you have access to instant liquidity. Apply for Merchant
+Financing within App and get your loan processed within 2 hours.
+Product Features/ Benefits/ Unique Selling Points:
+
+Automated process
+
+No charges for repaying on the same day
+
+Lowest markup in the industry
+
+Zero documentation
+
+Loan Calculator
+Transaction Reporting
+
+As a payment is accepted upon a QR scan, you will receive instant message notifying
+successful transaction. Furthermore, Alfa Business gives you a handy access to your
+transaction history in real-time.
+Cash-in Facility
+Alfa Business gives you an additional avenue of income through Cash-in facility.
+Transfer up to PKR 10,000* to customer’s wallet account and earn commission up to
+PKR 56.94** every transaction.
+*PKR 10,000 could be transferred per month per customer
+** Commission amount varies & depends on volume of transaction. The above
+commission slabs can ve revised at any time upon the discretion of Bank Alfalah Limited.
+Product Types
+Merchant Portal
+
+Hierarchy based login
+
+Activity Dashboard
+
+Real-time transaction monitoring
+
+Error tracking
+QR Device POS
+
+Generate instant Dynamic QR codes
+
+Real-time notifications
+
+Transaction reports
+Alfa Business
+Merchant App
+140.
+Transaction reports
+141.
+Smartphone based POS
+142.
+Dynamic QR
+143.
+Merchant E-Store
+144.
+Merchant Financing
+Eligibility Criteria
+Who can apply for Merchant Financing?
+
+173.
+Business existence for 6 months at least
+174.
+3 months QR business relationship with BAFL
+175.
+Achieve minimum 250 QR transactions
+176.
+Loan can be secured up to 70% of the transitional volume
+Registration Process
+Steps to register on Alfa Business App:
+114.
+Download Alfa Business App
+115.
+Sign up & set your username, password & enter Mobile number
+116.
+After successfully logging into the App, fill your business & personal info,
+upload your CNIC image and submit the application
+117.
+Accept terms and conditions
+118.
+Select mode of settlement
+119.
+Once the application is approved, live account credentials are sent via SMS
+120.
+Login the App and start collecting payments!
+Note: For more information and assistance, contact Bank Alfalah helpline 021-111-225-
+111
+Steps to receive payments via Alfa Business App:
+91. Download QR or display QR* in Alfa Business App for scanning
+92. Customer scans Alfa QR code to pay
+93. SMS is received from 8287, instantly on your registered mobile number
+94. Manage, review and track daily sales!
+*You can download QR or share from Alfa Business App
+Steps to apply for Merchant Financing:
+49. Login Alfa Business App
+50. Select “Merchant Finance” from Menu
+51. Check your loan eligibility, click “Apply”
+52. Enter your basic details & verify OTP
+53. Check your Loan details (estimated tenure, markup-rate, amount-to-be-repaid)
+54. Click Apply & your loan is disbursed
+55. Grow your business!
+
+Steps to setup an e-shop:
+Login Alfa Business App
+Select “Catalogue” from Menu
+Define your Product’s category
+Select “Add new Product”
+Define product details (Description and Price), click Add
+Now customers can easily select & pay for your products!
+Steps for Transaction Reporting:
+Login Alfa Business App
+Select “Transactions” from Menu
+Select desired time duration
+Access your transaction history and view count as well as volume of QR transactions
+Steps for cash-in:
+Login Alfa Business App
+Select “Cash-in” from Menu
+Enter Customer’s Wallet number
+Fetch title
+Enter amount
+Verify OTP
+Transfer performed!
+Related TATs
+With Alfa Business App, merchants’ payment amount is settled in 24 hours.
+
+Settlement Options:
+You can choose from any of the following modes to receive your payments:
+Alfa Wallet
+Bank Alfalah Account
+Any other local bank account
+Cheque
+No settlement charges involved.
+FAQs
+Does the customer bear any additional charge as they pay via scanning QR
+code at Alfa Business App?
+Absolutely not! Customers aren’t charged any additional amount for paying via scanning
+QR at Alfa Business App
+Who can pay via Alfa Business QR?
+Any customer whose banking/payment App can read QR codes generated by Bank
+Alfalah-partnered payments scheme (e.g. Mastercard and Visa)
+Whom should I contact in case of a dispute?
+Contact Bank Alfalah help-line 021-111-225-111 and lock your dispute.
+Where will I receive my settled amount?
+You can receive your settled amount in Alfa wallet, Bank Alfalah account, Cheque or
+any other bank account. However, for best rates, choose Alfa Wallet or Alfalah Bank
+Account as your settlement mode.
+What to do if I forget my Username or password?
+Your username is your Alfa registered business name. To reset password, login Alfa
+Business App, click ‘Forget Password’, enter your ‘user name’, verify OTP and easily
+reset your password.
+Who can apply for Merchant Financing?
+Business existence for 6 months at least •3 months QR business relationship with BAFL
+•Achieve minimum 250 QR transactions •Loan can be secured up to 70% of the
+transitional volume Rate: k+10%

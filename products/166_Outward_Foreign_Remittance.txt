@@ -1,0 +1,11 @@
+Outward Foreign Remittance
+Overview About Mechanism of Payment:
+Receipt of Outward Remittance:
+Upon receipt of request in BPM, CRD officer check payment properly and if all required
+information \ related documentation is in order, process the same by debiting the customer
+account.
+After passing entry in T24, swift message is auto generated
+ccording to the details input in
+system at the time of processing transaction in T24 as per the customer request.
+The creator, verifier and authorizer shall initial the print out/hard copy of the SWIFT message
+before releasing it and retain its copy for future reference/audit trail purpose.

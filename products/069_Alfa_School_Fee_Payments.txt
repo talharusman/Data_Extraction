@@ -1,0 +1,178 @@
+Alfa School Fee Payments
+Product Features
+Whether you are a full-time working official or a stay-at-home parent, either way it is
+quite a hassle having to make those monthly trips to the bank and stand in long queues
+to pay your kid’s school fee. Alfa app enables you to pay your kid’s school fee online
+and hassle-free. Alfa currently has 50 plus schools listed for online fee payment and it is
+the only banking app that’s offering a cashback of 1000 rupees on first school fee
+payment.
+Payment Methods – School Fee Payments:
+Bank Alfalah Wallet
+Bank Alfalah Account
+Bank Alfalah Credit Cards
+Orbits
+Customer's Journey - How Customer sees ALFA
+All Details are Automated:
+
+Select Payment Method / Account Type
+
+Select School
+
+Student Roll Number
+This will Auto Fetch the details.
+No chance of error at customers’ end.
+School will share student list in excel format to upload in bank’s system
+School Fee Payments - Process:
+Schools will be asked to share below details in the User ID Form:
+• Institution Name & Type
+• City
+• POC Name
+• Address
+• Email
+• Validity Period - This period depicts the expiry of the Fee Bill
+
+• Maker & Checker Profile Info
+School Fee Payments - Process:
+User Id:
+School will be provided with a User ID form where necessary details including details of
+maker and checker profiles will be provided by school, this is a mandatory requirement
+for activation of school fee payments
+Maker:
+This person will be responsible for providing and uploading the Fee records of the institute
+Checker:
+This person will evaluate the records uploaded by the Maker and will “Approve” or
+“Reject” the uploaded file as required
+Documentation Required
+Settlement Process
+Settlement will be done real time into the School’s Bank Alfalah account, there will be
+no charges for school fee payment transactions
+Reporting Portal:
+School will be given visibility of payments via reports in Bank Alfalah school fee
+portal. The portal will depict necessary transaction details for successful payments
+Registration Process
+The process to Make Payment is simple:
+
+Download Alfa
+
+Open new Alfa Account with Promo Code ‘SC’
+
+Deposit cash in your Alfa Account through online transfer or from any Alfalah Branch
+
+Go to Payments > Fee Payments > School Fee Payment
+
+Select School Name
+
+Input Student Roll Number
+
+Pay School Fee
+
+
+Get cashback in your Alfa Account
+School Fee Payments – Maker Profile (Steps)
+Step 1: Maker will login to School Fee Payments portal via his credentials and will click
+on “Click here” to upload Fee file
+Step 2: Maker to prepare and upload Fee File as per given template
+Necessary Fields:
+
+Roll Number
+
+Challan Number
+
+Student Name
+
+Amount before Due Date
+
+Due Date
+
+Amount after Due Date
+Step 3: Maker to prepare and “Upload” Fee File as per given template, once uploaded
+maker will “Submit” the request
+Step 4:
+
+Once file is uploaded, status of Successful and Failed records will be shown
+
+Successful records can be exported for record keeping c) Failed records can be
+exported as well with Failure reasons mentioned d) School user can correct the Failed
+records and upload the failed records again
+Step 5: Once File is submitted, maker would be able to view the status of the uploaded
+file in the main view:
+Step 6: Checker will login to School Fee Payments portal via his credentials and will be
+able to view the requests pending for approval
+Step 7: Checker can click on “View” to review records uploaded by the Maker
+163.
+For Approving the file, checker will click on “Approve”
+
+164.
+For rejecting the file, checker will click on “Decline”
+165.
+User will select “Exit” in case he does not want to take any action at that time
+Associated Charges
+187.
+No fee will be charged to customer for fee payment via Alfa App
+188.
+No fee charged by BAFL direct clients. However, fee may be be charged by 3rd
+party fee collection service like Kuick pay, pay pro etc.
+FAQs
+From where can the school download the Fee File template?
+The fee file template is available on the school fee portal, it can be downloaded by the
+maker. It is also recommended to use the provided template file for fee uploading to
+avoid any inconvenience
+Records are shown in “Failed” status, what could be the issue?
+Please ensure that the data is provided as per the given format. “Failed” record will be
+shown if data is not provided as per given field format. Please ensure that all mandatory
+fields are also provided, below are the mandatory fields:
+144.
+Fee Month – to be in Date format as per template • Roll number – Alphanumeric
+Format
+145.
+Student Name – Alphanumeric Format
+146.
+Monthly/Quarterly Pay – To be mentioned as either “MONTHLY” or
+“QUARTERLY”
+147.
+Fee Amount – to be in numeric format
+148.
+Due Date – to be in Date format as per template
+149.
+Fee Amount After Due Date – to be in Numeric Format
+How can the fee bill validity be determined by School?
+The validity period will be requested from the bank at the time of School fee payments
+activation, the fee bill will expire once the validity period is over. The fee bill cannot be
+fetched in Alfa App once the validity period is over.
+From where can the school check the History of uploaded Fee Files?
+The History of files uploaded and their relevant status are shown in school fee portal.
+Maker can be able to view the status against his uploaded files, whereas, the checker
+can see the history of the approved/rejected files.
+Customer is disputing an additionally paid school fees, how will this be catered?
+97. School will receive the complaint from parent/Bank Operations team,
+98. School Admin will reconcile the fees paid against the Roll number
+99. If the transaction is additionally Paid, School will share reversal consent with Bank Alfalah
+100.
+Bank Alfalah will process reversal as per consent of school
+
+101.
+In case School processes the reversal via cash, or adjusts the fee for next
+month, they will inform both the customer and Bank Alfalah
+Customer is disputing the accuracy of the details on display at Alfa?
+School Admin to check the uploaded file in School Fee portal and take necessary action.
+Such issues will also be raised with School Admin by Digital Operations Team of Bank
+Alfalah
+What if Customer pays the fees after Due Date?
+Customer will be charged “After Due Date” charges provided by school and shown on
+the School Fee Payments interface of Alfa App.
+How will the customer be notified for a successful transaction?
+Customer will receive an on screen notification, SMS and Email for every successful fee
+payments.
+Can a customer use his Branch Account to make school fee payment?
+Yes, customer may use his/her branch account to make School fee Payments via Alfa.
+How can a customer pay the school fee via Alfa?
+Customer can pay via below payment methods:
+57. Bank Alfalah Account
+58. Bank Alfalah Wallet
+59. Bank Alfalah Credit card
+60. Orbits
+How can a parent/student deposit money in his Alfa Wallet account?
+•Deposit Via Bank Alfalah Branch: Customer can visit the nearest Bank Alfalah branch
+to submit money into his Alfa Wallet account •Deposit via Bank Alfalah(Alfa Shops),
+Easypaisa and Jazzcash Agents: Customer can visit the nearest Alfa Shop, Easypaisa
+or JazzCash agent shops to submit money i
