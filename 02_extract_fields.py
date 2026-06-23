@@ -16,7 +16,14 @@ import json
 import os
 import time
 
-from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
+import torch
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForSeq2SeqLM,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+    pipeline,
+)
 
 from pipeline_config import (
     COLUMNS,
@@ -40,6 +47,10 @@ TEMPERATURE = env_float("HF_TEMPERATURE", 0.0)
 TOP_P = env_float("HF_TOP_P", 1.0)
 REPETITION_PENALTY = env_float("HF_REPETITION_PENALTY", 1.03)
 TEXT_CHUNK_SIZE = env_int("TEXT_CHUNK_SIZE", 15000)
+LOAD_IN_4BIT = env_bool("HF_LOAD_IN_4BIT", False)
+LOAD_IN_8BIT = env_bool("HF_LOAD_IN_8BIT", False)
+DEVICE_MAP = os.environ.get("HF_DEVICE_MAP", "auto").strip() or "auto"
+TORCH_DTYPE = os.environ.get("HF_TORCH_DTYPE", "auto").strip().lower()
 
 SYSTEM_PROMPT = f"""You are a data-extraction engine for a bank product catalogue.
 You will be given the raw text of ONE product's section, extracted from a PDF
@@ -153,25 +164,51 @@ def make_generator():
         trust_remote_code=TRUST_REMOTE_CODE,
     )
 
-    if MODEL_CLASS == "seq2seq":
-        model = AutoModelForSeq2SeqLM.from_pretrained(
-            MODEL_NAME,
-            local_files_only=LOCAL_FILES_ONLY,
-            trust_remote_code=TRUST_REMOTE_CODE,
+    model_kwargs = {
+        "local_files_only": LOCAL_FILES_ONLY,
+        "trust_remote_code": TRUST_REMOTE_CODE,
+    }
+
+    if DEVICE_MAP.lower() != "none":
+        model_kwargs["device_map"] = DEVICE_MAP
+
+    if TORCH_DTYPE == "float16":
+        model_kwargs["torch_dtype"] = torch.float16
+    elif TORCH_DTYPE == "bfloat16":
+        model_kwargs["torch_dtype"] = torch.bfloat16
+    elif TORCH_DTYPE == "float32":
+        model_kwargs["torch_dtype"] = torch.float32
+    elif TORCH_DTYPE == "auto":
+        model_kwargs["torch_dtype"] = "auto"
+
+    if LOAD_IN_4BIT or LOAD_IN_8BIT:
+        model_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=LOAD_IN_4BIT,
+            load_in_8bit=LOAD_IN_8BIT,
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
         )
+
+    print(f"Loading model: {MODEL_NAME}")
+    print(f"Model class: {MODEL_CLASS}")
+    print(f"Device map: {DEVICE_MAP}")
+    print(f"Torch dtype: {TORCH_DTYPE}")
+    print(f"4-bit quantization: {LOAD_IN_4BIT}")
+    print(f"8-bit quantization: {LOAD_IN_8BIT}")
+
+    if MODEL_CLASS == "seq2seq":
+        model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME, **model_kwargs)
         task = "text2text-generation"
     else:
-        model = AutoModelForCausalLM.from_pretrained(
-            MODEL_NAME,
-            local_files_only=LOCAL_FILES_ONLY,
-            trust_remote_code=TRUST_REMOTE_CODE,
-        )
+        model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, **model_kwargs)
         task = "text-generation"
 
     generator = pipeline(
         task,
         model=model,
         tokenizer=tokenizer,
+        device_map=DEVICE_MAP if DEVICE_MAP.lower() != "none" else None,
     )
     return generator, tokenizer
 
@@ -205,7 +242,17 @@ def extract_one(generator, tokenizer, entry, text):
 
 
 def main():
-    generator, tokenizer = make_generator()
+    try:
+        generator, tokenizer = make_generator()
+    except torch.cuda.OutOfMemoryError as exc:
+        raise SystemExit(
+            "CUDA ran out of memory while loading the model.\n"
+            "For Colab T4/L4 GPUs, use these .env settings:\n"
+            "HF_LOAD_IN_4BIT=true\n"
+            "HF_DEVICE_MAP=auto\n"
+            "HF_TORCH_DTYPE=float16\n"
+            "You can also use a smaller model like Qwen/Qwen2.5-7B-Instruct."
+        ) from exc
 
     index = load_index()
     done = load_done_ids()
