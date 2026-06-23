@@ -6,7 +6,7 @@ from pathlib import Path
 
 from agents.confidence_agent import ConfidenceScoringAgent
 from agents.extraction_agent import ExtractionAgent
-from agents.local_llm import LocalGGUFLLM
+from agents.local_llm import TransformersLLM
 from agents.validation_agent import ValidationAgent
 from app.chunking import ChunkingEngine
 from app.config import AppConfig
@@ -42,14 +42,13 @@ class BankingExtractionPipeline:
             recreate_collection=config.get("qdrant", "recreate_collection", default=False),
         )
         self.retriever = SemanticRetriever(self.embedder, self.store, config.get("retrieval", "top_k"))
-        llm = LocalGGUFLLM(
-            model_path=config.runtime.llm_model_path,
-            n_ctx=config.runtime.llm_n_ctx,
-            n_threads=config.runtime.llm_n_threads,
-            n_gpu_layers=config.runtime.llm_n_gpu_layers,
+        llm = TransformersLLM(
+            model_name_or_path=config.runtime.llm_model_name_or_path,
+            max_new_tokens=config.runtime.llm_max_new_tokens,
             temperature=config.runtime.llm_temperature,
-            max_tokens=config.runtime.llm_max_tokens,
-            chat_format=config.runtime.llm_chat_format,
+            top_p=config.runtime.llm_top_p,
+            repetition_penalty=config.runtime.llm_repetition_penalty,
+            use_4bit=config.runtime.llm_use_4bit,
         )
         self.extractor = ExtractionAgent(llm)
         self.validator = ValidationAgent(llm)

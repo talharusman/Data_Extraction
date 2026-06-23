@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
-from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -45,48 +43,58 @@ def _extract_json_from_text(text: str) -> dict[str, Any] | None:
     return None
 
 
-class LocalGGUFLLM:
+class TransformersLLM:
     def __init__(
         self,
-        model_path: str,
-        n_ctx: int = 4096,
-        n_threads: int | None = None,
-        n_gpu_layers: int = 0,
+        model_name_or_path: str,
+        max_new_tokens: int = 1024,
         temperature: float = 0.0,
-        max_tokens: int = 1024,
-        chat_format: str | None = None,
+        top_p: float = 0.9,
+        repetition_penalty: float = 1.05,
+        use_4bit: bool = True,
     ) -> None:
-        self.model_path = Path(model_path)
-        self.n_ctx = n_ctx
-        self.n_threads = n_threads or max(1, os.cpu_count() or 1)
-        self.n_gpu_layers = n_gpu_layers
+        self.model_name_or_path = model_name_or_path
+        self.max_new_tokens = max_new_tokens
         self.temperature = temperature
-        self.max_tokens = max_tokens
-        self.chat_format = chat_format
+        self.top_p = top_p
+        self.repetition_penalty = repetition_penalty
+        self.use_4bit = use_4bit
         self._warned_missing = False
 
-        if not self.model_path.exists():
-            raise RuntimeError(
-                f"GGUF model file does not exist: {self.model_path}. "
-                "Set LLM_MODEL_PATH to a valid Qwen2.5 GGUF file."
-            )
-
         try:
-            from llama_cpp import Llama
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer
         except ImportError as exc:  # pragma: no cover - environment dependent
             raise RuntimeError(
-                "Missing dependency: llama-cpp-python. Install it with pip before running local GGUF inference."
+                "Missing dependency: transformers. Install the Colab requirements before running inference."
             ) from exc
 
-        logger.info("Loading local GGUF model from %s", self.model_path)
-        self._llm = Llama(
-            model_path=str(self.model_path),
-            n_ctx=self.n_ctx,
-            n_threads=self.n_threads,
-            n_gpu_layers=self.n_gpu_layers,
-            chat_format=self.chat_format,
-            verbose=False,
-        )
+        self._torch = torch
+        self._tokenizer = AutoTokenizer.from_pretrained(self.model_name_or_path, trust_remote_code=True)
+        load_kwargs: dict[str, Any] = {"trust_remote_code": True, "device_map": "auto"}
+        if self.use_4bit:
+            try:
+                from transformers import BitsAndBytesConfig
+
+                load_kwargs["quantization_config"] = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.float16,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True,
+                )
+            except ImportError as exc:  # pragma: no cover - environment dependent
+                raise RuntimeError(
+                    "Missing dependency: bitsandbytes. Install it to load Qwen3-14B in 4-bit on Colab."
+                ) from exc
+        else:
+            load_kwargs["torch_dtype"] = torch.float16
+
+        logger.info("Loading Transformers model from %s", self.model_name_or_path)
+        self._model = AutoModelForCausalLM.from_pretrained(self.model_name_or_path, **load_kwargs)
+        self._model.eval()
+        self._input_device = next(self._model.parameters()).device
+        if self._tokenizer.pad_token_id is None and self._tokenizer.eos_token_id is not None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
 
     def generate_json(self, prompt: str) -> dict[str, Any]:
         strategies: list[dict[str, str]] = [
@@ -105,23 +113,38 @@ class LocalGGUFLLM:
                 {"role": "user", "content": prompt},
             ]
             try:
-                response = self._llm.create_chat_completion(
-                    messages=messages,
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
-                    top_p=1.0,
+                inputs = self._tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=True,
+                    add_generation_prompt=True,
+                    return_tensors="pt",
                 )
-                content = response["choices"][0]["message"]["content"]
+                inputs = inputs.to(self._input_device)
+                with self._torch.no_grad():
+                    output_ids = self._model.generate(
+                        inputs,
+                        max_new_tokens=self.max_new_tokens,
+                        temperature=self.temperature,
+                        top_p=self.top_p,
+                        repetition_penalty=self.repetition_penalty,
+                        do_sample=self.temperature > 0,
+                        pad_token_id=self._tokenizer.eos_token_id,
+                        eos_token_id=self._tokenizer.eos_token_id,
+                    )
+                content = self._tokenizer.decode(output_ids[0][inputs.shape[-1]:], skip_special_tokens=True)
                 parsed = _extract_json_from_text(content)
                 if parsed is not None:
                     return parsed
                 last_error = f"Unparseable JSON content: {content[:300]}"
-                logger.warning("Local GGUF model returned unparseable JSON.")
+                logger.warning("Transformers model returned unparseable JSON.")
             except Exception as exc:  # pragma: no cover - runtime/model dependent
                 last_error = str(exc)
-                logger.warning("Local GGUF inference error: %s", exc)
+                logger.warning("Transformers inference error: %s", exc)
 
         if last_error and not self._warned_missing:
-            logger.warning("Local GGUF request failed; returning empty result. Last error: %s", last_error[:500])
+            logger.warning("Transformers request failed; returning empty result. Last error: %s", last_error[:500])
             self._warned_missing = True
         return {}
+
+
+LocalGGUFLLM = TransformersLLM

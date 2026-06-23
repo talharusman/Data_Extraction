@@ -11,16 +11,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class RuntimeSettings(BaseSettings):
-    llm_model_path: str = Field(
-        default="models/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
-        alias="LLM_MODEL_PATH",
+    llm_model_name_or_path: str = Field(
+        default="Qwen/Qwen2.5-14B-Instruct",
+        alias="LLM_MODEL_NAME_OR_PATH",
     )
-    llm_n_ctx: int = Field(default=4096, alias="LLM_N_CTX")
-    llm_n_threads: int = Field(default=8, alias="LLM_N_THREADS")
-    llm_n_gpu_layers: int = Field(default=0, alias="LLM_N_GPU_LAYERS")
+    llm_use_4bit: bool = Field(default=True, alias="LLM_USE_4BIT")
     llm_temperature: float = Field(default=0.0, alias="LLM_TEMPERATURE")
-    llm_max_tokens: int = Field(default=1024, alias="LLM_MAX_TOKENS")
-    llm_chat_format: str | None = Field(default=None, alias="LLM_CHAT_FORMAT")
+    llm_top_p: float = Field(default=0.9, alias="LLM_TOP_P")
+    llm_repetition_penalty: float = Field(default=1.05, alias="LLM_REPETITION_PENALTY")
+    llm_max_new_tokens: int = Field(default=1024, alias="LLM_MAX_NEW_TOKENS")
     qdrant_url: str = Field(default="http://localhost:6333", alias="QDRANT_URL")
     qdrant_api_key: str | None = Field(default=None, alias="QDRANT_API_KEY")
     qdrant_path: str = Field(default=".qdrant", alias="QDRANT_PATH")

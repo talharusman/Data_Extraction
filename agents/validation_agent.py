@@ -5,14 +5,14 @@ import logging
 from pathlib import Path
 
 from agents.extraction_agent import ExtractionAgent, FIELD_BATCH_SIZE
-from agents.local_llm import LocalGGUFLLM
+from agents.local_llm import TransformersLLM
 from app.models import DocumentChunk, ExtractedField
 
 logger = logging.getLogger(__name__)
 
 
 class ValidationAgent:
-    def __init__(self, llm: LocalGGUFLLM, prompt_path: str = "prompts/validation_prompt.txt") -> None:
+    def __init__(self, llm: TransformersLLM, prompt_path: str = "prompts/validation_prompt.txt") -> None:
         self.llm = llm
         self.template = Path(prompt_path).read_text(encoding="utf-8")
 
