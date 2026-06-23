@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
+from importlib.metadata import PackageNotFoundError, version
 
 import torch
 from transformers import (
@@ -157,6 +159,24 @@ def make_generator():
         raise SystemExit(
             "Set HF_MODEL_NAME_OR_PATH in .env to a local Hugging Face model name or folder."
         )
+
+    if LOAD_IN_4BIT or LOAD_IN_8BIT:
+        try:
+            bnb_version = version("bitsandbytes")
+        except PackageNotFoundError as exc:
+            raise SystemExit(
+                "4-bit/8-bit loading needs bitsandbytes.\n"
+                "Run this in Colab, then restart runtime:\n"
+                "pip install -U 'bitsandbytes>=0.46.1'"
+            ) from exc
+        match = re.match(r"^(\d+)\.(\d+)\.(\d+)", bnb_version)
+        major, minor, patch = (int(part) for part in match.groups()) if match else (0, 0, 0)
+        if (major, minor, patch) < (0, 46, 1):
+            raise SystemExit(
+                f"bitsandbytes {bnb_version} is too old for 4-bit loading.\n"
+                "Run this in Colab, then restart runtime:\n"
+                "pip install -U 'bitsandbytes>=0.46.1'"
+            )
 
     tokenizer = AutoTokenizer.from_pretrained(
         MODEL_NAME,
