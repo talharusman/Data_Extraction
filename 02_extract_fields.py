@@ -168,7 +168,12 @@ Source file: {entry['file']}
 {text[:TEXT_CHUNK_SIZE]}
 --- PRODUCT TEXT END ---
 
-Return the JSON object now."""
+Return the JSON object now.
+
+Important:
+- Do not output any reasoning, analysis, or <think> blocks.
+- Do not wrap the JSON in markdown fences.
+- Output only one valid JSON object."""
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -177,7 +182,19 @@ Return the JSON object now."""
 
     if hasattr(tokenizer, "apply_chat_template"):
         try:
-            return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            try:
+                return tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
+                )
+            except TypeError:
+                return tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
         except Exception:
             pass
 
@@ -186,6 +203,8 @@ Return the JSON object now."""
 
 def parse_json_blob(raw):
     text = raw.strip()
+    if "<think>" in text:
+        text = text.split("</think>", 1)[-1].strip() if "</think>" in text else text.split("<think>", 1)[-1].strip()
     text = text.strip("`").strip()
     if text.startswith("json"):
         text = text[4:].strip()
@@ -201,6 +220,24 @@ def parse_json_blob(raw):
             return json.loads(candidate)
         except Exception:
             continue
+
+    # Some models emit a JSON object near the end after explanation text.
+    brace_start = text.find("{")
+    while brace_start != -1:
+        depth = 0
+        for idx in range(brace_start, len(text)):
+            ch = text[idx]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = text[brace_start : idx + 1]
+                    try:
+                        return json.loads(candidate)
+                    except Exception:
+                        break
+        brace_start = text.find("{", brace_start + 1)
 
     raise ValueError(f"Could not parse JSON from model output: {raw[:500]}")
 
@@ -295,15 +332,13 @@ def make_generator():
 
 def extract_one(generator, tokenizer, entry, text):
     prompt = build_prompt(entry, text, tokenizer)
-    outputs = generator(
-        prompt,
-        max_new_tokens=MAX_NEW_TOKENS,
-        do_sample=False,
-        temperature=TEMPERATURE,
-        top_p=TOP_P,
-        repetition_penalty=REPETITION_PENALTY,
-        return_full_text=False if generator.task == "text-generation" else True,
-    )
+    generation_kwargs = {
+        "max_new_tokens": MAX_NEW_TOKENS,
+        "do_sample": False,
+        "repetition_penalty": REPETITION_PENALTY,
+        "return_full_text": False if generator.task == "text-generation" else True,
+    }
+    outputs = generator(prompt, **generation_kwargs)
 
     if isinstance(outputs, list) and outputs:
         first = outputs[0]
