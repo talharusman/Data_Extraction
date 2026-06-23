@@ -19,6 +19,7 @@ import time
 from importlib.metadata import PackageNotFoundError, version
 
 import torch
+from huggingface_hub.errors import RepositoryNotFoundError
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSeq2SeqLM,
@@ -228,11 +229,20 @@ def make_generator():
                 "pip install -U 'bitsandbytes>=0.46.1'"
             )
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        MODEL_NAME,
-        local_files_only=LOCAL_FILES_ONLY,
-        trust_remote_code=TRUST_REMOTE_CODE,
-    )
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            MODEL_NAME,
+            local_files_only=LOCAL_FILES_ONLY,
+            trust_remote_code=TRUST_REMOTE_CODE,
+        )
+    except RepositoryNotFoundError as exc:
+        raise SystemExit(
+            f"Model not found on Hugging Face: {MODEL_NAME}\n"
+            "This usually means the repo id is wrong.\n"
+            "Use the exact Hugging Face model id from the model card, or set HF_MODEL_NAME_OR_PATH\n"
+            "to a local folder path.\n"
+            "If the repo is private or gated, authenticate in Colab first."
+        ) from exc
 
     model_kwargs = {
         "local_files_only": LOCAL_FILES_ONLY,
