@@ -57,6 +57,10 @@ def find_titles(doc):
 
 
 def main():
+    print("Stage 1 starting: segmenting PDF into product text files.")
+    print(f"Resolved PDF path: {PDF_PATH}")
+    print(f"Resolved products dir: {PRODUCTS_DIR}")
+
     if not PDF_PATH.exists():
         raise SystemExit(
             f"PDF not found: {PDF_PATH}\n"
@@ -90,6 +94,7 @@ def main():
         entry["file"] = fname
         with open(PRODUCTS_DIR / fname, "w", encoding="utf-8") as f:
             f.write(full_text)
+        print(f"Wrote {fname} ({entry['start_page']}-{entry['end_page']})")
 
     with open(INDEX_PATH, "w", encoding="utf-8") as f:
         json.dump(index, f, indent=2, ensure_ascii=False)
