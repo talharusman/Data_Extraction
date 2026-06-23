@@ -64,9 +64,59 @@ Extract values for EXACTLY these {len(COLUMNS)} columns and return ONLY a single
 JSON object (no markdown fences, no commentary) with these exact keys:
 {json.dumps(COLUMNS)}
 
+Use the following data dictionary to interpret each column:
+
+PRODUCT_NAME: Normalized product or service name. Example: "Alfalah Car Ijarah". Type: text/categorical.
+LEAD_CO_MNE: Lead marker from user (IBG or BNK). Example: "IBG". Type: text/categorical.
+SOURCE_FILE_PRODUCT: Batch/source group name provided by user. Example: "Isl Consumer". Type: text/categorical.
+PLAN_TYPE: High-level family such as Loan, Deposit, Savings, Card, Investment, Insurance, Service or Loyalty. Example: "Loan". Type: text/categorical.
+TARGET_GOAL: Primary customer need/use case. Example: "Housing". Type: text/categorical.
+CUSTOMER_TYPE: Broad eligible customer class. Example: "SME / Corporate". Type: text/categorical.
+EMPLOYMENT_TYPE: Employment eligibility where applicable. Example: "Salaried/SEP". Type: text/categorical.
+CUSTOMER_SEGMENT: Behavioral/demographic segment when explicitly identified. Example: "NRP". Type: text/categorical.
+TARGET_SEGMENT: More specific positioning segment where stated. Example: "Financial Inclusion". Type: text/categorical.
+SEGMENT: Priority/HNW/premium segment tag. Example: "Premium (HNW)". Type: text/categorical.
+MIN_AGE: Minimum eligible age. Example: 18. Type: numeric.
+MAX_AGE: Maximum eligible age. Example: 65. Type: numeric.
+GENDER: Gender eligibility/focus. Example: "Female". Type: text/categorical.
+BANK_CUSTOMER: 1 for bank-offered/relationship products in this normalized dataset. Example: 1. Type: numeric.
+ACCOUNT_TYPE: Current, Savings, Wallet, Digital, etc. Example: "Current". Type: text/categorical.
+CARD_TYPE: Debit, Credit, Virtual Debit, Premium etc. Example: "Credit (Premium)". Type: text/categorical.
+CHANNEL: Primary servicing/onboarding channel. Example: "Mobile App". Type: text/categorical.
+ELIGIBILITY_TYPE: Short eligibility logic text. Example: "CNIC + Biometric". Type: text/categorical.
+SERVICE_TYPE: Operational/service type for non-core products. Example: "Payments". Type: text/categorical.
+REWARD_TYPE: Reward mechanism for loyalty rows. Example: "Points". Type: text/categorical.
+CURRENCY: Currency or set of currencies. Example: "PKR + FCY". Type: text/categorical.
+CURRENCY_TYPE: PKR/FCY style label if used. Example: "FCY". Type: text/categorical.
+MIN_BALANCE: Minimum opening or operating balance. Example: 1000. Type: numeric.
+AVG_BALANCE_REQUIREMENT: Average balance requirement. Example: 50000. Type: numeric.
+MIN_INCOME: Minimum PKR income where stated. Example: 50000. Type: numeric.
+MIN_INCOME_USD: Minimum USD income where stated. Example: 3000. Type: numeric.
+MIN_INVESTMENT: Minimum investment/placement amount. Example: 100K. Type: numeric.
+MIN_CONTRIBUTION: Minimum premium/contribution. Example: 250000. Type: numeric.
+LOAN_AMOUNT_RANGE: Loan size or facility range. Example: 200K-3M. Type: text/categorical.
+COVERAGE_AMOUNT: Coverage amount or insured amount. Example: 50K-150K coverage. Type: text/categorical.
+FINANCING_TYPE: Conventional/Islamic financing structure or instrument type. Example: "Mudarabah". Type: text/categorical.
+PROFIT_TYPE: Profit basis or mode. Example: "Tier-based". Type: text/categorical.
+PROFIT_FREQUENCY: Monthly, semi-annual, maturity etc. Example: "Monthly". Type: text/categorical.
+TENURE: Readable tenor text. Example: "1-5 years". Type: text/categorical.
+TENURE_OPTIONS: Structured tenor menu text. Example: "1M -> 5Y". Type: text/categorical.
+MIN_TERM_YEARS: Minimum term in years when directly available. Example: 10. Type: numeric.
+MAX_TERM_YEARS: Maximum term in years when directly available. Example: 25. Type: numeric.
+BUSINESS_TENURE: Required business age/operating history. Example: ">=3 years". Type: text/categorical.
+COLLATERAL_TYPE: Security/collateral type. Example: "Property Mortgage". Type: text/categorical.
+EQUITY_REQUIREMENT: Borrower equity or margin requirement. Example: "30%". Type: text/categorical.
+DBR_LIMIT: Debt burden ratio limit. Example: "<=40%". Type: text/categorical.
+TRANSACTION_LIMIT: Usage/balance/transaction cap. Example: "1M monthly". Type: text/categorical.
+SPECIAL_CONDITIONS: Residual qualifiers or important caveats. Example: "RDA required". Type: text/categorical.
+
 Rules:
 - If a field is not mentioned or not applicable to this product type, set its
   value to the JSON string "N/A" (not null, not empty string).
+- Prefer copying the source wording when a field is categorical.
+- For numeric fields, return only the number when possible.
+- For fields like LOAN_AMOUNT_RANGE, COVERAGE_AMOUNT, TENURE, and SPECIAL_CONDITIONS,
+  keep the wording compact but faithful to the source text.
 - Never invent numbers or facts that are not stated or clearly implied in the
   text.
 - Keep values short and structured (e.g. "18-60" for an age range field if a
