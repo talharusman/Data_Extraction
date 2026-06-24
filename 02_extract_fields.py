@@ -26,7 +26,6 @@ from transformers import (
     AutoModelForSeq2SeqLM,
     AutoTokenizer,
     BitsAndBytesConfig,
-    pipeline,
 )
 
 from pipeline_config import (
@@ -187,9 +186,7 @@ def _strip_wrappers(text: str) -> str:
     text = re.sub(r"^\s*```(?:json)?\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s*```\s*$", "", text)
     text = re.sub(r"^\s*json\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
-    if "<think>" in text:
-        text = text.split("<think>", 1)[0].strip()
+    text = re.sub(r"(?is)</?think>", "", text)
     return text.strip()
 
 
@@ -228,24 +225,36 @@ def _iter_json_candidates(text):
     if first != -1 and last != -1 and last > first:
         yield from emit(text[first : last + 1])
 
-    brace_start = text.rfind("{")
-    while brace_start != -1:
+    starts = [idx for idx, ch in enumerate(text) if ch == "{"]
+    for brace_start in starts:
         depth = 0
+        in_string = False
+        escape = False
         for idx in range(brace_start, len(text)):
             ch = text[idx]
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    yield from emit(text[brace_start : idx + 1])
-                    break
-        brace_start = text.rfind("{", 0, brace_start)
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+            else:
+                if ch == '"':
+                    in_string = True
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        yield from emit(text[brace_start : idx + 1])
+                        break
 
 
 def parse_json_blob(raw):
     for candidate in _iter_json_candidates(raw):
-        parsed = _parse_candidate(candidate)
+        cleaned = re.sub(r",\s*([}\]])", r"\1", candidate)
+        parsed = _parse_candidate(cleaned)
         if parsed is not None:
             return parsed
     raise ValueError(f"Could not parse JSON from model output: {raw[:500]}")
@@ -334,35 +343,45 @@ Broken model output to repair:
 """
 
 
-def get_raw_generation(generator, tokenizer, prompt):
-    input_length = len(tokenizer(prompt, add_special_tokens=True)["input_ids"])
+def get_raw_generation(model, tokenizer, prompt):
+    inputs = tokenizer(prompt, return_tensors="pt")
+    device = getattr(model, "device", None)
+    if device is not None:
+        inputs = {key: value.to(device) for key, value in inputs.items()}
+
     generation_kwargs = {
-        "max_length": input_length + MAX_NEW_TOKENS,
+        "max_new_tokens": MAX_NEW_TOKENS,
         "do_sample": False,
         "repetition_penalty": REPETITION_PENALTY,
-        "return_full_text": False if generator.task == "text-generation" else True,
+        "pad_token_id": tokenizer.pad_token_id or tokenizer.eos_token_id,
+        "eos_token_id": tokenizer.eos_token_id,
     }
-    outputs = generator(prompt, **generation_kwargs)
 
-    if isinstance(outputs, list) and outputs:
-        first = outputs[0]
-        raw = first.get("generated_text") or first.get("summary_text") or first.get("text") or ""
-    elif isinstance(outputs, dict):
-        raw = outputs.get("generated_text") or outputs.get("summary_text") or outputs.get("text") or ""
+    with torch.inference_mode():
+        output_ids = model.generate(**inputs, **generation_kwargs)
+
+    if getattr(model.config, "is_encoder_decoder", False):
+        generated_ids = output_ids[0]
     else:
-        raw = str(outputs)
-    return raw
+        prompt_len = inputs["input_ids"].shape[-1]
+        generated_ids = output_ids[0][prompt_len:]
+
+    return tokenizer.decode(
+        generated_ids,
+        skip_special_tokens=True,
+        clean_up_tokenization_spaces=False,
+    )
 
 
-def extract_with_repair(generator, tokenizer, entry, text):
+def extract_with_repair(model, tokenizer, entry, text):
     prompt = build_prompt(entry, text, tokenizer)
-    raw = get_raw_generation(generator, tokenizer, prompt)
+    raw = get_raw_generation(model, tokenizer, prompt)
 
     try:
         return normalize_record(parse_json_blob(raw), entry)
     except Exception as first_error:
         repair_prompt = build_repair_prompt(entry, raw)
-        repaired_raw = get_raw_generation(generator, tokenizer, repair_prompt)
+        repaired_raw = get_raw_generation(model, tokenizer, repair_prompt)
         try:
             return normalize_record(parse_json_blob(repaired_raw), entry)
         except Exception as second_error:
@@ -447,27 +466,27 @@ def make_generator():
 
     if MODEL_CLASS == "seq2seq":
         model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME, **model_kwargs)
-        task = "text2text-generation"
     else:
         model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, **model_kwargs)
-        task = "text-generation"
 
-    generator = pipeline(
-        task,
-        model=model,
-        tokenizer=tokenizer,
-        device_map=DEVICE_MAP if DEVICE_MAP.lower() != "none" else None,
-    )
-    return generator, tokenizer
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token or tokenizer.unk_token
+    if hasattr(model, "generation_config"):
+        if tokenizer.pad_token_id is not None:
+            model.generation_config.pad_token_id = tokenizer.pad_token_id
+        if tokenizer.eos_token_id is not None:
+            model.generation_config.eos_token_id = tokenizer.eos_token_id
+
+    return model, tokenizer
 
 
-def extract_one(generator, tokenizer, entry, text):
-    return extract_with_repair(generator, tokenizer, entry, text)
+def extract_one(model, tokenizer, entry, text):
+    return extract_with_repair(model, tokenizer, entry, text)
 
 
 def main():
     try:
-        generator, tokenizer = make_generator()
+        model, tokenizer = make_generator()
     except torch.cuda.OutOfMemoryError as exc:
         raise SystemExit(
             "CUDA ran out of memory while loading the model.\n"
@@ -492,7 +511,7 @@ def main():
 
             for attempt in range(3):
                 try:
-                    data = extract_one(generator, tokenizer, entry, text)
+                    data = extract_one(model, tokenizer, entry, text)
                     rec = {"product_no": entry["product_no"], **data}
                     out.write(json.dumps(rec, ensure_ascii=False) + "\n")
                     out.flush()
