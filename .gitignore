@@ -5,6 +5,7 @@ __pycache__/
 .mypy_cache/
 .venv/
 venv/
+.env.example
 extracted_data.jsonl
 bank_products_extracted.xlsx
 *.log

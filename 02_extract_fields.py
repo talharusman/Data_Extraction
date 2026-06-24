@@ -12,6 +12,7 @@ so you can safely re-run after an interruption.
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -54,6 +55,20 @@ LOAD_IN_4BIT = env_bool("HF_LOAD_IN_4BIT", False)
 LOAD_IN_8BIT = env_bool("HF_LOAD_IN_8BIT", False)
 DEVICE_MAP = os.environ.get("HF_DEVICE_MAP", "auto").strip() or "auto"
 TORCH_DTYPE = os.environ.get("HF_TORCH_DTYPE", "auto").strip().lower()
+DEFAULT_VALUE = "N/A"
+NUMERIC_COLUMNS = {
+    "MIN_AGE",
+    "MAX_AGE",
+    "BANK_CUSTOMER",
+    "MIN_BALANCE",
+    "AVG_BALANCE_REQUIREMENT",
+    "MIN_INCOME",
+    "MIN_INCOME_USD",
+    "MIN_INVESTMENT",
+    "MIN_CONTRIBUTION",
+    "MIN_TERM_YEARS",
+    "MAX_TERM_YEARS",
+}
 
 SYSTEM_PROMPT = f"""You are a data-extraction engine for a bank product catalogue.
 You will be given the raw text of ONE product's section, extracted from a PDF
@@ -160,6 +175,102 @@ def load_done_ids():
     return done
 
 
+def blank_record(entry):
+    record = {col: DEFAULT_VALUE for col in COLUMNS}
+    record["PRODUCT_NAME"] = entry["title"]
+    record["SOURCE_FILE_PRODUCT"] = entry["file"]
+    return record
+
+
+def _strip_wrappers(text: str) -> str:
+    text = text.strip()
+    text = re.sub(r"^\s*```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```\s*$", "", text)
+    text = re.sub(r"^\s*json\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
+    if "<think>" in text:
+        text = text.split("<think>", 1)[0].strip()
+    return text.strip()
+
+
+def _parse_candidate(candidate):
+    candidate = candidate.strip()
+    if not candidate:
+        return None
+    for parser in (json.loads, ast.literal_eval):
+        try:
+            parsed = parser(candidate)
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _iter_json_candidates(text):
+    text = _strip_wrappers(text)
+    seen = set()
+
+    def emit(candidate):
+        candidate = candidate.strip()
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            yield candidate
+
+    fenced = re.findall(r"```(?:json)?\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL)
+    for block in fenced:
+        yield from emit(block)
+
+    yield from emit(text)
+
+    first = text.find("{")
+    last = text.rfind("}")
+    if first != -1 and last != -1 and last > first:
+        yield from emit(text[first : last + 1])
+
+    brace_start = text.rfind("{")
+    while brace_start != -1:
+        depth = 0
+        for idx in range(brace_start, len(text)):
+            ch = text[idx]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    yield from emit(text[brace_start : idx + 1])
+                    break
+        brace_start = text.rfind("{", 0, brace_start)
+
+
+def parse_json_blob(raw):
+    for candidate in _iter_json_candidates(raw):
+        parsed = _parse_candidate(candidate)
+        if parsed is not None:
+            return parsed
+    raise ValueError(f"Could not parse JSON from model output: {raw[:500]}")
+
+
+def normalize_record(record, entry):
+    if not isinstance(record, dict):
+        return blank_record(entry)
+
+    normalized = {col: DEFAULT_VALUE for col in COLUMNS}
+    for col in COLUMNS:
+        value = record.get(col, DEFAULT_VALUE)
+        if value in (None, "", []):
+            value = DEFAULT_VALUE
+        if col in NUMERIC_COLUMNS and isinstance(value, str):
+            stripped = value.strip()
+            if not stripped or stripped.upper() == DEFAULT_VALUE:
+                value = DEFAULT_VALUE
+        normalized[col] = value
+
+    normalized["PRODUCT_NAME"] = record.get("PRODUCT_NAME") or entry["title"]
+    normalized["SOURCE_FILE_PRODUCT"] = entry["file"]
+    return normalized
+
+
 def build_prompt(entry, text, tokenizer):
     user_msg = f"""Product title (from document heading): {entry['title']}
 Source file: {entry['file']}
@@ -171,6 +282,7 @@ Source file: {entry['file']}
 Return the JSON object now.
 
 Important:
+- Your reply must begin with `{{` and end with `}}`.
 - Do not output any reasoning, analysis, or <think> blocks.
 - Do not wrap the JSON in markdown fences.
 - Output only one valid JSON object."""
@@ -201,45 +313,64 @@ Important:
     return f"{SYSTEM_PROMPT}\n\n{user_msg}"
 
 
-def parse_json_blob(raw):
-    text = raw.strip()
-    if "<think>" in text:
-        text = text.split("</think>", 1)[-1].strip() if "</think>" in text else text.split("<think>", 1)[-1].strip()
-    text = text.strip("`").strip()
-    if text.startswith("json"):
-        text = text[4:].strip()
+def build_repair_prompt(entry, raw_text):
+    return f"""You are repairing a failed extraction.
 
-    candidates = [text]
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        candidates.append(text[start : end + 1])
+Return exactly one valid JSON object and nothing else.
+The JSON must use these keys in any order:
+{json.dumps(COLUMNS)}
 
-    for candidate in candidates:
+Rules:
+- Use double quotes for all strings.
+- Use "N/A" for missing or unknown fields.
+- Keep numeric fields as numbers when the source gives a number.
+- Do not add markdown fences, explanations, or analysis.
+
+Product title: {entry['title']}
+Source file: {entry['file']}
+
+Broken model output to repair:
+{raw_text[:5000]}
+"""
+
+
+def get_raw_generation(generator, tokenizer, prompt):
+    input_length = len(tokenizer(prompt, add_special_tokens=True)["input_ids"])
+    generation_kwargs = {
+        "max_length": input_length + MAX_NEW_TOKENS,
+        "do_sample": False,
+        "repetition_penalty": REPETITION_PENALTY,
+        "return_full_text": False if generator.task == "text-generation" else True,
+    }
+    outputs = generator(prompt, **generation_kwargs)
+
+    if isinstance(outputs, list) and outputs:
+        first = outputs[0]
+        raw = first.get("generated_text") or first.get("summary_text") or first.get("text") or ""
+    elif isinstance(outputs, dict):
+        raw = outputs.get("generated_text") or outputs.get("summary_text") or outputs.get("text") or ""
+    else:
+        raw = str(outputs)
+    return raw
+
+
+def extract_with_repair(generator, tokenizer, entry, text):
+    prompt = build_prompt(entry, text, tokenizer)
+    raw = get_raw_generation(generator, tokenizer, prompt)
+
+    try:
+        return normalize_record(parse_json_blob(raw), entry)
+    except Exception as first_error:
+        repair_prompt = build_repair_prompt(entry, raw)
+        repaired_raw = get_raw_generation(generator, tokenizer, repair_prompt)
         try:
-            return json.loads(candidate)
-        except Exception:
-            continue
-
-    # Some models emit a JSON object near the end after explanation text.
-    brace_start = text.find("{")
-    while brace_start != -1:
-        depth = 0
-        for idx in range(brace_start, len(text)):
-            ch = text[idx]
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    candidate = text[brace_start : idx + 1]
-                    try:
-                        return json.loads(candidate)
-                    except Exception:
-                        break
-        brace_start = text.find("{", brace_start + 1)
-
-    raise ValueError(f"Could not parse JSON from model output: {raw[:500]}")
+            return normalize_record(parse_json_blob(repaired_raw), entry)
+        except Exception as second_error:
+            print(
+                f"Warning: falling back to blank record for {entry['product_no']:03d} "
+                f"after parse failures: {first_error}; {second_error}"
+            )
+            return blank_record(entry)
 
 
 def make_generator():
@@ -331,29 +462,7 @@ def make_generator():
 
 
 def extract_one(generator, tokenizer, entry, text):
-    prompt = build_prompt(entry, text, tokenizer)
-    generation_kwargs = {
-        "max_new_tokens": MAX_NEW_TOKENS,
-        "do_sample": False,
-        "repetition_penalty": REPETITION_PENALTY,
-        "return_full_text": False if generator.task == "text-generation" else True,
-    }
-    outputs = generator(prompt, **generation_kwargs)
-
-    if isinstance(outputs, list) and outputs:
-        first = outputs[0]
-        raw = first.get("generated_text") or first.get("summary_text") or first.get("text") or ""
-    elif isinstance(outputs, dict):
-        raw = outputs.get("generated_text") or outputs.get("summary_text") or outputs.get("text") or ""
-    else:
-        raw = str(outputs)
-
-    data = parse_json_blob(raw)
-    for col in COLUMNS:
-        data.setdefault(col, "N/A")
-    data["PRODUCT_NAME"] = data.get("PRODUCT_NAME") or entry["title"]
-    data["SOURCE_FILE_PRODUCT"] = entry["file"]
-    return data
+    return extract_with_repair(generator, tokenizer, entry, text)
 
 
 def main():
