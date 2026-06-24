@@ -7,6 +7,7 @@ from pathlib import Path
 from agents.extraction_agent import ExtractionAgent, FIELD_BATCH_SIZE
 from agents.local_llm import TransformersLLM
 from app.models import DocumentChunk, ExtractedField
+from app.schema_dictionary import render_field_dictionary
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,7 @@ class ValidationAgent:
         prompt = (
             self.template
             .replace("{{EXTRACTION}}", json.dumps({k: v.model_dump() for k, v in extraction.items()}, ensure_ascii=False))
+            .replace("{{FIELD_DICTIONARY}}", render_field_dictionary(list(extraction.keys())))
             .replace("{{CONTEXT}}", ExtractionAgent._context(chunks))
         )
         raw = self.llm.generate_json(prompt)

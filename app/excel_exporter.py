@@ -11,6 +11,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from app.models import ExtractedField, ProductExtraction
+from app.schema_dictionary import column_meta
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +71,8 @@ NUMERIC_FIELDS = {
     "MIN_INCOME_USD",
     "MIN_INVESTMENT",
     "MIN_CONTRIBUTION",
-    "COVERAGE_AMOUNT",
     "MIN_TERM_YEARS",
     "MAX_TERM_YEARS",
-    "BUSINESS_TENURE",
-    "EQUITY_REQUIREMENT",
 }
 
 TITLE_FILL = PatternFill("solid", fgColor="FF1F4E78")
@@ -188,6 +186,15 @@ class ExcelExportAgent:
         if value is None:
             return ""
         text = str(value).strip().lower()
+        return text
+
+    @staticmethod
+    def _normalize_for_compare(value: Any) -> str:
+        if value is None:
+            return ""
+        text = str(value).strip().lower()
+        text = re.sub(r"[_\-]+", " ", text)
+        text = re.sub(r"\s+", " ", text)
         return text
 
     def _build_workbook(self, rows: list[dict[str, Any]]) -> Workbook:
@@ -338,6 +345,8 @@ class ExcelExportAgent:
     ) -> Any:
         if column == "PRODUCT_NAME":
             return self._normalize_product_name(value, product)
+        if self._is_product_name_copy(column, value, product):
+            value = None
         if column == "LEAD_CO_MNE":
             return self._lead_code(product, value)
         if column == "SOURCE_FILE_PRODUCT":
@@ -391,6 +400,19 @@ class ExcelExportAgent:
         if column == "SPECIAL_CONDITIONS":
             return self._normalize_special_conditions(value)
         return self._compact_label(value)
+
+    def _is_product_name_copy(self, column: str, value: Any, product: ProductExtraction | None) -> bool:
+        if column == "PRODUCT_NAME" or value is None or product is None:
+            return False
+        candidate = self._normalize_for_compare(value)
+        if not candidate:
+            return False
+        product_names = {
+            self._normalize_for_compare(product.product_id),
+            self._normalize_for_compare(Path(product.source_file).stem),
+        }
+        product_names.discard("")
+        return candidate in product_names
 
     def _normalize_age(
         self,
@@ -536,9 +558,12 @@ class ExcelExportAgent:
         if not text:
             return None
         text = text.replace(",", "")
-        number_match = re.search(r"[-+]?\d+(?:\.\d+)?", text)
+        number_match = re.search(r"([-+]?\d+(?:\.\d+)?)\s*([kKmM])?\b", text)
         if number_match:
-            number = float(number_match.group())
+            number = float(number_match.group(1))
+            suffix = number_match.group(2)
+            if suffix:
+                number *= 1000 if suffix.lower() == "k" else 1000000
             if number.is_integer():
                 return int(number)
             return number
@@ -820,50 +845,4 @@ class ExcelExportAgent:
         return "".join(words).strip()
 
     def _column_meta(self, column: str) -> tuple[str, str, Any]:
-        meta = {
-            "PRODUCT_NAME": ("Normalized product name", "Text", "Alfalah Car Ijarah"),
-            "LEAD_CO_MNE": ("Lead company / market code", "Code", "BNK"),
-            "SOURCE_FILE_PRODUCT": ("Source folder or product family", "Text", "Banca Takaful"),
-            "PLAN_TYPE": ("Product plan type", "Text", "Savings Account"),
-            "TARGET_GOAL": ("Primary customer goal", "Text", "Education"),
-            "CUSTOMER_TYPE": ("Target customer type", "Text", "Individual"),
-            "EMPLOYMENT_TYPE": ("Employment classification", "Text", "Salaried"),
-            "CUSTOMER_SEGMENT": ("Customer segment", "Text", "Retail"),
-            "TARGET_SEGMENT": ("Target segment", "Text", "Senior Citizen"),
-            "SEGMENT": ("General segment label", "Text", "Consumer"),
-            "MIN_AGE": ("Minimum eligible age", "Numeric", 18),
-            "MAX_AGE": ("Maximum eligible age", "Numeric", 60),
-            "GENDER": ("Eligible gender", "Text", "Any"),
-            "BANK_CUSTOMER": ("Existing bank customer required", "Binary (0/1)", 1),
-            "ACCOUNT_TYPE": ("Account type", "Text", "Current Account"),
-            "CARD_TYPE": ("Card type", "Text", "Debit Card"),
-            "CHANNEL": ("Delivery or service channel", "Text", "Mobile App"),
-            "ELIGIBILITY_TYPE": ("Eligibility category", "Text", "Existing Customer"),
-            "SERVICE_TYPE": ("Service type", "Text", "Digital"),
-            "REWARD_TYPE": ("Reward or benefit type", "Text", "Cashback"),
-            "CURRENCY": ("Currency code or family", "Text", "PKR"),
-            "CURRENCY_TYPE": ("Local or foreign currency", "Text", "PKR"),
-            "MIN_BALANCE": ("Minimum balance requirement", "Numeric", 1000),
-            "AVG_BALANCE_REQUIREMENT": ("Average balance requirement", "Numeric", 1000),
-            "MIN_INCOME": ("Minimum income requirement", "Numeric", 50000),
-            "MIN_INCOME_USD": ("Minimum income in USD", "Numeric", 180),
-            "MIN_INVESTMENT": ("Minimum investment amount", "Numeric", 10000),
-            "MIN_CONTRIBUTION": ("Minimum contribution amount", "Numeric", 1000),
-            "LOAN_AMOUNT_RANGE": ("Loan amount range", "Text", "50,000-500,000"),
-            "COVERAGE_AMOUNT": ("Coverage amount", "Numeric", 100000),
-            "FINANCING_TYPE": ("Financing method", "Text", "Murabaha"),
-            "PROFIT_TYPE": ("Profit or pricing type", "Text", "Fixed"),
-            "PROFIT_FREQUENCY": ("Profit application frequency", "Text", "Monthly"),
-            "TENURE": ("Tenure", "Text", "12 Months"),
-            "TENURE_OPTIONS": ("Tenure options", "Text", "1, 2, 3 Years"),
-            "MIN_TERM_YEARS": ("Minimum term in years", "Numeric", 1),
-            "MAX_TERM_YEARS": ("Maximum term in years", "Numeric", 5),
-            "BUSINESS_TENURE": ("Minimum business tenure", "Numeric", 2),
-            "COLLATERAL_TYPE": ("Collateral type", "Text", "Property"),
-            "EQUITY_REQUIREMENT": ("Equity requirement", "Numeric", 20),
-            "DBR_LIMIT": ("Debt burden ratio limit", "Text", "50%"),
-            "TRANSACTION_LIMIT": ("Transaction limit", "Text", "500,000"),
-            "SPECIAL_CONDITIONS": ("Additional eligibility conditions", "Text", "Unique CNIC required"),
-        }
-        description, type_hint, example = meta.get(column, (column.replace("_", " ").title(), "Text", "Example"))
-        return description, type_hint, example
+        return column_meta(column)

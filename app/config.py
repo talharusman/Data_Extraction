@@ -12,7 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class RuntimeSettings(BaseSettings):
     llm_model_name_or_path: str = Field(
-        default="Qwen/Qwen2.5-14B-Instruct",
+        default="deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
         alias="LLM_MODEL_NAME_OR_PATH",
     )
     llm_use_4bit: bool = Field(default=True, alias="LLM_USE_4BIT")

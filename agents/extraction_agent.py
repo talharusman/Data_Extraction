@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from agents.local_llm import TransformersLLM
 from app.models import DocumentChunk, ExtractedField
+from app.schema_dictionary import render_field_dictionary
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ class ExtractionAgent:
         prompt = (
             self.template
             .replace("{{FIELDS}}", "\n".join(fields))
+            .replace("{{FIELD_DICTIONARY}}", render_field_dictionary(fields))
             .replace("{{CONTEXT}}", self._context(chunks))
         )
         raw = self.llm.generate_json(prompt)
