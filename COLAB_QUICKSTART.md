@@ -34,6 +34,9 @@ HF_LOCAL_FILES_ONLY=false
 If the model is already in your Colab cache or mounted Drive folder, you can
 keep `HF_LOCAL_FILES_ONLY=true`.
 
+Avoid reasoning-first models like `DeepSeek-R1-*` for this pipeline unless you
+have to. Instruct models are much better at returning strict JSON.
+
 ## 3) Install dependencies
 
 ```bash
