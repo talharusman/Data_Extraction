@@ -1,12 +1,18 @@
 """
-Step 2: Extract the fixed 41-column schema as JSON from product text files.
+Step 2: Extract the fixed 41-column schema as JSON from product files.
 
 Instead of reading a pre-built JSON index, the script now asks you at startup
 how you want to supply input:
 
-  1) Single file   – give one .txt path
-  2) Folder        – all .txt files in one directory (non-recursive)
-  3) Nested folder – all .txt files under a directory tree (recursive)
+  1) Single file   – give one file path (any supported type)
+  2) Folder        – all supported files in one directory (non-recursive)
+  3) Nested folder – all supported files under a directory tree (recursive)
+
+Supported file types: .txt, .pdf, .docx, .doc, .csv, .json, .xlsx, .xls
+
+Required packages for non-txt formats:
+  pip install pdfplumber python-docx openpyxl
+  # for .doc: sudo apt install antiword  (Linux) or install antiword on PATH
 
 Configure the model through .env:
   HF_MODEL_NAME_OR_PATH=Qwen/Qwen2.5-3B-Instruct
@@ -22,6 +28,7 @@ import ast
 import json
 import os
 import re
+import subprocess
 import time
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -73,6 +80,9 @@ NUMERIC_COLUMNS = {
     "MIN_TERM_YEARS",
     "MAX_TERM_YEARS",
 }
+
+# All file extensions this script can read
+SUPPORTED_EXTENSIONS = {".txt", ".pdf", ".docx", ".doc", ".csv", ".json", ".xlsx", ".xls"}
 
 SYSTEM_PROMPT = f"""You are a data-extraction engine for a bank product catalogue.
 You will be given the raw text of ONE product's section, extracted from a PDF
@@ -157,6 +167,110 @@ Rules:
   "Bank Alfalah", "IGI Life", "Jubilee Life", "State Life").
 """
 
+
+# ---------------------------------------------------------------------------
+# File reading — one function per format, dispatched by extension
+# ---------------------------------------------------------------------------
+
+def read_file_text(path: Path) -> str:
+    """Extract plain text from any supported file type."""
+    ext = path.suffix.lower()
+
+    if ext == ".txt":
+        return path.read_text(encoding="utf-8", errors="replace")
+
+    elif ext == ".pdf":
+        try:
+            import pdfplumber
+        except ImportError:
+            raise SystemExit(
+                "pdfplumber is required to read PDF files.\n"
+                "Install it with:  pip install pdfplumber"
+            )
+        pages = []
+        with pdfplumber.open(path) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text()
+                if text:
+                    pages.append(text)
+        return "\n".join(pages)
+
+    elif ext == ".docx":
+        try:
+            import docx
+        except ImportError:
+            raise SystemExit(
+                "python-docx is required to read DOCX files.\n"
+                "Install it with:  pip install python-docx"
+            )
+        doc = docx.Document(path)
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        # Also extract text from tables
+        for table in doc.tables:
+            for row in table.rows:
+                row_text = "\t".join(cell.text.strip() for cell in row.cells)
+                if row_text.strip():
+                    paragraphs.append(row_text)
+        return "\n".join(paragraphs)
+
+    elif ext == ".doc":
+        # Requires antiword installed on the system PATH
+        try:
+            result = subprocess.run(
+                ["antiword", str(path)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.strip())
+            return result.stdout
+        except FileNotFoundError:
+            raise SystemExit(
+                "antiword is required to read old .doc files.\n"
+                "Install it with:  sudo apt install antiword  (Linux)\n"
+                "or download from http://www.winfield.demon.nl/ (Windows/Mac)"
+            )
+
+    elif ext == ".csv":
+        # Return raw CSV text; the model can parse the structure from it
+        return path.read_text(encoding="utf-8", errors="replace")
+
+    elif ext == ".json":
+        # Pretty-print so the model sees structured readable text
+        raw = path.read_text(encoding="utf-8", errors="replace")
+        try:
+            parsed = json.loads(raw)
+            return json.dumps(parsed, indent=2, ensure_ascii=False)
+        except Exception:
+            return raw
+
+    elif ext in (".xlsx", ".xls"):
+        try:
+            import openpyxl
+        except ImportError:
+            raise SystemExit(
+                "openpyxl is required to read Excel files.\n"
+                "Install it with:  pip install openpyxl"
+            )
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        rows = []
+        for sheet in wb.worksheets:
+            rows.append(f"[Sheet: {sheet.title}]")
+            for row in sheet.iter_rows(values_only=True):
+                row_text = "\t".join(
+                    str(cell) if cell is not None else "" for cell in row
+                )
+                if row_text.strip():
+                    rows.append(row_text)
+        wb.close()
+        return "\n".join(rows)
+
+    else:
+        # Fallback: try reading as plain text
+        return path.read_text(encoding="utf-8", errors="replace")
+
+
 # ---------------------------------------------------------------------------
 # Interactive input-source selection
 # ---------------------------------------------------------------------------
@@ -173,20 +287,28 @@ def _prompt_choice(prompt: str, choices: list[str]) -> str:
         print(f"  Please enter a number between 1 and {len(choices)}.\n")
 
 
-def _collect_txt_files(path: Path, recursive: bool) -> list[Path]:
-    """Return all .txt files under *path* (recursive) or directly in it."""
+def _collect_files(path: Path, recursive: bool) -> list[Path]:
+    """Return all supported files under *path* (recursive) or directly in it."""
     if recursive:
-        return sorted(path.rglob("*.txt"))
-    return sorted(path.glob("*.txt"))
+        all_files = path.rglob("*")
+    else:
+        all_files = path.glob("*")
+    return sorted(
+        f for f in all_files
+        if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS
+    )
 
 
 def select_input_files() -> list[Path]:
     """
-    Interactively ask the user how they want to supply input text files.
-    Returns a list of Path objects pointing to .txt files to process.
+    Interactively ask the user how they want to supply input files.
+    Returns a list of Path objects pointing to files to process.
     """
+    supported_str = ", ".join(sorted(SUPPORTED_EXTENSIONS))
+
     print("\n" + "=" * 60)
     print("  Product Text Extractor – Input Selection")
+    print(f"  Supported formats: {supported_str}")
     print("=" * 60)
 
     mode = _prompt_choice(
@@ -196,22 +318,31 @@ def select_input_files() -> list[Path]:
 
     if mode == "Single file":
         while True:
-            raw = input("\nEnter the full path to the .txt file: ").strip()
+            raw = input("\nEnter the full path to the file: ").strip()
             p = Path(raw)
-            if p.is_file() and p.suffix.lower() == ".txt":
+            if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS:
                 return [p]
-            print(f"  Not a valid .txt file: {raw}\n")
+            if p.is_file():
+                print(
+                    f"  Unsupported file type '{p.suffix}'. "
+                    f"Supported: {supported_str}\n"
+                )
+            else:
+                print(f"  File not found: {raw}\n")
 
     elif mode == "Folder (non-recursive)":
         while True:
             raw = input("\nEnter the folder path: ").strip()
             p = Path(raw)
             if p.is_dir():
-                files = _collect_txt_files(p, recursive=False)
+                files = _collect_files(p, recursive=False)
                 if files:
-                    print(f"  Found {len(files)} .txt file(s) in '{p}'.")
+                    print(f"  Found {len(files)} supported file(s) directly in '{p}'.")
                     return files
-                print(f"  No .txt files found directly in '{p}'. Try again.\n")
+                print(
+                    f"  No supported files found directly in '{p}'.\n"
+                    f"  Supported formats: {supported_str}\n"
+                )
             else:
                 print(f"  Not a valid directory: {raw}\n")
 
@@ -220,30 +351,36 @@ def select_input_files() -> list[Path]:
             raw = input("\nEnter the root folder path: ").strip()
             p = Path(raw)
             if p.is_dir():
-                files = _collect_txt_files(p, recursive=True)
+                files = _collect_files(p, recursive=True)
                 if files:
-                    print(f"  Found {len(files)} .txt file(s) under '{p}' (all sub-folders).")
+                    print(
+                        f"  Found {len(files)} supported file(s) under '{p}' "
+                        f"(all sub-folders included)."
+                    )
                     return files
-                print(f"  No .txt files found anywhere under '{p}'. Try again.\n")
+                print(
+                    f"  No supported files found anywhere under '{p}'.\n"
+                    f"  Supported formats: {supported_str}\n"
+                )
             else:
                 print(f"  Not a valid directory: {raw}\n")
 
 
-def build_index_from_files(txt_files: list[Path]) -> list[dict]:
+def build_index_from_files(files: list[Path]) -> list[dict]:
     """
     Build a lightweight index (same shape as the old JSON index) from a list
-    of .txt paths.  product_no is assigned in discovery order.
+    of file paths.  product_no is assigned in discovery order.
     """
     index = []
-    for i, path in enumerate(txt_files, start=1):
+    for i, path in enumerate(files, start=1):
         index.append(
             {
                 "product_no": i,
                 # Use the stem of the file as the title; the model will refine it
                 "title": path.stem.replace("_", " ").replace("-", " "),
-                # Keep the relative-to-cwd path as "file" so logs are readable
+                # Readable relative path for logs and SOURCE_FILE_PRODUCT
                 "file": str(path),
-                # Store the full absolute path for actual reading
+                # Full absolute path used for actual reading
                 "_abs_path": path.resolve(),
             }
         )
@@ -251,7 +388,7 @@ def build_index_from_files(txt_files: list[Path]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# JSON parsing helpers (unchanged from original)
+# JSON parsing helpers
 # ---------------------------------------------------------------------------
 
 def _strip_wrappers(text: str) -> str:
@@ -334,7 +471,7 @@ def parse_json_blob(raw):
 
 
 # ---------------------------------------------------------------------------
-# Record helpers (unchanged from original)
+# Record helpers
 # ---------------------------------------------------------------------------
 
 def blank_record(entry):
@@ -365,7 +502,7 @@ def normalize_record(record, entry):
 
 
 # ---------------------------------------------------------------------------
-# Prompt builders (unchanged from original)
+# Prompt builders
 # ---------------------------------------------------------------------------
 
 def build_prompt(entry, text, tokenizer):
@@ -432,7 +569,7 @@ Broken model output to repair:
 
 
 # ---------------------------------------------------------------------------
-# Model inference (unchanged from original)
+# Model inference
 # ---------------------------------------------------------------------------
 
 def get_raw_generation(model, tokenizer, prompt):
@@ -489,7 +626,7 @@ def extract_one(model, tokenizer, entry, text):
 
 
 # ---------------------------------------------------------------------------
-# Model loader (unchanged from original)
+# Model loader
 # ---------------------------------------------------------------------------
 
 def make_generator():
@@ -581,7 +718,7 @@ def make_generator():
 
 
 # ---------------------------------------------------------------------------
-# Resume helper (unchanged from original)
+# Resume helper
 # ---------------------------------------------------------------------------
 
 def load_done_ids():
@@ -606,8 +743,8 @@ def load_done_ids():
 
 def main():
     # ── 1. Ask the user which files to process ──────────────────────────────
-    txt_files = select_input_files()
-    index = build_index_from_files(txt_files)
+    input_files = select_input_files()
+    index = build_index_from_files(input_files)
 
     print(f"\n  {len(index)} file(s) queued for extraction.")
     print(f"  Output will be appended to: {OUT_JSONL}\n")
@@ -636,8 +773,22 @@ def main():
                 continue
 
             abs_path: Path = entry["_abs_path"]
-            with open(abs_path, encoding="utf-8") as f:
-                text = f.read()
+
+            try:
+                text = read_file_text(abs_path)
+            except Exception as read_err:
+                print(
+                    f"[{entry['product_no']:03d}/{len(index)}] SKIP  "
+                    f"Could not read '{abs_path.name}': {read_err}"
+                )
+                continue
+
+            if not text.strip():
+                print(
+                    f"[{entry['product_no']:03d}/{len(index)}] SKIP  "
+                    f"'{abs_path.name}' produced no text after reading."
+                )
+                continue
 
             for attempt in range(3):
                 try:
