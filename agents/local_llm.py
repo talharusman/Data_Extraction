@@ -124,14 +124,13 @@ class TransformersLLM:
                     output_ids = self._model.generate(
                         inputs,
                         max_new_tokens=self.max_new_tokens,
-                        temperature=self.temperature,
-                        top_p=self.top_p,
                         repetition_penalty=self.repetition_penalty,
-                        do_sample=self.temperature > 0,
+                        do_sample=False, # Set to False by default as temperature and top_p are removed
                         pad_token_id=self._tokenizer.eos_token_id,
                         eos_token_id=self._tokenizer.eos_token_id,
                     )
                 content = self._tokenizer.decode(output_ids[0][inputs.shape[-1]:], skip_special_tokens=True)
+                logger.debug("Raw LLM output: %s", content)
                 parsed = _extract_json_from_text(content)
                 if parsed is not None:
                     return parsed
