@@ -1,8 +1,14 @@
 """
-Step 2: For every product text file produced by 01_segment_products.py,
-use a local Hugging Face model to extract the fixed 41-column schema as JSON.
+Step 2: Extract the fixed 41-column schema as JSON from product text files.
 
-Configure the model through .env so you can compare different local models:
+Instead of reading a pre-built JSON index, the script now asks you at startup
+how you want to supply input:
+
+  1) Single file   – give one .txt path
+  2) Folder        – all .txt files in one directory (non-recursive)
+  3) Nested folder – all .txt files under a directory tree (recursive)
+
+Configure the model through .env:
   HF_MODEL_NAME_OR_PATH=Qwen/Qwen2.5-3B-Instruct
   HF_MODEL_CLASS=causal
   HF_LOCAL_FILES_ONLY=true
@@ -18,6 +24,7 @@ import os
 import re
 import time
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 
 import torch
 from huggingface_hub.errors import RepositoryNotFoundError
@@ -30,9 +37,7 @@ from transformers import (
 
 from pipeline_config import (
     COLUMNS,
-    INDEX_PATH,
     OUT_JSONL,
-    PRODUCTS_DIR,
     env_bool,
     env_float,
     env_int,
@@ -152,34 +157,102 @@ Rules:
   "Bank Alfalah", "IGI Life", "Jubilee Life", "State Life").
 """
 
+# ---------------------------------------------------------------------------
+# Interactive input-source selection
+# ---------------------------------------------------------------------------
 
-def load_index():
-    with open(INDEX_PATH, encoding="utf-8") as f:
-        return json.load(f)
-
-
-def load_done_ids():
-    done = set()
-    if OUT_JSONL.exists():
-        with open(OUT_JSONL, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                    done.add(rec["product_no"])
-                except Exception:
-                    pass
-    return done
+def _prompt_choice(prompt: str, choices: list[str]) -> str:
+    """Ask the user to pick from a numbered list; keep asking until valid."""
+    while True:
+        print(prompt)
+        for i, choice in enumerate(choices, 1):
+            print(f"  {i}) {choice}")
+        raw = input("Enter number: ").strip()
+        if raw.isdigit() and 1 <= int(raw) <= len(choices):
+            return choices[int(raw) - 1]
+        print(f"  Please enter a number between 1 and {len(choices)}.\n")
 
 
-def blank_record(entry):
-    record = {col: DEFAULT_VALUE for col in COLUMNS}
-    record["PRODUCT_NAME"] = entry["title"]
-    record["SOURCE_FILE_PRODUCT"] = entry["file"]
-    return record
+def _collect_txt_files(path: Path, recursive: bool) -> list[Path]:
+    """Return all .txt files under *path* (recursive) or directly in it."""
+    if recursive:
+        return sorted(path.rglob("*.txt"))
+    return sorted(path.glob("*.txt"))
 
+
+def select_input_files() -> list[Path]:
+    """
+    Interactively ask the user how they want to supply input text files.
+    Returns a list of Path objects pointing to .txt files to process.
+    """
+    print("\n" + "=" * 60)
+    print("  Product Text Extractor – Input Selection")
+    print("=" * 60)
+
+    mode = _prompt_choice(
+        "\nHow do you want to supply input files?",
+        ["Single file", "Folder (non-recursive)", "Nested folder (recursive)"],
+    )
+
+    if mode == "Single file":
+        while True:
+            raw = input("\nEnter the full path to the .txt file: ").strip()
+            p = Path(raw)
+            if p.is_file() and p.suffix.lower() == ".txt":
+                return [p]
+            print(f"  Not a valid .txt file: {raw}\n")
+
+    elif mode == "Folder (non-recursive)":
+        while True:
+            raw = input("\nEnter the folder path: ").strip()
+            p = Path(raw)
+            if p.is_dir():
+                files = _collect_txt_files(p, recursive=False)
+                if files:
+                    print(f"  Found {len(files)} .txt file(s) in '{p}'.")
+                    return files
+                print(f"  No .txt files found directly in '{p}'. Try again.\n")
+            else:
+                print(f"  Not a valid directory: {raw}\n")
+
+    else:  # Nested folder (recursive)
+        while True:
+            raw = input("\nEnter the root folder path: ").strip()
+            p = Path(raw)
+            if p.is_dir():
+                files = _collect_txt_files(p, recursive=True)
+                if files:
+                    print(f"  Found {len(files)} .txt file(s) under '{p}' (all sub-folders).")
+                    return files
+                print(f"  No .txt files found anywhere under '{p}'. Try again.\n")
+            else:
+                print(f"  Not a valid directory: {raw}\n")
+
+
+def build_index_from_files(txt_files: list[Path]) -> list[dict]:
+    """
+    Build a lightweight index (same shape as the old JSON index) from a list
+    of .txt paths.  product_no is assigned in discovery order.
+    """
+    index = []
+    for i, path in enumerate(txt_files, start=1):
+        index.append(
+            {
+                "product_no": i,
+                # Use the stem of the file as the title; the model will refine it
+                "title": path.stem.replace("_", " ").replace("-", " "),
+                # Keep the relative-to-cwd path as "file" so logs are readable
+                "file": str(path),
+                # Store the full absolute path for actual reading
+                "_abs_path": path.resolve(),
+            }
+        )
+    return index
+
+
+# ---------------------------------------------------------------------------
+# JSON parsing helpers (unchanged from original)
+# ---------------------------------------------------------------------------
 
 def _strip_wrappers(text: str) -> str:
     text = text.strip()
@@ -206,7 +279,7 @@ def _parse_candidate(candidate):
 
 def _iter_json_candidates(text):
     text = _strip_wrappers(text)
-    seen = set()
+    seen: set[str] = set()
 
     def emit(candidate):
         candidate = candidate.strip()
@@ -260,6 +333,17 @@ def parse_json_blob(raw):
     raise ValueError(f"Could not parse JSON from model output: {raw[:500]}")
 
 
+# ---------------------------------------------------------------------------
+# Record helpers (unchanged from original)
+# ---------------------------------------------------------------------------
+
+def blank_record(entry):
+    record = {col: DEFAULT_VALUE for col in COLUMNS}
+    record["PRODUCT_NAME"] = entry["title"]
+    record["SOURCE_FILE_PRODUCT"] = entry["file"]
+    return record
+
+
 def normalize_record(record, entry):
     if not isinstance(record, dict):
         return blank_record(entry)
@@ -279,6 +363,10 @@ def normalize_record(record, entry):
     normalized["SOURCE_FILE_PRODUCT"] = entry["file"]
     return normalized
 
+
+# ---------------------------------------------------------------------------
+# Prompt builders (unchanged from original)
+# ---------------------------------------------------------------------------
 
 def build_prompt(entry, text, tokenizer):
     user_msg = f"""Product title (from document heading): {entry['title']}
@@ -343,6 +431,10 @@ Broken model output to repair:
 """
 
 
+# ---------------------------------------------------------------------------
+# Model inference (unchanged from original)
+# ---------------------------------------------------------------------------
+
 def get_raw_generation(model, tokenizer, prompt):
     inputs = tokenizer(prompt, return_tensors="pt")
     device = getattr(model, "device", None)
@@ -392,6 +484,14 @@ def extract_with_repair(model, tokenizer, entry, text):
             return blank_record(entry)
 
 
+def extract_one(model, tokenizer, entry, text):
+    return extract_with_repair(model, tokenizer, entry, text)
+
+
+# ---------------------------------------------------------------------------
+# Model loader (unchanged from original)
+# ---------------------------------------------------------------------------
+
 def make_generator():
     if not MODEL_NAME:
         raise SystemExit(
@@ -431,7 +531,7 @@ def make_generator():
             "If the repo is private or gated, authenticate in Colab first."
         ) from exc
 
-    model_kwargs = {
+    model_kwargs: dict = {
         "local_files_only": LOCAL_FILES_ONLY,
         "trust_remote_code": TRUST_REMOTE_CODE,
     }
@@ -458,11 +558,11 @@ def make_generator():
         )
 
     print(f"Loading model: {MODEL_NAME}")
-    print(f"Model class: {MODEL_CLASS}")
-    print(f"Device map: {DEVICE_MAP}")
-    print(f"Torch dtype: {TORCH_DTYPE}")
-    print(f"4-bit quantization: {LOAD_IN_4BIT}")
-    print(f"8-bit quantization: {LOAD_IN_8BIT}")
+    print(f"Model class:   {MODEL_CLASS}")
+    print(f"Device map:    {DEVICE_MAP}")
+    print(f"Torch dtype:   {TORCH_DTYPE}")
+    print(f"4-bit quant:   {LOAD_IN_4BIT}")
+    print(f"8-bit quant:   {LOAD_IN_8BIT}")
 
     if MODEL_CLASS == "seq2seq":
         model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME, **model_kwargs)
@@ -480,11 +580,39 @@ def make_generator():
     return model, tokenizer
 
 
-def extract_one(model, tokenizer, entry, text):
-    return extract_with_repair(model, tokenizer, entry, text)
+# ---------------------------------------------------------------------------
+# Resume helper (unchanged from original)
+# ---------------------------------------------------------------------------
 
+def load_done_ids():
+    done: set[int] = set()
+    if OUT_JSONL.exists():
+        with open(OUT_JSONL, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                    done.add(rec["product_no"])
+                except Exception:
+                    pass
+    return done
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
+    # ── 1. Ask the user which files to process ──────────────────────────────
+    txt_files = select_input_files()
+    index = build_index_from_files(txt_files)
+
+    print(f"\n  {len(index)} file(s) queued for extraction.")
+    print(f"  Output will be appended to: {OUT_JSONL}\n")
+
+    # ── 2. Load the model ───────────────────────────────────────────────────
     try:
         model, tokenizer = make_generator()
     except torch.cuda.OutOfMemoryError as exc:
@@ -497,16 +625,18 @@ def main():
             "You can also use a smaller model like Qwen/Qwen2.5-7B-Instruct."
         ) from exc
 
-    index = load_index()
+    # ── 3. Skip already-done products ───────────────────────────────────────
     done = load_done_ids()
     print(f"{len(index)} products total, {len(done)} already extracted")
 
+    # ── 4. Extract ──────────────────────────────────────────────────────────
     with open(OUT_JSONL, "a", encoding="utf-8") as out:
         for entry in index:
             if entry["product_no"] in done:
                 continue
-            path = PRODUCTS_DIR / entry["file"]
-            with open(path, encoding="utf-8") as f:
+
+            abs_path: Path = entry["_abs_path"]
+            with open(abs_path, encoding="utf-8") as f:
                 text = f.read()
 
             for attempt in range(3):
@@ -515,10 +645,15 @@ def main():
                     rec = {"product_no": entry["product_no"], **data}
                     out.write(json.dumps(rec, ensure_ascii=False) + "\n")
                     out.flush()
-                    print(f"[{entry['product_no']:03d}/{len(index)}] OK  {entry['title'][:60]}")
+                    print(
+                        f"[{entry['product_no']:03d}/{len(index)}] OK  "
+                        f"{entry['title'][:60]}  ({abs_path.name})"
+                    )
                     break
                 except Exception as e:
-                    print(f"[{entry['product_no']:03d}/{len(index)}] retry {attempt+1}: {e}")
+                    print(
+                        f"[{entry['product_no']:03d}/{len(index)}] retry {attempt + 1}: {e}"
+                    )
                     time.sleep(3)
             else:
                 print(f"[{entry['product_no']:03d}/{len(index)}] FAILED after retries")
