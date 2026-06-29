@@ -1,5 +1,11 @@
 """
 Step 2: Extract the fixed 41-column schema as JSON from product files.
+ENHANCED with 3 advanced prompting techniques:
+  1. Few-shot examples showing correct vs incorrect extraction
+  2. Step-by-step extraction workflow
+  3. Self-validation with error correction
+
+SYSTEM PROMPT IS READ FROM: EXTRACTION_SYSTEM_PROMPT.txt
 
 Instead of reading a pre-built JSON index, the script now asks you at startup
 how you want to supply input:
@@ -81,96 +87,56 @@ NUMERIC_COLUMNS = {
     "MAX_TERM_YEARS",
 }
 
-# All file extensions this script can read
 SUPPORTED_EXTENSIONS = {".txt", ".pdf", ".docx", ".doc", ".csv", ".json", ".xlsx", ".xls"}
 
-SYSTEM_PROMPT = f"""You are a data-extraction engine for a bank product catalogue.
-You will be given the raw text of ONE product's section, extracted from a PDF
-that merges many Pakistani bank/insurance product brochures (savings accounts,
-credit/debit cards, auto/home/personal loans, takaful/insurance plans, mutual
-funds, etc).
+# ============================================================================
+# LOAD SYSTEM PROMPT FROM SEPARATE FILE
+# ============================================================================
 
-Extract values for EXACTLY these {len(COLUMNS)} columns and return ONLY a single
-JSON object (no markdown fences, no commentary) with these exact keys:
-{json.dumps(COLUMNS)}
-
-Use the following data dictionary to interpret each column:
-
-PRODUCT_NAME: Normalized product or service name. Example: "Alfalah Car Ijarah". Type: text/categorical.
-LEAD_CO_MNE: Lead marker from user (IBG or BNK). Example: "IBG". Type: text/categorical.
-SOURCE_FILE_PRODUCT: Batch/source group name provided by user. Example: "Isl Consumer". Type: text/categorical.
-PLAN_TYPE: High-level family such as Loan, Deposit, Savings, Card, Investment, Insurance, Service or Loyalty. Example: "Loan". Type: text/categorical.
-TARGET_GOAL: Primary customer need/use case. Example: "Housing". Type: text/categorical.
-CUSTOMER_TYPE: Broad eligible customer class. Example: "SME / Corporate". Type: text/categorical.
-EMPLOYMENT_TYPE: Employment eligibility where applicable. Example: "Salaried/SEP". Type: text/categorical.
-CUSTOMER_SEGMENT: Behavioral/demographic segment when explicitly identified. Example: "NRP". Type: text/categorical.
-TARGET_SEGMENT: More specific positioning segment where stated. Example: "Financial Inclusion". Type: text/categorical.
-SEGMENT: Priority/HNW/premium segment tag. Example: "Premium (HNW)". Type: text/categorical.
-MIN_AGE: Minimum eligible age. Example: 18. Type: numeric.
-MAX_AGE: Maximum eligible age. Example: 65. Type: numeric.
-GENDER: Gender eligibility/focus. Example: "Female". Type: text/categorical.
-BANK_CUSTOMER: 1 for bank-offered/relationship products in this normalized dataset. Example: 1. Type: numeric.
-ACCOUNT_TYPE: Current, Savings, Wallet, Digital, etc. Example: "Current". Type: text/categorical.
-CARD_TYPE: Debit, Credit, Virtual Debit, Premium etc. Example: "Credit (Premium)". Type: text/categorical.
-CHANNEL: Primary servicing/onboarding channel. Example: "Mobile App". Type: text/categorical.
-ELIGIBILITY_TYPE: Short eligibility logic text. Example: "CNIC + Biometric". Type: text/categorical.
-SERVICE_TYPE: Operational/service type for non-core products. Example: "Payments". Type: text/categorical.
-REWARD_TYPE: Reward mechanism for loyalty rows. Example: "Points". Type: text/categorical.
-CURRENCY: Currency or set of currencies. Example: "PKR + FCY". Type: text/categorical.
-CURRENCY_TYPE: PKR/FCY style label if used. Example: "FCY". Type: text/categorical.
-MIN_BALANCE: Minimum opening or operating balance. Example: 1000. Type: numeric.
-AVG_BALANCE_REQUIREMENT: Average balance requirement. Example: 50000. Type: numeric.
-MIN_INCOME: Minimum PKR income where stated. Example: 50000. Type: numeric.
-MIN_INCOME_USD: Minimum USD income where stated. Example: 3000. Type: numeric.
-MIN_INVESTMENT: Minimum investment/placement amount. Example: 100K. Type: numeric.
-MIN_CONTRIBUTION: Minimum premium/contribution. Example: 250000. Type: numeric.
-LOAN_AMOUNT_RANGE: Loan size or facility range. Example: 200K-3M. Type: text/categorical.
-COVERAGE_AMOUNT: Coverage amount or insured amount. Example: 50K-150K coverage. Type: text/categorical.
-FINANCING_TYPE: Conventional/Islamic financing structure or instrument type. Example: "Mudarabah". Type: text/categorical.
-PROFIT_TYPE: Profit basis or mode. Example: "Tier-based". Type: text/categorical.
-PROFIT_FREQUENCY: Monthly, semi-annual, maturity etc. Example: "Monthly". Type: text/categorical.
-TENURE: Readable tenor text. Example: "1-5 years". Type: text/categorical.
-TENURE_OPTIONS: Structured tenor menu text. Example: "1M -> 5Y". Type: text/categorical.
-MIN_TERM_YEARS: Minimum term in years when directly available. Example: 10. Type: numeric.
-MAX_TERM_YEARS: Maximum term in years when directly available. Example: 25. Type: numeric.
-BUSINESS_TENURE: Required business age/operating history. Example: ">=3 years". Type: text/categorical.
-COLLATERAL_TYPE: Security/collateral type. Example: "Property Mortgage". Type: text/categorical.
-EQUITY_REQUIREMENT: Borrower equity or margin requirement. Example: "30%". Type: text/categorical.
-DBR_LIMIT: Debt burden ratio limit. Example: "<=40%". Type: text/categorical.
-TRANSACTION_LIMIT: Usage/balance/transaction cap. Example: "1M monthly". Type: text/categorical.
-SPECIAL_CONDITIONS: Residual qualifiers or important caveats. Example: "RDA required". Type: text/categorical.
-
-Rules:
-- If a field is not mentioned or not applicable to this product type, set its
-  value to the JSON string "N/A" (not null, not empty string).
-- Prefer copying the source wording when a field is categorical.
-- For numeric fields, return only the number when possible.
-- For fields like LOAN_AMOUNT_RANGE, COVERAGE_AMOUNT, TENURE, and SPECIAL_CONDITIONS,
-  keep the wording compact but faithful to the source text.
-- Never invent numbers or facts that are not stated or clearly implied in the
-  text.
-- Keep values short and structured (e.g. "18-60" for an age range field if a
-  single field must hold a range, or split into MIN_AGE / MAX_AGE as numbers
-  when the schema has separate fields for that, which it does here).
-- MIN_AGE / MAX_AGE: numbers only (no "years" suffix), or "N/A".
-- MIN_TERM_YEARS / MAX_TERM_YEARS: numbers only, or "N/A".
-- LOAN_AMOUNT_RANGE / COVERAGE_AMOUNT / MIN_BALANCE / MIN_INCOME / etc:
-  include currency and figure as written, e.g. "PKR 25,000" or
-  "500,000 - 1,750,000".
-- SPECIAL_CONDITIONS: a brief free-text summary (<=200 chars) of any notable
-  conditions not captured elsewhere (e.g. waiting periods, exclusions,
-  rollover rules).
-- PLAN_TYPE / CUSTOMER_TYPE / SEGMENT etc: use short controlled phrases drawn
-  from the document's own wording (e.g. "Salaried", "Self-Employed",
-  "Savings Account", "Term Deposit", "Takaful", "Auto Loan", "Credit Card").
-- LEAD_CO_MNE: the bank or company offering/underwriting the product (e.g.
-  "Bank Alfalah", "IGI Life", "Jubilee Life", "State Life").
-"""
+def load_system_prompt(prompt_file: str = "EXTRACTION_SYSTEM_PROMPT.txt") -> str:
+    """
+    Load the system prompt from a separate file.
+    
+    Looks for the prompt file in this order:
+    1. Current directory
+    2. Same directory as this script
+    3. Parent directory
+    
+    If not found, raises an error.
+    """
+    search_paths = [
+        Path(prompt_file),
+        Path(__file__).parent / prompt_file,
+        Path(__file__).parent.parent / prompt_file,
+    ]
+    
+    for prompt_path in search_paths:
+        if prompt_path.exists() and prompt_path.is_file():
+            print(f"✓ Loaded system prompt from: {prompt_path.resolve()}")
+            return prompt_path.read_text(encoding="utf-8")
+    
+    # Not found - provide helpful error message
+    raise FileNotFoundError(
+        f"\n{'='*70}\n"
+        f"ERROR: System prompt file not found!\n"
+        f"Expected file: {prompt_file}\n\n"
+        f"Searched in:\n"
+        + "\n".join(f"  - {p.resolve()}" for p in search_paths) +
+        f"\n\nSolution:\n"
+        f"1. Make sure '{prompt_file}' is in the same directory as this script\n"
+        f"2. Or in the parent directory of this script\n"
+        f"3. Or in the current working directory\n"
+        f"{'='*70}\n"
+    )
 
 
-# ---------------------------------------------------------------------------
-# File reading — one function per format, dispatched by extension
-# ---------------------------------------------------------------------------
+# Load the system prompt at module level
+SYSTEM_PROMPT = load_system_prompt()
+
+
+# ============================================================================
+# File reading functions
+# ============================================================================
 
 def read_file_text(path: Path) -> str:
     """Extract plain text from any supported file type."""
@@ -205,7 +171,6 @@ def read_file_text(path: Path) -> str:
             )
         doc = docx.Document(path)
         paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-        # Also extract text from tables
         for table in doc.tables:
             for row in table.rows:
                 row_text = "\t".join(cell.text.strip() for cell in row.cells)
@@ -214,7 +179,6 @@ def read_file_text(path: Path) -> str:
         return "\n".join(paragraphs)
 
     elif ext == ".doc":
-        # Requires antiword installed on the system PATH
         try:
             result = subprocess.run(
                 ["antiword", str(path)],
@@ -233,11 +197,9 @@ def read_file_text(path: Path) -> str:
             )
 
     elif ext == ".csv":
-        # Return raw CSV text; the model can parse the structure from it
         return path.read_text(encoding="utf-8", errors="replace")
 
     elif ext == ".json":
-        # Pretty-print so the model sees structured readable text
         raw = path.read_text(encoding="utf-8", errors="replace")
         try:
             parsed = json.loads(raw)
@@ -267,16 +229,15 @@ def read_file_text(path: Path) -> str:
         return "\n".join(rows)
 
     else:
-        # Fallback: try reading as plain text
         return path.read_text(encoding="utf-8", errors="replace")
 
 
-# ---------------------------------------------------------------------------
-# Interactive input-source selection
-# ---------------------------------------------------------------------------
+# ============================================================================
+# Interactive input selection
+# ============================================================================
 
 def _prompt_choice(prompt: str, choices: list[str]) -> str:
-    """Ask the user to pick from a numbered list; keep asking until valid."""
+    """Ask the user to pick from a numbered list."""
     while True:
         print(prompt)
         for i, choice in enumerate(choices, 1):
@@ -288,7 +249,7 @@ def _prompt_choice(prompt: str, choices: list[str]) -> str:
 
 
 def _collect_files(path: Path, recursive: bool) -> list[Path]:
-    """Return all supported files under *path* (recursive) or directly in it."""
+    """Return all supported files under *path*."""
     if recursive:
         all_files = path.rglob("*")
     else:
@@ -300,10 +261,7 @@ def _collect_files(path: Path, recursive: bool) -> list[Path]:
 
 
 def select_input_files() -> list[Path]:
-    """
-    Interactively ask the user how they want to supply input files.
-    Returns a list of Path objects pointing to files to process.
-    """
+    """Interactively ask user how to supply input files."""
     supported_str = ", ".join(sorted(SUPPORTED_EXTENSIONS))
 
     print("\n" + "=" * 60)
@@ -367,29 +325,23 @@ def select_input_files() -> list[Path]:
 
 
 def build_index_from_files(files: list[Path]) -> list[dict]:
-    """
-    Build a lightweight index (same shape as the old JSON index) from a list
-    of file paths.  product_no is assigned in discovery order.
-    """
+    """Build index from file paths."""
     index = []
     for i, path in enumerate(files, start=1):
         index.append(
             {
                 "product_no": i,
-                # Use the stem of the file as the title; the model will refine it
                 "title": path.stem.replace("_", " ").replace("-", " "),
-                # Readable relative path for logs and SOURCE_FILE_PRODUCT
                 "file": str(path),
-                # Full absolute path used for actual reading
                 "_abs_path": path.resolve(),
             }
         )
     return index
 
 
-# ---------------------------------------------------------------------------
+# ============================================================================
 # JSON parsing helpers
-# ---------------------------------------------------------------------------
+# ============================================================================
 
 def _strip_wrappers(text: str) -> str:
     text = text.strip()
@@ -470,9 +422,9 @@ def parse_json_blob(raw):
     raise ValueError(f"Could not parse JSON from model output: {raw[:500]}")
 
 
-# ---------------------------------------------------------------------------
-# Record helpers
-# ---------------------------------------------------------------------------
+# ============================================================================
+# Record helpers with aggressive normalization
+# ============================================================================
 
 def blank_record(entry):
     record = {col: DEFAULT_VALUE for col in COLUMNS}
@@ -481,45 +433,162 @@ def blank_record(entry):
     return record
 
 
+field_max_lengths = {
+    "PRODUCT_NAME": 50,
+    "PLAN_TYPE": 15,
+    "TARGET_GOAL": 30,
+    "CUSTOMER_TYPE": 25,
+    "EMPLOYMENT_TYPE": 20,
+    "ACCOUNT_TYPE": 20,
+    "CARD_TYPE": 25,
+    "CHANNEL": 30,
+    "ELIGIBILITY_TYPE": 50,
+    "SERVICE_TYPE": 25,
+    "REWARD_TYPE": 25,
+    "CURRENCY": 30,
+    "CURRENCY_TYPE": 15,
+    "LOAN_AMOUNT_RANGE": 50,
+    "COVERAGE_AMOUNT": 50,
+    "FINANCING_TYPE": 30,
+    "PROFIT_TYPE": 30,
+    "PROFIT_FREQUENCY": 20,
+    "TENURE": 30,
+    "TENURE_OPTIONS": 50,
+    "BUSINESS_TENURE": 30,
+    "COLLATERAL_TYPE": 50,
+    "EQUITY_REQUIREMENT": 20,
+    "DBR_LIMIT": 20,
+    "TRANSACTION_LIMIT": 50,
+    "SPECIAL_CONDITIONS": 200,
+}
+
+
 def normalize_record(record, entry):
+    """Normalize extracted record with aggressive conciseness enforcement."""
     if not isinstance(record, dict):
         return blank_record(entry)
 
     normalized = {col: DEFAULT_VALUE for col in COLUMNS}
+
     for col in COLUMNS:
         value = record.get(col, DEFAULT_VALUE)
+
         if value in (None, "", []):
             value = DEFAULT_VALUE
+
+        # Numeric columns: numbers ONLY
         if col in NUMERIC_COLUMNS and isinstance(value, str):
             stripped = value.strip()
             if not stripped or stripped.upper() == DEFAULT_VALUE:
                 value = DEFAULT_VALUE
+            else:
+                match = re.match(r'^(\d+(?:\.\d+)?)', stripped)
+                if match:
+                    value = match.group(1)
+                else:
+                    value = DEFAULT_VALUE
+
+        # Truncate verbose text
+        if col in field_max_lengths and isinstance(value, str):
+            max_len = field_max_lengths[col]
+            if len(value) > max_len:
+                value = value[:max_len].strip()
+
+        # Special case: CUSTOMER_TYPE - ONE value only
+        if col == "CUSTOMER_TYPE" and isinstance(value, str):
+            if "," in value and len(value) > 25:
+                first_item = value.split(",")[0].strip()
+                if len(first_item) < 25:
+                    value = first_item
+                else:
+                    value = DEFAULT_VALUE
+
+        # Special case: GENDER - standardize
+        if col == "GENDER" and isinstance(value, str):
+            value_lower = value.strip().lower()
+            if value_lower in ("male", "m"):
+                value = "Male"
+            elif value_lower in ("female", "f"):
+                value = "Female"
+            elif value_lower in ("all", "both"):
+                value = "All"
+            elif value_lower not in ("male", "female", "all"):
+                value = DEFAULT_VALUE
+
+        # Special case: PLAN_TYPE - single word
+        if col == "PLAN_TYPE" and isinstance(value, str):
+            valid_types = {"Loan", "Deposit", "Savings", "Card", "Investment", "Insurance", "Service", "Loyalty"}
+            words = value.strip().split()
+            found = False
+            for word in words:
+                if word in valid_types:
+                    value = word
+                    found = True
+                    break
+            if not found:
+                value = DEFAULT_VALUE
+
         normalized[col] = value
 
     normalized["PRODUCT_NAME"] = record.get("PRODUCT_NAME") or entry["title"]
     normalized["SOURCE_FILE_PRODUCT"] = entry["file"]
+
     return normalized
 
 
-# ---------------------------------------------------------------------------
-# Prompt builders
-# ---------------------------------------------------------------------------
+# ============================================================================
+# Prompt builders - using the loaded system prompt
+# ============================================================================
 
 def build_prompt(entry, text, tokenizer):
-    user_msg = f"""Product title (from document heading): {entry['title']}
+    """Build prompt with step-by-step extraction workflow."""
+    user_msg = f"""Product title: {entry['title']}
 Source file: {entry['file']}
 
 --- PRODUCT TEXT START ---
 {text[:TEXT_CHUNK_SIZE]}
 --- PRODUCT TEXT END ---
 
-Return the JSON object now.
+EXTRACTION WORKFLOW - Follow these steps:
 
-Important:
-- Your reply must begin with `{{` and end with `}}`.
-- Do not output any reasoning, analysis, or <think> blocks.
-- Do not wrap the JSON in markdown fences.
-- Output only one valid JSON object."""
+STEP 1: Extract basic identifiers
+  → PRODUCT_NAME: Find product/plan name (max 50 chars)
+  → LEAD_CO_MNE: Insurance (IBG) or Bank (BNK)?
+  → PLAN_TYPE: Pick ONE word: Loan|Deposit|Savings|Card|Investment|Insurance|Service|Loyalty
+
+STEP 2: Extract customer eligibility
+  → CUSTOMER_TYPE: Pick ONE: Salaried|Self-Employed|SME|Corporate|Retail|Government or N/A
+  → EMPLOYMENT_TYPE: Salaried|Self-Employed|Government|Military or N/A
+  → MIN_AGE, MAX_AGE: Extract as NUMBERS ONLY
+  → GENDER: Male|Female|All or N/A
+
+STEP 3: Extract financial terms
+  → Find all NUMBERS (amounts, ages, durations)
+  → MIN_BALANCE, MIN_INCOME, MIN_CONTRIBUTION: NUMBERS ONLY (no currency/text)
+  → MIN_TERM_YEARS, MAX_TERM_YEARS: NUMBERS ONLY
+  → LOAN_AMOUNT_RANGE, COVERAGE_AMOUNT: Compact notation like "50K-150K"
+
+STEP 4: Extract product characteristics
+  → FINANCING_TYPE: Islamic|Conventional|Takaful|Mudarabah or N/A
+  → PROFIT_TYPE: Tier-based|Fixed|Variable or N/A (max 30 chars)
+  → TENURE, TENURE_OPTIONS: Format like "10-25 years" or "1M -> 5Y"
+
+STEP 5: Extract conditions (concise ONLY)
+  → SPECIAL_CONDITIONS: Max 200 chars, critical restrictions ONLY
+  → Include: waiting periods, major exclusions, key features
+  → DO NOT copy long marketing text
+  → DO NOT list "optional riders" unless critical
+
+STEP 6: Validation before returning
+  ✓ All values within char limits?
+  ✓ Numeric fields are numbers ONLY?
+  ✓ CUSTOMER_TYPE is ONE value (no commas)?
+  ✓ GENDER is: Male|Female|All|N/A?
+  ✓ PLAN_TYPE is ONE word?
+  ✓ No copy-pasted marketing text?
+
+Return the final JSON object now (no explanations, no markdown):
+"""
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -549,28 +618,64 @@ Important:
 
 def build_repair_prompt(entry, raw_text):
     return f"""You are repairing a failed extraction.
+Return exactly ONE valid JSON object and nothing else.
+Keys: {json.dumps(COLUMNS)}
 
-Return exactly one valid JSON object and nothing else.
-The JSON must use these keys in any order:
-{json.dumps(COLUMNS)}
+Repair Rules:
+- Use "N/A" for missing fields
+- Keep values SHORT (char limits: PRODUCT_NAME 50, CUSTOMER_TYPE 25, SPECIAL_CONDITIONS 200)
+- CUSTOMER_TYPE: ONE value only: Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A
+- GENDER: Male|Female|All|N/A only
+- PLAN_TYPE: ONE word: Loan|Deposit|Savings|Card|Investment|Insurance|Service|Loyalty
+- Numeric fields: NUMBERS ONLY (no currency, no text)
+- No markdown fences or explanations
 
-Rules:
-- Use double quotes for all strings.
-- Use "N/A" for missing or unknown fields.
-- Keep numeric fields as numbers when the source gives a number.
-- Do not add markdown fences, explanations, or analysis.
-
-Product title: {entry['title']}
-Source file: {entry['file']}
-
-Broken model output to repair:
+Product: {entry['title']}
+Broken output to repair:
 {raw_text[:5000]}
 """
 
 
-# ---------------------------------------------------------------------------
+def build_validation_prompt(entry, extracted_json):
+    """Build prompt for self-validation and correction."""
+    return f"""You extracted this JSON. Validate and fix any issues:
+
+EXTRACTED JSON:
+{json.dumps(extracted_json, indent=2)}
+
+VALIDATION RULES - Check each rule and FIX if violated:
+
+1. CUSTOMER_TYPE: Is it ONE value only (no commas)?
+   ✓ "Salaried"  ✗ "Salaried, Self-Employed, Corporate"
+   
+2. GENDER: Is it exactly one of: Male|Female|All|N/A?
+   ✓ "Female"  ✗ "Male or Female"
+   
+3. PLAN_TYPE: Is it ONE word from: Loan|Deposit|Savings|Card|Investment|Insurance|Service|Loyalty?
+   ✓ "Savings"  ✗ "Savings and Protection"
+   
+4. Text field lengths - Are they within limits?
+   - PRODUCT_NAME ≤ 50 chars
+   - CUSTOMER_TYPE ≤ 25 chars
+   - TENURE ≤ 30 chars
+   - SPECIAL_CONDITIONS ≤ 200 chars
+   
+5. Numeric fields - Do they contain ONLY numbers (no currency/text)?
+   ✓ "250000"  ✗ "PKR 250,000" or "25000 per month"
+   
+6. SPECIAL_CONDITIONS - Is it concise, max 200 chars?
+   ✓ "Free 14-day look, waiting period 90 days"
+   ✗ "Free 14-day look period, optional riders, death benefit includes sum covered plus PIA value, maturity benefit..."
+
+If ANY rule is violated, return CORRECTED JSON. Otherwise return JSON unchanged.
+Fix ONLY the violations, keep everything else as-is.
+Return ONLY valid JSON, no explanations.
+"""
+
+
+# ============================================================================
 # Model inference
-# ---------------------------------------------------------------------------
+# ============================================================================
 
 def get_raw_generation(model, tokenizer, prompt):
     inputs = tokenizer(prompt, return_tensors="pt")
@@ -602,32 +707,63 @@ def get_raw_generation(model, tokenizer, prompt):
     )
 
 
-def extract_with_repair(model, tokenizer, entry, text):
+def extract_with_repair_and_validation(model, tokenizer, entry, text):
+    """Extract with repair and self-validation (all 3 techniques combined)."""
+    
+    # Initial extraction
     prompt = build_prompt(entry, text, tokenizer)
     raw = get_raw_generation(model, tokenizer, prompt)
 
     try:
-        return normalize_record(parse_json_blob(raw), entry)
+        parsed = parse_json_blob(raw)
+        normalized = normalize_record(parsed, entry)
+        
+        # NEW: Self-validation step
+        validation_prompt = build_validation_prompt(entry, normalized)
+        validation_raw = get_raw_generation(model, tokenizer, validation_prompt)
+        
+        try:
+            validated_parsed = parse_json_blob(validation_raw)
+            validated_normalized = normalize_record(validated_parsed, entry)
+            return validated_normalized
+        except:
+            # If validation fails, return original normalized record
+            return normalized
+            
     except Exception as first_error:
+        # Fallback: repair prompt
         repair_prompt = build_repair_prompt(entry, raw)
         repaired_raw = get_raw_generation(model, tokenizer, repair_prompt)
+        
         try:
-            return normalize_record(parse_json_blob(repaired_raw), entry)
+            repaired_parsed = parse_json_blob(repaired_raw)
+            repaired_normalized = normalize_record(repaired_parsed, entry)
+            
+            # Still try validation on repaired output
+            validation_prompt = build_validation_prompt(entry, repaired_normalized)
+            validation_raw = get_raw_generation(model, tokenizer, validation_prompt)
+            try:
+                validated_parsed = parse_json_blob(validation_raw)
+                return normalize_record(validated_parsed, entry)
+            except:
+                return repaired_normalized
+                
         except Exception as second_error:
             print(
-                f"Warning: falling back to blank record for {entry['product_no']:03d} "
-                f"after parse failures: {first_error}; {second_error}"
+                f"Warning: falling back to blank record after failures: "
+                f"{first_error}; {second_error}"
             )
             return blank_record(entry)
 
 
 def extract_one(model, tokenizer, entry, text):
-    return extract_with_repair(model, tokenizer, entry, text)
+    """Main extraction function using all 3 techniques."""
+    return extract_with_repair_and_validation(model, tokenizer, entry, text)
 
 
-# ---------------------------------------------------------------------------
+# ============================================================================
 # Model loader
-# ---------------------------------------------------------------------------
+# ============================================================================
 
 def make_generator():
     if not MODEL_NAME:
@@ -717,10 +853,6 @@ def make_generator():
     return model, tokenizer
 
 
-# ---------------------------------------------------------------------------
-# Resume helper
-# ---------------------------------------------------------------------------
-
 def load_done_ids():
     done: set[int] = set()
     if OUT_JSONL.exists():
@@ -737,19 +869,17 @@ def load_done_ids():
     return done
 
 
-# ---------------------------------------------------------------------------
+# ============================================================================
 # Main
-# ---------------------------------------------------------------------------
+# ============================================================================
 
 def main():
-    # ── 1. Ask the user which files to process ──────────────────────────────
     input_files = select_input_files()
     index = build_index_from_files(input_files)
 
     print(f"\n  {len(index)} file(s) queued for extraction.")
     print(f"  Output will be appended to: {OUT_JSONL}\n")
 
-    # ── 2. Load the model ───────────────────────────────────────────────────
     try:
         model, tokenizer = make_generator()
     except torch.cuda.OutOfMemoryError as exc:
@@ -762,11 +892,9 @@ def main():
             "You can also use a smaller model like Qwen/Qwen2.5-7B-Instruct."
         ) from exc
 
-    # ── 3. Skip already-done products ───────────────────────────────────────
     done = load_done_ids()
     print(f"{len(index)} products total, {len(done)} already extracted")
 
-    # ── 4. Extract ──────────────────────────────────────────────────────────
     with open(OUT_JSONL, "a", encoding="utf-8") as out:
         for entry in index:
             if entry["product_no"] in done:
