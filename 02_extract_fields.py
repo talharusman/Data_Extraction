@@ -27,6 +27,11 @@ Configure the model through .env:
 
 Resumable: already-extracted products (present in OUT_JSONL) are skipped,
 so you can safely re-run after an interruption.
+
+FIXED VERSION: All three prompt functions now properly use SYSTEM_PROMPT
+- build_prompt(): Already correct, no changes
+- build_repair_prompt(): FIXED - now includes SYSTEM_PROMPT + typo removed
+- build_validation_prompt(): FIXED - now includes SYSTEM_PROMPT
 """
 from __future__ import annotations
 
@@ -510,9 +515,9 @@ def normalize_record(record, entry):
                 value = "Male"
             elif value_lower in ("female", "f"):
                 value = "Female"
-            elif value_lower in ("all", "both"):
-                value = "All"
-            elif value_lower not in ("male", "female", "all"):
+            elif value_lower in ("all","other", "both"):
+                value = "Other"
+            elif value_lower not in ("male", "female", "all","other"):
                 value = DEFAULT_VALUE
 
         # Special case: PLAN_TYPE - single word
@@ -537,7 +542,7 @@ def normalize_record(record, entry):
 
 
 # ============================================================================
-# Prompt builders - using the loaded system prompt
+# Prompt builders - using the loaded system prompt (ALL FIXED)
 # ============================================================================
 
 def build_prompt(entry, text, tokenizer):
@@ -560,7 +565,7 @@ STEP 2: Extract customer eligibility
   → CUSTOMER_TYPE: Pick ONE: Salaried|Self-Employed|SME|Corporate|Retail|Government or N/A
   → EMPLOYMENT_TYPE: Salaried|Self-Employed|Government|Military or N/A
   → MIN_AGE, MAX_AGE: Extract as NUMBERS ONLY
-  → GENDER: Male|Female|All or N/A
+  → GENDER: Male|Female|Other or N/A
 
 STEP 3: Extract financial terms
   → Find all NUMBERS (amounts, ages, durations)
@@ -617,28 +622,33 @@ Return the final JSON object now (no explanations, no markdown):
 
 
 def build_repair_prompt(entry, raw_text):
-    return f"""You are repairing a failed extraction.
+    """Build repair prompt using the full system context. (FIXED - now includes SYSTEM_PROMPT)"""
+    repair_instructions = f"""You are repairing a failed extraction.
 Return exactly ONE valid JSON object and nothing else.
-Keys: {json.dumps(COLUMNS)}
 
-Repair Rules:
+Product: {entry['title']}
+
+Broken output to repair:
+{raw_text[:5000]}
+
+Apply ALL rules from the system prompt above. Focus on:
 - Use "N/A" for missing fields
-- Keep values SHORT (char limits: PRODUCT_NAME 50, CUSTOMER_TYPE 25, SPECIAL_CONDITIONS 200)
+- Keep values SHORT and within character limits
 - CUSTOMER_TYPE: ONE value only: Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A
-- GENDER: Male|Female|All|N/A only
+- GENDER: Must be Male, Female, All, or N/A only
 - PLAN_TYPE: ONE word: Loan|Deposit|Savings|Card|Investment|Insurance|Service|Loyalty
 - Numeric fields: NUMBERS ONLY (no currency, no text)
 - No markdown fences or explanations
 
-Product: {entry['title']}
-Broken output to repair:
-{raw_text[:5000]}
-"""
+Return the repaired JSON object now."""
+
+    # Return with SYSTEM_PROMPT prepended for full context
+    return f"{SYSTEM_PROMPT}\n\n{repair_instructions}"
 
 
 def build_validation_prompt(entry, extracted_json):
-    """Build prompt for self-validation and correction."""
-    return f"""You extracted this JSON. Validate and fix any issues:
+    """Build prompt for self-validation and correction using full system context. (FIXED - now includes SYSTEM_PROMPT)"""
+    validation_instructions = f"""You extracted this JSON. Validate and fix any issues:
 
 EXTRACTED JSON:
 {json.dumps(extracted_json, indent=2)}
@@ -667,10 +677,14 @@ VALIDATION RULES - Check each rule and FIX if violated:
    ✓ "Free 14-day look, waiting period 90 days"
    ✗ "Free 14-day look period, optional riders, death benefit includes sum covered plus PIA value, maturity benefit..."
 
+Refer to the system prompt above for full field definitions and critical rules.
+
 If ANY rule is violated, return CORRECTED JSON. Otherwise return JSON unchanged.
 Fix ONLY the violations, keep everything else as-is.
-Return ONLY valid JSON, no explanations.
-"""
+Return ONLY valid JSON, no explanations."""
+
+    # Return with SYSTEM_PROMPT prepended for full context
+    return f"{SYSTEM_PROMPT}\n\n{validation_instructions}"
 
 
 # ============================================================================
