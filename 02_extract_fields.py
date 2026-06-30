@@ -515,9 +515,9 @@ def normalize_record(record, entry):
                 value = "Male"
             elif value_lower in ("female", "f"):
                 value = "Female"
-            elif value_lower in ("all","other", "both"):
-                value = "Other"
-            elif value_lower not in ("male", "female", "all","other"):
+            elif value_lower in ("all", "both"):
+                value = "ALL"
+            elif value_lower not in ("male", "female", "all"):
                 value = DEFAULT_VALUE
 
         # Special case: PLAN_TYPE - single word
@@ -565,7 +565,7 @@ STEP 2: Extract customer eligibility
   → CUSTOMER_TYPE: Pick ONE: Salaried|Self-Employed|SME|Corporate|Retail|Government or N/A
   → EMPLOYMENT_TYPE: Salaried|Self-Employed|Government|Military or N/A
   → MIN_AGE, MAX_AGE: Extract as NUMBERS ONLY
-  → GENDER: Male|Female|Other or N/A
+  → GENDER: Male|Female|ALL or N/A
 
 STEP 3: Extract financial terms
   → Find all NUMBERS (amounts, ages, durations)
