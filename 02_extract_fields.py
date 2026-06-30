@@ -36,6 +36,7 @@ FIXED VERSION: All three prompt functions now properly use SYSTEM_PROMPT
 from __future__ import annotations
 
 import ast
+import gc
 import json
 import os
 import re
@@ -43,6 +44,10 @@ import subprocess
 import time
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+
+# FIX: Reduce CUDA memory fragmentation on small GPUs (Colab T4/L4 ~15GB).
+# Must be set before the CUDA context is created, so it goes before `import torch`.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import torch
 from huggingface_hub.errors import RepositoryNotFoundError
@@ -691,6 +696,22 @@ Return ONLY valid JSON, no explanations."""
 # Model inference
 # ============================================================================
 
+def free_gpu_memory():
+    """
+    FIX: Release cached/fragmented CUDA memory between generate() calls.
+    PyTorch's caching allocator keeps freed tensors reserved for reuse, but
+    with varying prompt/KV-cache lengths across calls that cache fragments
+    instead of being reused, eventually exhausting the GPU. Without this,
+    successive products on a small Colab GPU (T4/L4, ~15GB) run out of
+    memory after just 1-2 products even though each individual call would
+    fit in memory on its own.
+    """
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
+
 def get_raw_generation(model, tokenizer, prompt):
     inputs = tokenizer(prompt, return_tensors="pt")
     device = getattr(model, "device", None)
@@ -714,11 +735,21 @@ def get_raw_generation(model, tokenizer, prompt):
         prompt_len = inputs["input_ids"].shape[-1]
         generated_ids = output_ids[0][prompt_len:]
 
-    return tokenizer.decode(
+    text = tokenizer.decode(
         generated_ids,
         skip_special_tokens=True,
         clean_up_tokenization_spaces=False,
     )
+
+    # FIX: explicitly drop references to the input/output tensors (which can
+    # hold a full KV cache worth of GPU memory) and clear the CUDA cache
+    # before returning. Without this, every generate() call across every
+    # product leaves fragmented memory behind, which is why later products
+    # in a batch OOM even though the first one succeeded.
+    del inputs, output_ids, generated_ids
+    free_gpu_memory()
+
+    return text
 
 
 def extract_with_repair_and_validation(model, tokenizer, entry, text):
@@ -943,13 +974,31 @@ def main():
                         f"{entry['title'][:60]}  ({abs_path.name})"
                     )
                     break
+                except torch.cuda.OutOfMemoryError as e:
+                    # FIX: an OOM mid-generation leaves the allocator in a
+                    # fragmented state. Clear it BEFORE retrying, otherwise
+                    # each retry starts from an even worse memory state than
+                    # the last (which is what caused every retry in the
+                    # original run to fail worse than the one before it).
+                    free_gpu_memory()
+                    print(
+                        f"[{entry['product_no']:03d}/{len(index)}] "
+                        f"CUDA OOM on attempt {attempt + 1}, cleared cache and retrying: {e}"
+                    )
+                    time.sleep(5)
                 except Exception as e:
+                    free_gpu_memory()
                     print(
                         f"[{entry['product_no']:03d}/{len(index)}] retry {attempt + 1}: {e}"
                     )
                     time.sleep(3)
             else:
                 print(f"[{entry['product_no']:03d}/{len(index)}] FAILED after retries")
+
+            # FIX: also clean up after every product (success or failure),
+            # not just on error, so memory doesn't slowly accumulate across
+            # a long batch even when nothing technically throws an OOM.
+            free_gpu_memory()
 
     print("Done. Output:", OUT_JSONL)
 
