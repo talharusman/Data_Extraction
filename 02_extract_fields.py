@@ -89,6 +89,25 @@ LOAD_IN_4BIT = env_bool("HF_LOAD_IN_4BIT", False)
 LOAD_IN_8BIT = env_bool("HF_LOAD_IN_8BIT", False)
 DEVICE_MAP = os.environ.get("HF_DEVICE_MAP", "auto").strip() or "auto"
 TORCH_DTYPE = os.environ.get("HF_TORCH_DTYPE", "auto").strip().lower()
+
+# FIX (root cause of the "OOM on the very first generate() call" behavior):
+# With device_map="auto", Accelerate is free to pack model weights onto the
+# GPU up to (almost) its full physical capacity, because by default it has
+# no idea you also need room left over for the KV-cache/activations that
+# generate() allocates on top of the weights. On a ~14-15GB Colab GPU this
+# means the model alone can end up occupying 13+ GB, leaving well under 1GB
+# free - so the very first generate() call (which needs a few hundred MB for
+# activations) fails immediately, before it even gets to process a large
+# prompt. HF_GPU_RESERVE_GIB tells the loader to hold back this much GPU
+# memory from the weight placement step, guaranteeing headroom for inference.
+GPU_RESERVE_GIB = env_float("HF_GPU_RESERVE_GIB", 3.0)
+
+# FIX: chunking is what lets one call's prefill stay small instead of
+# stuffing (system prompt + entire document) into a single generate() call.
+# It is kept as a togglable flag (not deleted) because turning it off just
+# brings back the original large-single-prompt OOM risk on the longer
+# documents in this dataset - see the note in extract_one_product() below.
+ENABLE_CHUNKING = env_bool("ENABLE_CHUNKING", True)
 DEFAULT_VALUE = "N/A"
 NUMERIC_COLUMNS = {
     "MIN_AGE",
@@ -589,7 +608,9 @@ def normalize_record(record, entry):
             elif value_lower in ("female", "f"):
                 value = "Female"
             elif value_lower in ("all", "both"):
-                value = "ALL"
+                # FIX: spec requires exactly "All" (see EXTRACTION_SYSTEM_PROMPT.txt
+                # rule #13) - this was writing "ALL", which fails validation.
+                value = "All"
             elif value_lower not in ("male", "female", "all"):
                 value = DEFAULT_VALUE
 
@@ -787,6 +808,18 @@ def free_gpu_memory():
     successive products on a small Colab GPU (T4/L4, ~15GB) run out of
     memory after just 1-2 products even though each individual call would
     fit in memory on its own.
+
+    IMPORTANT LIMITATION (why this only ever frees ~1-2GB, not more):
+    empty_cache() can only return memory that is RESERVED-but-UNUSED back to
+    the CUDA driver - i.e. leftover KV-cache/activation buffers from past
+    generate() calls that PyTorch is holding "just in case". It cannot
+    touch memory backing a live tensor. The model's weights stay resident
+    for the entire run, so no amount of gc.collect()/empty_cache() will ever
+    shrink that footprint. The only ways to reduce it are: use a smaller or
+    more heavily quantized model, or cap how much of the GPU the loader is
+    allowed to fill in the first place (see GPU_RESERVE_GIB above). This
+    function fixes cross-call fragmentation; it cannot fix a model that is
+    simply too big for the GPU.
     """
     gc.collect()
     if torch.cuda.is_available():
@@ -880,8 +913,18 @@ def extract_one_product(model, tokenizer, entry, text):
     (not once per chunk) to keep the number of generate() calls roughly the
     same as before for short documents, while still being far cheaper than
     validating every chunk for long ones.
+
+    If ENABLE_CHUNKING=False, this falls back to sending the whole document
+    in one call. That is a real regression risk: this dataset's longer PDFs
+    combined with the ~8k-token system prompt are exactly what caused the
+    original single-shot OOM, so only disable this if GPU_RESERVE_GIB /
+    HF_LOAD_IN_4BIT headroom fixes below have already been verified to give
+    enough free VRAM for the longest document in your batch.
     """
-    chunks = chunk_text(text, TEXT_CHUNK_SIZE, TEXT_CHUNK_OVERLAP)
+    if ENABLE_CHUNKING:
+        chunks = chunk_text(text, TEXT_CHUNK_SIZE, TEXT_CHUNK_OVERLAP)
+    else:
+        chunks = [text.strip()]
     chunk_total = len(chunks)
 
     accumulated = blank_record(entry)
@@ -965,6 +1008,23 @@ def make_generator():
     if DEVICE_MAP.lower() != "none":
         model_kwargs["device_map"] = DEVICE_MAP
 
+        # FIX: cap how much GPU memory Accelerate is allowed to fill with
+        # weights, so it always leaves GPU_RESERVE_GIB free for the KV-cache
+        # and activation memory that generate() needs on top of the weights.
+        # Without this, device_map="auto" happily packs the model up to
+        # ~full physical capacity (that's why the log showed 13.71/14.56 GiB
+        # already in use immediately after loading, before generation even
+        # produced one token).
+        if torch.cuda.is_available() and DEVICE_MAP.lower() == "auto":
+            max_memory = {}
+            for i in range(torch.cuda.device_count()):
+                total_gib = torch.cuda.get_device_properties(i).total_memory / (1024**3)
+                usable_gib = max(total_gib - GPU_RESERVE_GIB, 1.0)
+                max_memory[i] = f"{usable_gib:.1f}GiB"
+            max_memory["cpu"] = os.environ.get("HF_CPU_MEMORY", "48GiB")
+            model_kwargs["max_memory"] = max_memory
+            print(f"GPU headroom reserved: {GPU_RESERVE_GIB} GiB (max_memory={max_memory})")
+
     if TORCH_DTYPE == "float16":
         model_kwargs["torch_dtype"] = torch.float16
     elif TORCH_DTYPE == "bfloat16":
@@ -1042,7 +1102,8 @@ def main():
             "HF_LOAD_IN_4BIT=true\n"
             "HF_DEVICE_MAP=auto\n"
             "HF_TORCH_DTYPE=float16\n"
-            "You can also use a smaller model like Qwen/Qwen2.5-7B-Instruct."
+            "HF_GPU_RESERVE_GIB=3.0   # leaves headroom for generate(), see comment above\n"
+            "You can also use a smaller model like Qwen/Qwen2.5-3B-Instruct."
         ) from exc
 
     done = load_done_ids()
