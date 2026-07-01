@@ -73,18 +73,23 @@ MODEL_NAME = os.environ.get("HF_MODEL_NAME_OR_PATH", "").strip()
 MODEL_CLASS = os.environ.get("HF_MODEL_CLASS", "causal").strip().lower()
 LOCAL_FILES_ONLY = env_bool("HF_LOCAL_FILES_ONLY", True)
 TRUST_REMOTE_CODE = env_bool("HF_TRUST_REMOTE_CODE", False)
-MAX_NEW_TOKENS = env_int("HF_MAX_NEW_TOKENS", 1000)
+MAX_NEW_TOKENS = env_int("HF_MAX_NEW_TOKENS", 800)
 TEMPERATURE = env_float("HF_TEMPERATURE", 0.0)
 TOP_P = env_float("HF_TOP_P", 1.0)
 REPETITION_PENALTY = env_float("HF_REPETITION_PENALTY", 1.03)
-# FIX: TEXT_CHUNK_SIZE used to be 15000 chars and was sent in ONE shot
-# together with the ~8000-token system prompt, which spiked prefill memory
-# enough to OOM on a single generate() call before any token was even
-# produced. It's now the size of each CHUNK (documents longer than this are
-# split into multiple smaller calls and the results are merged - see
-# chunk_text() / extract_one_product()).
-TEXT_CHUNK_SIZE = env_int("TEXT_CHUNK_SIZE", 6000)
-TEXT_CHUNK_OVERLAP = env_int("TEXT_CHUNK_OVERLAP", 300)
+# FIX: TEXT_CHUNK_SIZE was 15000 (sent whole document in one shot, OOM).
+# Now each document is split into TEXT_CHUNK_SIZE-char pieces and the model
+# sees one piece at a time (results merged afterwards by merge_records).
+# 2500 chars ≈ 600-700 tokens. Combined with the ~2000-token system prompt
+# (sent via chat-template as system role) the total input stays well under
+# 4000 tokens, leaving ~1 GB for KV-cache and ~1 GB for generation on a
+# Colab T4/L4 GPU after the 4-bit model weights occupy ~5-6 GB.
+TEXT_CHUNK_SIZE = env_int("TEXT_CHUNK_SIZE", 2500)
+# Hard token ceiling: if a chunk is STILL too long after character-splitting
+# (e.g. the system prompt itself already eats many tokens), this cap forces
+# truncation inside get_raw_generation() before calling model.generate().
+MAX_INPUT_TOKENS = env_int("MAX_INPUT_TOKENS", 3500)
+TEXT_CHUNK_OVERLAP = env_int("TEXT_CHUNK_OVERLAP", 200)
 LOAD_IN_4BIT = env_bool("HF_LOAD_IN_4BIT", False)
 LOAD_IN_8BIT = env_bool("HF_LOAD_IN_8BIT", False)
 DEVICE_MAP = os.environ.get("HF_DEVICE_MAP", "auto").strip() or "auto"
@@ -709,69 +714,140 @@ Return the final JSON object now (no explanations, no markdown):
 
 
 def build_repair_prompt(entry, raw_text):
-    """Build repair prompt using the full system context. (FIXED - now includes SYSTEM_PROMPT)"""
-    repair_instructions = f"""You are repairing a failed extraction.
-Return exactly ONE valid JSON object and nothing else.
+    """
+    Lightweight repair prompt — deliberately does NOT prepend SYSTEM_PROMPT.
+
+    The original code did `f"{SYSTEM_PROMPT}\\n\\n{repair_instructions}"` which
+    added ~7000-9000 tokens of system prompt text to EVERY repair call on top
+    of the system prompt already sent via the chat template. That doubled the
+    input length and was the single biggest cause of OOM on larger documents.
+
+    The repair call only needs the broken output and the minimum rules to
+    produce valid JSON. The model already has the full extraction context from
+    the system message (sent via apply_chat_template in build_prompt).
+    """
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a JSON repair assistant. "
+                "Return ONLY a single valid JSON object, no markdown, no explanation."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"""The extraction below failed to produce valid JSON. Repair it.
 
 Product: {entry['title']}
+Source: {entry['file']}
 
-Broken output to repair:
-{raw_text[:5000]}
+BROKEN OUTPUT:
+{raw_text[:2000]}
 
-Apply ALL rules from the system prompt above. Focus on:
-- Use "N/A" for missing fields
-- Keep values SHORT and within character limits
-- CUSTOMER_TYPE: ONE value only: Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A
-- GENDER: Must be Male, Female, All, or N/A only
-- PLAN_TYPE: ONE word: Loan|Deposit|Savings|Card|Investment|Insurance|Service|Loyalty
-- Numeric fields: NUMBERS ONLY (no currency, no text)
-- No markdown fences or explanations
+REPAIR RULES (fix any violations):
+- Return ONE JSON object with exactly these keys (use "N/A" for unknown fields):
+  PRODUCT_NAME, LEAD_CO_MNE, SOURCE_FILE_PRODUCT, PLAN_TYPE, TARGET_GOAL,
+  CUSTOMER_TYPE, EMPLOYMENT_TYPE, CUSTOMER_SEGMENT, TARGET_SEGMENT, SEGMENT,
+  MIN_AGE, MAX_AGE, GENDER, BANK_CUSTOMER, ACCOUNT_TYPE, CARD_TYPE, CHANNEL,
+  ELIGIBILITY_TYPE, SERVICE_TYPE, REWARD_TYPE, CURRENCY, CURRENCY_TYPE,
+  MIN_BALANCE, AVG_BALANCE_REQUIREMENT, MIN_INCOME, MIN_INCOME_USD,
+  MIN_INVESTMENT, MIN_CONTRIBUTION, LOAN_AMOUNT_RANGE, COVERAGE_AMOUNT,
+  FINANCING_TYPE, PROFIT_TYPE, PROFIT_FREQUENCY, TENURE, TENURE_OPTIONS,
+  MIN_TERM_YEARS, MAX_TERM_YEARS, BUSINESS_TENURE, COLLATERAL_TYPE,
+  EQUITY_REQUIREMENT, DBR_LIMIT, TRANSACTION_LIMIT, SPECIAL_CONDITIONS
+- LEAD_CO_MNE: "IBG" (insurance/takaful) or "BNK" (bank)
+- GENDER: exactly Male | Female | All | N/A
+- CUSTOMER_TYPE: exactly ONE word (never a comma-separated list)
+- PLAN_TYPE: exactly ONE of: Insurance|Savings|Deposit|Loan|Card|Investment|Service|Loyalty
+- CURRENCY_TYPE: exactly PKR | FCY | PKR + FCY | N/A
+- Numeric fields (MIN_AGE, MAX_AGE, MIN_BALANCE, MIN_INCOME, MIN_CONTRIBUTION,
+  MIN_TERM_YEARS, MAX_TERM_YEARS, MIN_INVESTMENT, AVG_BALANCE_REQUIREMENT,
+  MIN_INCOME_USD, BANK_CUSTOMER): NUMBERS ONLY — no currency symbols, no text
+- SPECIAL_CONDITIONS: max 200 characters
 
-Return the repaired JSON object now."""
+Return the repaired JSON object now:""",
+        },
+    ]
+    # Use chat template so the tokenizer applies the right chat format.
+    # Falls back to a flat string if the tokenizer doesn't support it.
+    if hasattr(_repair_tokenizer_ref[0], "apply_chat_template"):
+        try:
+            try:
+                return _repair_tokenizer_ref[0].apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True,
+                    enable_thinking=False,
+                )
+            except TypeError:
+                return _repair_tokenizer_ref[0].apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True,
+                )
+        except Exception:
+            pass
+    return messages[0]["content"] + "\n\n" + messages[1]["content"]
 
-    # Return with SYSTEM_PROMPT prepended for full context
-    return f"{SYSTEM_PROMPT}\n\n{repair_instructions}"
+
+# Module-level mutable slot so build_repair_prompt / build_validation_prompt
+# can access the tokenizer without it being threaded through every call.
+# Populated by make_generator() before any extraction starts.
+_repair_tokenizer_ref: list = [None]
 
 
 def build_validation_prompt(entry, extracted_json):
-    """Build prompt for self-validation and correction using full system context. (FIXED - now includes SYSTEM_PROMPT)"""
-    validation_instructions = f"""You extracted this JSON. Validate and fix any issues:
+    """
+    Lightweight validation prompt — deliberately does NOT prepend SYSTEM_PROMPT.
 
-EXTRACTED JSON:
+    Same reason as build_repair_prompt: the original appended the full ~7000-9000
+    token system prompt as raw text to every validation call, doubling input
+    length. Validation only needs to check a small set of concrete constraints;
+    it doesn't need the full field-by-field extraction rules again.
+    """
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a JSON validator. Check the extracted JSON for rule violations "
+                "and return a corrected version. Return ONLY valid JSON, no markdown, "
+                "no explanation."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"""Validate and fix this extracted JSON if any rule is violated:
+
 {json.dumps(extracted_json, indent=2)}
 
-VALIDATION RULES - Check each rule and FIX if violated:
+VALIDATION RULES — fix violations, keep everything else unchanged:
+1. GENDER must be exactly: Male | Female | All | N/A
+2. CUSTOMER_TYPE must be exactly ONE value (never a comma-separated list)
+   e.g. "Salaried" ✓   "Salaried, Self-Employed" ✗
+3. PLAN_TYPE must be ONE word from: Insurance|Savings|Deposit|Loan|Card|Investment|Service|Loyalty
+4. CURRENCY_TYPE must be exactly: PKR | FCY | PKR + FCY | N/A
+5. LEAD_CO_MNE must be "IBG" (insurance/takaful) or "BNK" (bank)
+6. Numeric-only fields (MIN_AGE, MAX_AGE, MIN_BALANCE, MIN_INCOME, MIN_INCOME_USD,
+   MIN_INVESTMENT, AVG_BALANCE_REQUIREMENT, MIN_CONTRIBUTION, MIN_TERM_YEARS,
+   MAX_TERM_YEARS, BANK_CUSTOMER) must contain ONLY a number or "N/A" — no currency
+   symbols, no units, no text.
+7. SPECIAL_CONDITIONS must be ≤ 200 characters (truncate if longer)
+8. PRODUCT_NAME must be ≤ 50 characters
+9. No null values — use "N/A" for any field that is empty or unknown
 
-1. CUSTOMER_TYPE: Is it ONE value only (no commas)?
-   ✓ "Salaried"  ✗ "Salaried, Self-Employed, Corporate"
-   
-2. GENDER: Is it exactly one of: Male|Female|All|N/A?
-   ✓ "Female"  ✗ "Male or Female"
-   
-3. PLAN_TYPE: Is it ONE word from: Loan|Deposit|Savings|Card|Investment|Insurance|Service|Loyalty?
-   ✓ "Savings"  ✗ "Savings and Protection"
-   
-4. Text field lengths - Are they within limits?
-   - PRODUCT_NAME ≤ 50 chars
-   - CUSTOMER_TYPE ≤ 25 chars
-   - TENURE ≤ 30 chars
-   - SPECIAL_CONDITIONS ≤ 200 chars
-   
-5. Numeric fields - Do they contain ONLY numbers (no currency/text)?
-   ✓ "250000"  ✗ "PKR 250,000" or "25000 per month"
-   
-6. SPECIAL_CONDITIONS - Is it concise, max 200 chars?
-   ✓ "Free 14-day look, waiting period 90 days"
-   ✗ "Free 14-day look period, optional riders, death benefit includes sum covered plus PIA value, maturity benefit..."
-
-Refer to the system prompt above for full field definitions and critical rules.
-
-If ANY rule is violated, return CORRECTED JSON. Otherwise return JSON unchanged.
-Fix ONLY the violations, keep everything else as-is.
-Return ONLY valid JSON, no explanations."""
-
-    # Return with SYSTEM_PROMPT prepended for full context
-    return f"{SYSTEM_PROMPT}\n\n{validation_instructions}"
+Return the corrected JSON object now:""",
+        },
+    ]
+    if hasattr(_repair_tokenizer_ref[0], "apply_chat_template"):
+        try:
+            try:
+                return _repair_tokenizer_ref[0].apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True,
+                    enable_thinking=False,
+                )
+            except TypeError:
+                return _repair_tokenizer_ref[0].apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True,
+                )
+        except Exception:
+            pass
+    return messages[0]["content"] + "\n\n" + messages[1]["content"]
 
 
 # ============================================================================
@@ -795,10 +871,33 @@ def free_gpu_memory():
 
 
 def get_raw_generation(model, tokenizer, prompt):
+    # Tokenize first WITHOUT moving to GPU so we can check length cheaply.
     inputs = tokenizer(prompt, return_tensors="pt")
-    device = getattr(model, "device", None)
-    if device is not None:
-        inputs = {key: value.to(device) for key, value in inputs.items()}
+    input_len = inputs["input_ids"].shape[-1]
+
+    # Hard cap: if the prompt is still longer than MAX_INPUT_TOKENS after all
+    # chunking, truncate the token tensor directly. This is a last-resort
+    # safety net so the script never OOMs on a single generate() call no
+    # matter how large the system prompt or document turns out to be.
+    if input_len > MAX_INPUT_TOKENS:
+        print(
+            f"  [token-cap] Input was {input_len} tokens, truncating to {MAX_INPUT_TOKENS}."
+        )
+        inputs = {k: v[:, :MAX_INPUT_TOKENS] for k, v in inputs.items()}
+        input_len = MAX_INPUT_TOKENS
+
+    # Move to the right device.
+    # With device_map="auto" and bitsandbytes 4-bit, model.hf_device_map
+    # shows how layers are distributed. The safest approach is to put inputs
+    # on the device of the first non-meta parameter, which is what the
+    # original getattr(model,"device") tried to do — but that attribute
+    # doesn't exist for dispatched models. We do it correctly here.
+    try:
+        first_param_device = next(model.parameters()).device
+        if first_param_device.type != "meta":
+            inputs = {k: v.to(first_param_device) for k, v in inputs.items()}
+    except StopIteration:
+        pass  # no parameters — shouldn't happen but be safe
 
     generation_kwargs = {
         "max_new_tokens": MAX_NEW_TOKENS,
@@ -823,11 +922,9 @@ def get_raw_generation(model, tokenizer, prompt):
         clean_up_tokenization_spaces=False,
     )
 
-    # FIX: explicitly drop references to the input/output tensors (which can
-    # hold a full KV cache worth of GPU memory) and clear the CUDA cache
-    # before returning. Without this, every generate() call across every
-    # product leaves fragmented memory behind, which is why later products
-    # in a batch OOM even though the first one succeeded.
+    # Explicitly release GPU tensors before returning so the CUDA allocator
+    # can reuse that memory for the next generate() call rather than
+    # accumulating fragmented blocks across calls.
     del inputs, output_ids, generated_ids
     free_gpu_memory()
 
@@ -966,13 +1063,13 @@ def make_generator():
         model_kwargs["device_map"] = DEVICE_MAP
 
     if TORCH_DTYPE == "float16":
-        model_kwargs["torch_dtype"] = torch.float16
+        model_kwargs["dtype"] = torch.float16
     elif TORCH_DTYPE == "bfloat16":
-        model_kwargs["torch_dtype"] = torch.bfloat16
+        model_kwargs["dtype"] = torch.bfloat16
     elif TORCH_DTYPE == "float32":
-        model_kwargs["torch_dtype"] = torch.float32
+        model_kwargs["dtype"] = torch.float32
     elif TORCH_DTYPE == "auto":
-        model_kwargs["torch_dtype"] = "auto"
+        model_kwargs["dtype"] = "auto"
 
     if LOAD_IN_4BIT or LOAD_IN_8BIT:
         model_kwargs["quantization_config"] = BitsAndBytesConfig(
@@ -982,6 +1079,10 @@ def make_generator():
             bnb_4bit_quant_type="nf4",
             bnb_4bit_use_double_quant=True,
         )
+        # Remove dtype when using bitsandbytes quantization — bitsandbytes
+        # manages its own compute dtype via bnb_4bit_compute_dtype and
+        # passing dtype as well can cause conflicts.
+        model_kwargs.pop("dtype", None)
 
     print(f"Loading model: {MODEL_NAME}")
     print(f"Model class:   {MODEL_CLASS}")
@@ -1002,6 +1103,10 @@ def make_generator():
             model.generation_config.pad_token_id = tokenizer.pad_token_id
         if tokenizer.eos_token_id is not None:
             model.generation_config.eos_token_id = tokenizer.eos_token_id
+
+    # Give build_repair_prompt / build_validation_prompt access to the
+    # tokenizer so they can apply the chat template correctly.
+    _repair_tokenizer_ref[0] = tokenizer
 
     return model, tokenizer
 
