@@ -560,7 +560,7 @@ field_max_lengths = {
     "COVERAGE_AMOUNT": 50,
     "FINANCING_TYPE": 30,
     "DEPOSIT_PROFIT_TYPE": 30,
-    "PROFIT_FREQUENCY": 20,
+    "DEPOSIT_PROFIT_FREQUENCY": 20,
     "TENURE": 30,
     "TENURE_OPTIONS": 50,
     "BUSINESS_TENURE": 30,
@@ -667,64 +667,13 @@ def build_prompt(entry, chunk, tokenizer, chunk_idx=1, chunk_total=1):
     else:
         chunk_note = ""
 
-    user_msg = f"""Product title: {entry['title']}
+        user_msg = f"""Product title: {entry['title']}
 Source file: {entry['file']}
-{chunk_note}
---- PRODUCT TEXT START ---
+{chunk_note}--- PRODUCT TEXT START ---
 {chunk}
 --- PRODUCT TEXT END ---
 
-EXTRACTION WORKFLOW - Follow these steps:
-
-STEP 1: Extract basic identifiers
-  → PRODUCT_NAME: Find product/plan name (max 50 chars)
-  → LEAD_MARKER: Insurance (IBG) or Bank (BNK)?
-  → PLAN_TYPE: Pick ONE word: Loan|Deposit|Savings|Card|Investment|Insurance|Service|Loyalty
-
-STEP 2: Extract customer eligibility
-  → CUSTOMER_TYPE: Pick ONE: Salaried|Self-Employed|SME|Corporate|Retail|Government or N/A
-  → EMPLOYMENT_TYPE: Salaried|Self-Employed|Government|Military or N/A
-  → MIN_AGE, MAX_AGE: Extract as NUMBERS ONLY
-    → GENDER: Male|Female|All or N/A
-
-STEP 3: Extract financial terms
-  → Find all NUMBERS (amounts, ages, durations)
-  → MIN_BALANCE, MIN_INCOME, MIN_CONTRIBUTION: NUMBERS ONLY (no currency/text)
-  → MIN_TERM_YEARS, MAX_TERM_YEARS: NUMBERS ONLY
-  → LOAN_AMOUNT_RANGE, COVERAGE_AMOUNT: Compact notation like "50K-150K"
-
-STEP 4: Extract product characteristics
-  → FINANCING_TYPE: Islamic|Conventional|Takaful|Mudarabah or N/A
-  → DEPOSIT_PROFIT_TYPE: Tier-based|Fixed|Variable or N/A (max 30 chars)
-  → TENURE, TENURE_OPTIONS: Format like "10-25 years" or "1M -> 5Y"
-
-STEP 5: Extract product detail fields
-    → PRODUCT_DESCRIPTION: concise product summary
-    → PROVIDER_NAME: bank/company/insurance provider
-    → PRODUCT_VARIANT_TIER: plan tier, variant, or package label
-    → PRICING_RATE: concise rate or pricing text
-    → FEES_AND_CHARGES: concise fee summary
-    → KEY_BENEFITS, OPTIONAL_RIDERS, REQUIRED_DOCUMENTS: concise lists
-    → CLAIMS_SERVICE_CONTACT: claims or service contact details
-    → KEY_EXCLUSIONS, TAX_ZAKAT_TREATMENT, 
-    → FREE_LOOK_PERIOD_DAYS: NUMBERS ONLY
-
-STEP 6: Extract conditions (concise ONLY)
-  → SPECIAL_CONDITIONS: Max 200 chars, critical restrictions ONLY
-  → Include: waiting periods, major exclusions, key features
-  → DO NOT copy long marketing text
-  → DO NOT list "optional riders" unless critical
-
-STEP 7: Validation before returning
-  ✓ All values within char limits?
-  ✓ Numeric fields are numbers ONLY?
-  ✓ CUSTOMER_TYPE is ONE value (no commas)?
-  ✓ GENDER is: Male|Female|All|N/A?
-  ✓ PLAN_TYPE is ONE word?
-  ✓ No copy-pasted marketing text?
-
-Return the final JSON object now (no explanations, no markdown):
-"""
+Return only one JSON object that matches the system prompt exactly."""
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -772,7 +721,7 @@ Apply ALL rules from the system prompt above. Focus on:
 - New detail fields must stay concise:
     PRODUCT_DESCRIPTION, PROVIDER_NAME, PRODUCT_VARIANT_TIER, PRICING_RATE,
     FEES_AND_CHARGES, KEY_BENEFITS, OPTIONAL_RIDERS, REQUIRED_DOCUMENTS,
-    CLAIMS_SERVICE_CONTACT, KEY_EXCLUSIONS, TAX_ZAKAT_TREATMENT, 
+    CLAIMS_SERVICE_CONTACT, KEY_EXCLUSIONS, TAX_ZAKAT_TREATMENT,
 - No markdown fences or explanations
 
 Return the repaired JSON object now."""
@@ -812,13 +761,14 @@ VALIDATION RULES - Check each rule and FIX if violated:
     - CLAIMS_SERVICE_CONTACT ≤ 200 chars
     - KEY_EXCLUSIONS ≤ 200 chars
     - TAX_ZAKAT_TREATMENT ≤ 100 chars
+    - PDF_PAGE_REFERENCE ≤ 50 chars
    - CUSTOMER_TYPE ≤ 25 chars
    - TENURE ≤ 30 chars
    - SPECIAL_CONDITIONS ≤ 200 chars
    
 5. Numeric fields - Do they contain ONLY numbers (no currency/text)?
     ✓ "250000"  ✗ "PKR 250,000" or "25000 per month"
-    Includes FREE_LOOK_PERIOD_DAYS
+    - FREE_LOOK_PERIOD_DAYS is numeric too
    
 6. SPECIAL_CONDITIONS - Is it concise, max 200 chars?
    ✓ "Free 14-day look, waiting period 90 days"

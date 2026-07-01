@@ -258,6 +258,9 @@ COLUMN DEFINITIONS & EXTRACTION RULES
 55. TAX_ZAKAT_TREATMENT
     Max 100 chars | Tax or zakat treatment note if mentioned
 
+56. PDF_PAGE_REFERENCE
+    Max 50 chars | Page number(s) or section reference for the extracted info
+
 ================================================================================
 EXTRACTION WORKFLOW
 ================================================================================
