@@ -5,3 +5,4 @@ accelerate
 bitsandbytes>=0.46.1
 pandas
 openpyxl
+python-docx

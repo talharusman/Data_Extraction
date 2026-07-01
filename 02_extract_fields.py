@@ -73,11 +73,18 @@ MODEL_NAME = os.environ.get("HF_MODEL_NAME_OR_PATH", "").strip()
 MODEL_CLASS = os.environ.get("HF_MODEL_CLASS", "causal").strip().lower()
 LOCAL_FILES_ONLY = env_bool("HF_LOCAL_FILES_ONLY", True)
 TRUST_REMOTE_CODE = env_bool("HF_TRUST_REMOTE_CODE", False)
-MAX_NEW_TOKENS = env_int("HF_MAX_NEW_TOKENS", 1200)
+MAX_NEW_TOKENS = env_int("HF_MAX_NEW_TOKENS", 1000)
 TEMPERATURE = env_float("HF_TEMPERATURE", 0.0)
 TOP_P = env_float("HF_TOP_P", 1.0)
 REPETITION_PENALTY = env_float("HF_REPETITION_PENALTY", 1.03)
-TEXT_CHUNK_SIZE = env_int("TEXT_CHUNK_SIZE", 15000)
+# FIX: TEXT_CHUNK_SIZE used to be 15000 chars and was sent in ONE shot
+# together with the ~8000-token system prompt, which spiked prefill memory
+# enough to OOM on a single generate() call before any token was even
+# produced. It's now the size of each CHUNK (documents longer than this are
+# split into multiple smaller calls and the results are merged - see
+# chunk_text() / extract_one_product()).
+TEXT_CHUNK_SIZE = env_int("TEXT_CHUNK_SIZE", 6000)
+TEXT_CHUNK_OVERLAP = env_int("TEXT_CHUNK_OVERLAP", 300)
 LOAD_IN_4BIT = env_bool("HF_LOAD_IN_4BIT", False)
 LOAD_IN_8BIT = env_bool("HF_LOAD_IN_8BIT", False)
 DEVICE_MAP = os.environ.get("HF_DEVICE_MAP", "auto").strip() or "auto"
@@ -350,6 +357,67 @@ def build_index_from_files(files: list[Path]) -> list[dict]:
 
 
 # ============================================================================
+# Document chunking (FIX for large-document OOM)
+# ============================================================================
+
+def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
+    """
+    Split a long document into smaller pieces so each model call only has to
+    process chunk_size characters instead of the whole document at once.
+
+    Breaks are made on a paragraph/sentence boundary near chunk_size where
+    possible (instead of a hard character cut) so a field's value isn't
+    split mid-sentence across two chunks. A small overlap is carried into
+    the next chunk so context right at a boundary isn't lost.
+    """
+    text = text.strip()
+    if len(text) <= chunk_size:
+        return [text]
+
+    chunks: list[str] = []
+    start = 0
+    length = len(text)
+
+    while start < length:
+        end = min(start + chunk_size, length)
+
+        if end < length:
+            search_from = max(start, end - 300)
+            newline_idx = text.rfind("\n", search_from, end)
+            period_idx = text.rfind(". ", search_from, end)
+            boundary = max(newline_idx, period_idx)
+            if boundary > search_from:
+                end = boundary + 1
+
+        piece = text[start:end].strip()
+        if piece:
+            chunks.append(piece)
+
+        if end >= length:
+            break
+        start = max(end - overlap, start + 1)
+
+    return chunks
+
+
+def merge_records(accumulated: dict, new_record: dict, columns) -> dict:
+    """
+    Merge a single chunk's extracted record into the running accumulated
+    record for the product. A field is filled in from this chunk only if it
+    hasn't already been found (still DEFAULT_VALUE/empty) in an earlier
+    chunk - first chunk to find a real value for a field wins.
+    """
+    for col in columns:
+        old = accumulated.get(col)
+        new = new_record.get(col)
+        old_is_empty = old is None or old == "" or old == DEFAULT_VALUE
+        new_is_real = new not in (None, "", DEFAULT_VALUE)
+        if old_is_empty and new_is_real:
+            accumulated[col] = new
+    return accumulated
+
+
+# ============================================================================
 # JSON parsing helpers
 # ============================================================================
 
@@ -550,13 +618,27 @@ def normalize_record(record, entry):
 # Prompt builders - using the loaded system prompt (ALL FIXED)
 # ============================================================================
 
-def build_prompt(entry, text, tokenizer):
-    """Build prompt with step-by-step extraction workflow."""
+def build_prompt(entry, chunk, tokenizer, chunk_idx=1, chunk_total=1):
+    """Build prompt with step-by-step extraction workflow for ONE chunk of
+    the document. `chunk` is already cut to size by the caller (chunk_text())
+    - do not slice it again here, that's the whole point of chunking."""
+
+    if chunk_total > 1:
+        chunk_note = (
+            f"\nNOTE: This is PART {chunk_idx} of {chunk_total} of a single, longer "
+            f"product document (it has been split only because of length, not because "
+            f"it is a different product). Extract whatever fields you can find in THIS "
+            f"part only. If a field is not mentioned in this part, set it to \"N/A\" - "
+            f"it may simply be described in another part of the same document.\n"
+        )
+    else:
+        chunk_note = ""
+
     user_msg = f"""Product title: {entry['title']}
 Source file: {entry['file']}
-
+{chunk_note}
 --- PRODUCT TEXT START ---
-{text[:TEXT_CHUNK_SIZE]}
+{chunk}
 --- PRODUCT TEXT END ---
 
 EXTRACTION WORKFLOW - Follow these steps:
@@ -752,58 +834,84 @@ def get_raw_generation(model, tokenizer, prompt):
     return text
 
 
-def extract_with_repair_and_validation(model, tokenizer, entry, text):
-    """Extract with repair and self-validation (all 3 techniques combined)."""
-    
-    # Initial extraction
-    prompt = build_prompt(entry, text, tokenizer)
+def extract_one_chunk(model, tokenizer, entry, chunk, chunk_idx, chunk_total):
+    """
+    Run extraction on a SINGLE chunk of the document (initial attempt, with
+    one repair retry if the model's output isn't parseable JSON). No
+    self-validation here on purpose - validation is run once on the final
+    merged record instead, to avoid multiplying generate() calls by the
+    number of chunks.
+    Returns a normalized record dict, or None if both attempts failed to
+    produce parseable JSON for this chunk (the chunk is then simply skipped;
+    other chunks may still cover those fields).
+    """
+    prompt = build_prompt(entry, chunk, tokenizer, chunk_idx, chunk_total)
     raw = get_raw_generation(model, tokenizer, prompt)
 
     try:
         parsed = parse_json_blob(raw)
-        normalized = normalize_record(parsed, entry)
-        
-        # NEW: Self-validation step
-        validation_prompt = build_validation_prompt(entry, normalized)
-        validation_raw = get_raw_generation(model, tokenizer, validation_prompt)
-        
-        try:
-            validated_parsed = parse_json_blob(validation_raw)
-            validated_normalized = normalize_record(validated_parsed, entry)
-            return validated_normalized
-        except:
-            # If validation fails, return original normalized record
-            return normalized
-            
-    except Exception as first_error:
-        # Fallback: repair prompt
+        return normalize_record(parsed, entry)
+    except Exception:
         repair_prompt = build_repair_prompt(entry, raw)
         repaired_raw = get_raw_generation(model, tokenizer, repair_prompt)
-        
         try:
             repaired_parsed = parse_json_blob(repaired_raw)
-            repaired_normalized = normalize_record(repaired_parsed, entry)
-            
-            # Still try validation on repaired output
-            validation_prompt = build_validation_prompt(entry, repaired_normalized)
-            validation_raw = get_raw_generation(model, tokenizer, validation_prompt)
-            try:
-                validated_parsed = parse_json_blob(validation_raw)
-                return normalize_record(validated_parsed, entry)
-            except:
-                return repaired_normalized
-                
+            return normalize_record(repaired_parsed, entry)
         except Exception as second_error:
             print(
-                f"Warning: falling back to blank record after failures: "
-                f"{first_error}; {second_error}"
+                f"  Warning: chunk {chunk_idx}/{chunk_total} unparseable after "
+                f"repair attempt, skipping this chunk: {second_error}"
             )
-            return blank_record(entry)
+            return None
+
+
+def extract_one_product(model, tokenizer, entry, text):
+    """
+    FIX (large-document OOM): instead of sending the ENTIRE document text in
+    one giant prompt (which on top of the long system prompt was enough to
+    blow past available GPU memory during a single prefill), the document is
+    split into chunk_text()-sized pieces and each piece is sent to the model
+    SEPARATELY. Results are merged field-by-field (merge_records picks the
+    first real value found for each field across chunks), so a field
+    mentioned anywhere in the document is still captured even though no
+    single call ever sees the whole document at once.
+
+    A single self-validation pass runs once on the final merged record
+    (not once per chunk) to keep the number of generate() calls roughly the
+    same as before for short documents, while still being far cheaper than
+    validating every chunk for long ones.
+    """
+    chunks = chunk_text(text, TEXT_CHUNK_SIZE, TEXT_CHUNK_OVERLAP)
+    chunk_total = len(chunks)
+
+    accumulated = blank_record(entry)
+    any_chunk_succeeded = False
+
+    for i, chunk in enumerate(chunks, start=1):
+        chunk_record = extract_one_chunk(model, tokenizer, entry, chunk, i, chunk_total)
+        if chunk_record is not None:
+            any_chunk_succeeded = True
+            accumulated = merge_records(accumulated, chunk_record, COLUMNS)
+        free_gpu_memory()
+
+    if not any_chunk_succeeded:
+        return blank_record(entry)
+
+    # Single validation/correction pass on the merged record.
+    validation_prompt = build_validation_prompt(entry, accumulated)
+    validation_raw = get_raw_generation(model, tokenizer, validation_prompt)
+    try:
+        validated_parsed = parse_json_blob(validation_raw)
+        return normalize_record(validated_parsed, entry)
+    except Exception:
+        # If the validation call itself fails to parse, the merged record
+        # (already normalized field-by-field) is still a valid result.
+        return accumulated
 
 
 def extract_one(model, tokenizer, entry, text):
-    """Main extraction function using all 3 techniques."""
-    return extract_with_repair_and_validation(model, tokenizer, entry, text)
+    """Main extraction function: chunked extraction + merge + single validation."""
+    return extract_one_product(model, tokenizer, entry, text)
 
 
 # ============================================================================
