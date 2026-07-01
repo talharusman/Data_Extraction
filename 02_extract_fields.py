@@ -1,5 +1,5 @@
 """
-Step 2: Extract the fixed 41-column schema as JSON from product files.
+ Step 2: Extract the fixed 56-column schema as JSON from product files.
 ENHANCED with 3 advanced prompting techniques:
   1. Few-shot examples showing correct vs incorrect extraction
   2. Step-by-step extraction workflow
@@ -121,6 +121,7 @@ NUMERIC_COLUMNS = {
     "MIN_CONTRIBUTION",
     "MIN_TERM_YEARS",
     "MAX_TERM_YEARS",
+    "FREE_LOOK_PERIOD_DAYS",
 }
 
 SUPPORTED_EXTENSIONS = {".txt", ".pdf", ".docx", ".doc", ".csv", ".json", ".xlsx", ".xls"}
@@ -532,6 +533,17 @@ def blank_record(entry):
 
 field_max_lengths = {
     "PRODUCT_NAME": 50,
+    "PRODUCT_DESCRIPTION": 250,
+    "PROVIDER_NAME": 100,
+    "PRODUCT_VARIANT_TIER": 50,
+    "PRICING_RATE": 50,
+    "FEES_AND_CHARGES": 200,
+    "KEY_BENEFITS": 200,
+    "OPTIONAL_RIDERS": 200,
+    "REQUIRED_DOCUMENTS": 200,
+    "CLAIMS_SERVICE_CONTACT": 200,
+    "KEY_EXCLUSIONS": 200,
+    "TAX_ZAKAT_TREATMENT": 100,
     "PLAN_TYPE": 15,
     "TARGET_GOAL": 30,
     "CUSTOMER_TYPE": 25,
@@ -673,7 +685,7 @@ STEP 2: Extract customer eligibility
   → CUSTOMER_TYPE: Pick ONE: Salaried|Self-Employed|SME|Corporate|Retail|Government or N/A
   → EMPLOYMENT_TYPE: Salaried|Self-Employed|Government|Military or N/A
   → MIN_AGE, MAX_AGE: Extract as NUMBERS ONLY
-  → GENDER: Male|Female|ALL or N/A
+    → GENDER: Male|Female|All or N/A
 
 STEP 3: Extract financial terms
   → Find all NUMBERS (amounts, ages, durations)
@@ -686,13 +698,24 @@ STEP 4: Extract product characteristics
   → DEPOSIT_PROFIT_TYPE: Tier-based|Fixed|Variable or N/A (max 30 chars)
   → TENURE, TENURE_OPTIONS: Format like "10-25 years" or "1M -> 5Y"
 
-STEP 5: Extract conditions (concise ONLY)
+STEP 5: Extract product detail fields
+    → PRODUCT_DESCRIPTION: concise product summary
+    → PROVIDER_NAME: bank/company/insurance provider
+    → PRODUCT_VARIANT_TIER: plan tier, variant, or package label
+    → PRICING_RATE: concise rate or pricing text
+    → FEES_AND_CHARGES: concise fee summary
+    → KEY_BENEFITS, OPTIONAL_RIDERS, REQUIRED_DOCUMENTS: concise lists
+    → CLAIMS_SERVICE_CONTACT: claims or service contact details
+    → KEY_EXCLUSIONS, TAX_ZAKAT_TREATMENT, 
+    → FREE_LOOK_PERIOD_DAYS: NUMBERS ONLY
+
+STEP 6: Extract conditions (concise ONLY)
   → SPECIAL_CONDITIONS: Max 200 chars, critical restrictions ONLY
   → Include: waiting periods, major exclusions, key features
   → DO NOT copy long marketing text
   → DO NOT list "optional riders" unless critical
 
-STEP 6: Validation before returning
+STEP 7: Validation before returning
   ✓ All values within char limits?
   ✓ Numeric fields are numbers ONLY?
   ✓ CUSTOMER_TYPE is ONE value (no commas)?
@@ -746,6 +769,10 @@ Apply ALL rules from the system prompt above. Focus on:
 - GENDER: Must be Male, Female, All, or N/A only
 - PLAN_TYPE: ONE word: Loan|Deposit|Savings|Card|Investment|Insurance|Service|Loyalty
 - Numeric fields: NUMBERS ONLY (no currency, no text)
+- New detail fields must stay concise:
+    PRODUCT_DESCRIPTION, PROVIDER_NAME, PRODUCT_VARIANT_TIER, PRICING_RATE,
+    FEES_AND_CHARGES, KEY_BENEFITS, OPTIONAL_RIDERS, REQUIRED_DOCUMENTS,
+    CLAIMS_SERVICE_CONTACT, KEY_EXCLUSIONS, TAX_ZAKAT_TREATMENT, 
 - No markdown fences or explanations
 
 Return the repaired JSON object now."""
@@ -774,12 +801,24 @@ VALIDATION RULES - Check each rule and FIX if violated:
    
 4. Text field lengths - Are they within limits?
    - PRODUCT_NAME ≤ 50 chars
+    - PRODUCT_DESCRIPTION ≤ 250 chars
+    - PROVIDER_NAME ≤ 100 chars
+    - PRODUCT_VARIANT_TIER ≤ 50 chars
+    - PRICING_RATE ≤ 50 chars
+    - FEES_AND_CHARGES ≤ 200 chars
+    - KEY_BENEFITS ≤ 200 chars
+    - OPTIONAL_RIDERS ≤ 200 chars
+    - REQUIRED_DOCUMENTS ≤ 200 chars
+    - CLAIMS_SERVICE_CONTACT ≤ 200 chars
+    - KEY_EXCLUSIONS ≤ 200 chars
+    - TAX_ZAKAT_TREATMENT ≤ 100 chars
    - CUSTOMER_TYPE ≤ 25 chars
    - TENURE ≤ 30 chars
    - SPECIAL_CONDITIONS ≤ 200 chars
    
 5. Numeric fields - Do they contain ONLY numbers (no currency/text)?
-   ✓ "250000"  ✗ "PKR 250,000" or "25000 per month"
+    ✓ "250000"  ✗ "PKR 250,000" or "25000 per month"
+    Includes FREE_LOOK_PERIOD_DAYS
    
 6. SPECIAL_CONDITIONS - Is it concise, max 200 chars?
    ✓ "Free 14-day look, waiting period 90 days"

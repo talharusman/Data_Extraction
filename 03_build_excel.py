@@ -140,7 +140,8 @@ def build_master_sheet(wb, rows):
         17: 18, 18: 20, 19: 18, 20: 14, 21: 14, 22: 14, 23: 16, 24: 22,
         25: 14, 26: 14, 27: 14, 28: 16, 29: 18, 30: 18, 31: 16, 32: 14,
         33: 16, 34: 16, 35: 18, 36: 14, 37: 14, 38: 18, 39: 18, 40: 16,
-        41: 14, 42: 18, 43: 24,
+        41: 14, 42: 18, 43: 24, 44: 28, 45: 18, 46: 18, 47: 16, 48: 22,
+        49: 22, 50: 20, 51: 20, 52: 14, 53: 22, 54: 22, 55: 20, 56: 16,
     }
     autosize(ws, widths)
     return ws
@@ -197,7 +198,7 @@ def build_dictionary_sheet(wb):
         "COVERAGE_AMOUNT": ("Coverage amount or insured amount.", "Text / categorical", "50K-150K coverage"),
         "FINANCING_TYPE": ("Conventional/Islamic financing structure or instrument type.", "Text / categorical", "Mudarabah"),
         "DEPOSIT_PROFIT_TYPE": ("Profit basis or mode.", "Text / categorical", "Tier-based"),
-        "PROFIT_FREQUENCY": ("Monthly, semi-annual, maturity etc.", "Text / categorical", "Monthly"),
+        "DEPOSIT_PROFIT_FREQUENCY": ("Monthly, semi-annual, maturity etc.", "Text / categorical", "Monthly"),
         "TENURE": ("Readable tenor text.", "Text / categorical", "1-5 years"),
         "TENURE_OPTIONS": ("Structured tenor menu text.", "Text / categorical", "1M -> 5Y"),
         "MIN_TERM_YEARS": ("Minimum term in years when directly available.", "Numeric", "10"),
@@ -208,6 +209,18 @@ def build_dictionary_sheet(wb):
         "DBR_LIMIT": ("Debt burden ratio limit.", "Text / categorical", "<=40%"),
         "TRANSACTION_LIMIT": ("Usage/balance/transaction cap.", "Text / categorical", "1M monthly"),
         "SPECIAL_CONDITIONS": ("Residual qualifiers or important caveats.", "Text / categorical", "RDA required"),
+        "PRODUCT_DESCRIPTION": ("Short summary of the product or plan.", "Text / categorical", "Savings plan with flexible deposits"),
+        "PROVIDER_NAME": ("Bank, insurer, or product provider name.", "Text / categorical", "Bank Alfalah"),
+        "PRODUCT_VARIANT_TIER": ("Tier, variant, or package label.", "Text / categorical", "Premier"),
+        "PRICING_RATE": ("Rate, markup, margin, or pricing summary.", "Text / categorical", "6.5% p.a."),
+        "FEES_AND_CHARGES": ("Concise fees and charges summary.", "Text / categorical", "Issuance fee 500 PKR"),
+        "KEY_BENEFITS": ("Key benefits or value points.", "Text / categorical", "Free withdrawals, digital access"),
+        "OPTIONAL_RIDERS": ("Optional riders or add-ons.", "Text / categorical", "Accidental cover rider"),
+        "FREE_LOOK_PERIOD_DAYS": ("Free-look period in days.", "Numeric", "14"),
+        "REQUIRED_DOCUMENTS": ("Required application documents.", "Text / categorical", "CNIC, income proof"),
+        "CLAIMS_SERVICE_CONTACT": ("Claims or service contact details.", "Text / categorical", "Call center 111-111-111"),
+        "KEY_EXCLUSIONS": ("Main exclusions or limitations.", "Text / categorical", "Pre-existing conditions excluded"),
+        "TAX_ZAKAT_TREATMENT": ("Tax or zakat treatment note.", "Text / categorical", "Zakat applicable"),
     }
 
     for r_idx, col_name in enumerate(COLUMNS, start=3):
