@@ -50,7 +50,7 @@ def normalize_value(value):
 
 def build_info_rows(rows):
     total = len(rows)
-    lead_counts = Counter((row.get("LEAD_CO_MNE") or "").strip().upper() for row in rows)
+    lead_counts = Counter((row.get("LEAD_MARKER") or "").strip().upper() for row in rows)
     bnk = lead_counts.get("BNK", 0)
     ibg = lead_counts.get("IBG", 0)
     return [
@@ -166,7 +166,7 @@ def build_dictionary_sheet(wb):
 
     dictionary_rows = {
         "PRODUCT_NAME": ("Normalized product or service name.", "Text / categorical", "Alfalah Car Ijarah"),
-        "LEAD_CO_MNE": ("Lead marker from user (IBG or BNK).", "Text / categorical", "IBG"),
+        "LEAD_MARKER": ("Lead marker from user (IBG or BNK).", "Text / categorical", "IBG"),
         "SOURCE_FILE_PRODUCT": ("Batch/source group name provided by user.", "Text / categorical", "Isl Consumer"),
         "PLAN_TYPE": ("High-level family such as Loan, Deposit, Savings, Card, Investment, Insurance, Service or Loyalty.", "Text / categorical", "Loan"),
         "TARGET_GOAL": ("Primary customer need/use case.", "Text / categorical", "Housing"),
@@ -174,11 +174,11 @@ def build_dictionary_sheet(wb):
         "EMPLOYMENT_TYPE": ("Employment eligibility where applicable.", "Text / categorical", "Salaried/SEP"),
         "CUSTOMER_SEGMENT": ("Behavioral/demographic segment when explicitly identified.", "Text / categorical", "NRP"),
         "TARGET_SEGMENT": ("More specific positioning segment where stated.", "Text / categorical", "Financial Inclusion"),
-        "SEGMENT": ("Priority/HNW/premium segment tag.", "Text / categorical", "Premium (HNW)"),
+        "SEGMENT_TIER": ("Priority/HNW/premium segment tag.", "Text / categorical", "Premium (HNW)"),
         "MIN_AGE": ("Minimum eligible age.", "Numeric", "18"),
         "MAX_AGE": ("Maximum eligible age.", "Numeric", "65"),
         "GENDER": ("Gender eligibility/focus.", "Text / categorical", "Female"),
-        "BANK_CUSTOMER": ("1 for bank-offered/relationship products in this normalized dataset.", "Numeric", "1"),
+        "IS_BANK_OFFERED": ("1 for bank-offered/relationship products in this normalized dataset.", "Numeric", "1"),
         "ACCOUNT_TYPE": ("Current, Savings, Wallet, Digital, etc.", "Text / categorical", "Current"),
         "CARD_TYPE": ("Debit, Credit, Virtual Debit, Premium etc.", "Text / categorical", "Credit (Premium)"),
         "CHANNEL": ("Primary servicing/onboarding channel.", "Text / categorical", "Mobile App"),
@@ -196,7 +196,7 @@ def build_dictionary_sheet(wb):
         "LOAN_AMOUNT_RANGE": ("Loan size or facility range.", "Text / categorical", "200K-3M"),
         "COVERAGE_AMOUNT": ("Coverage amount or insured amount.", "Text / categorical", "50K-150K coverage"),
         "FINANCING_TYPE": ("Conventional/Islamic financing structure or instrument type.", "Text / categorical", "Mudarabah"),
-        "PROFIT_TYPE": ("Profit basis or mode.", "Text / categorical", "Tier-based"),
+        "DEPOSIT_PROFIT_TYPE": ("Profit basis or mode.", "Text / categorical", "Tier-based"),
         "PROFIT_FREQUENCY": ("Monthly, semi-annual, maturity etc.", "Text / categorical", "Monthly"),
         "TENURE": ("Readable tenor text.", "Text / categorical", "1-5 years"),
         "TENURE_OPTIONS": ("Structured tenor menu text.", "Text / categorical", "1M -> 5Y"),

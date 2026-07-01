@@ -112,7 +112,7 @@ DEFAULT_VALUE = "N/A"
 NUMERIC_COLUMNS = {
     "MIN_AGE",
     "MAX_AGE",
-    "BANK_CUSTOMER",
+    "IS_BANK_OFFERED",
     "MIN_BALANCE",
     "AVG_BALANCE_REQUIREMENT",
     "MIN_INCOME",
@@ -547,7 +547,7 @@ field_max_lengths = {
     "LOAN_AMOUNT_RANGE": 50,
     "COVERAGE_AMOUNT": 50,
     "FINANCING_TYPE": 30,
-    "PROFIT_TYPE": 30,
+    "DEPOSIT_PROFIT_TYPE": 30,
     "PROFIT_FREQUENCY": 20,
     "TENURE": 30,
     "TENURE_OPTIONS": 50,
@@ -666,7 +666,7 @@ EXTRACTION WORKFLOW - Follow these steps:
 
 STEP 1: Extract basic identifiers
   → PRODUCT_NAME: Find product/plan name (max 50 chars)
-  → LEAD_CO_MNE: Insurance (IBG) or Bank (BNK)?
+  → LEAD_MARKER: Insurance (IBG) or Bank (BNK)?
   → PLAN_TYPE: Pick ONE word: Loan|Deposit|Savings|Card|Investment|Insurance|Service|Loyalty
 
 STEP 2: Extract customer eligibility
@@ -683,7 +683,7 @@ STEP 3: Extract financial terms
 
 STEP 4: Extract product characteristics
   → FINANCING_TYPE: Islamic|Conventional|Takaful|Mudarabah or N/A
-  → PROFIT_TYPE: Tier-based|Fixed|Variable or N/A (max 30 chars)
+  → DEPOSIT_PROFIT_TYPE: Tier-based|Fixed|Variable or N/A (max 30 chars)
   → TENURE, TENURE_OPTIONS: Format like "10-25 years" or "1M -> 5Y"
 
 STEP 5: Extract conditions (concise ONLY)
