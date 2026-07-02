@@ -26,20 +26,45 @@ If a field is not mentioned in the document, use the string "N/A".
 Never use null, None, empty string "", or NaN.
 
 RULE 2: NUMERIC FIELDS
-These fields must contain ONLY a number or "N/A" — no text, no units, no currency symbols:
+These fields must contain ONLY a whole number or "N/A" — no text, no units, no currency
+symbols, and NO decimal point (write 18, not 18.0):
 MIN_AGE, MAX_AGE, MIN_BALANCE, AVG_BALANCE_REQUIREMENT, MIN_INCOME, MIN_INCOME_USD,
-MIN_INVESTMENT, MIN_CONTRIBUTION, MIN_TERM_YEARS, MAX_TERM_YEARS, FREE_LOOK_PERIOD_DAYS
+MIN_INVESTMENT, MIN_CONTRIBUTION, MIN_TERM_YEARS, MAX_TERM_YEARS, FREE_LOOK_PERIOD_DAYS,
+IS_BANK_OFFERED
+Before writing a numeric field, strip any trailing ".0" and any thousands separators or
+currency symbols.
 
 RULE 3: SOURCE FILE
-SOURCE_FILE_PRODUCT = only the filename (e.g. "ProductName.docx"), never the full folder path.
+SOURCE_FILE_PRODUCT = only the filename of the document you were actually given
+(e.g. "ProductName.docx"), never the full folder path.
+If one input document/file describes several products, use that SAME filename for every
+product extracted from it. NEVER invent, guess, or construct a filename from the product
+name — only report the filename the source content actually came from.
 
-RULE 4: ONE PRODUCT PER JSON
+RULE 4: ONE PRODUCT PER JSON, EXTRACT EVERY PRODUCT
 Each JSON object describes exactly one product. If the document contains multiple products,
-extract each separately.
+first list every distinct product heading/section in the document, then produce one JSON
+object for each one — do not stop early and do not skip a product because it appears near
+the end of the document. Return a JSON array of these objects when more than one product is
+found. The number of JSON objects returned MUST equal the number of distinct products in the
+document.
 
 RULE 5: IS_BANK_OFFERED
 Use 1 if the product is distributed through a bank OR requires being a bank customer.
 Use "N/A" only if it is completely independent of any bank.
+
+RULE 6: NO CROSS-PRODUCT CONTAMINATION
+When a document describes multiple products, extract every field ONLY from that specific
+product's own section (its own heading, table, or paragraph block). Never reuse, copy, or
+"borrow" a value (coverage amounts, exclusions, fees, free-look period, tiers, etc.) from a
+different product in the same document just because it looks similar. If THIS product's own
+section does not mention a field, output "N/A" for it — do not fill it in from elsewhere in
+the document.
+
+RULE 7: DO NOT TRUNCATE MID-WORD
+For any field with a max character length, cut at the nearest word or punctuation boundary
+(comma, semicolon, space) so the value never ends on a broken word or number. Prefer
+shortening by dropping a trailing clause over cutting a word in half.
 
 ================================================================================
 COLUMN-BY-COLUMN RULES
@@ -94,14 +119,22 @@ COLUMN-BY-COLUMN RULES
    IMPORTANT: Do NOT assume Salaried if there is no Target Market section.
 
 8. CUSTOMER_SEGMENT (max 50 chars)
-   A short description of who the product targets.
-   Examples: "All Bank Alfalah Customers", "Female Customers and Spouse", "All Bank Customers"
+   WHO the product is for, stated as a short audience label — NOT a full eligibility
+   sentence and NOT a list of employment types.
+   Correct style: "All Bank Customers", "Female Customers and Spouse", "SME Business Owners"
+   WRONG: pasting the full eligibility/Target Market paragraph verbatim.
+   If a general "open to all customers" statement exists, summarize it as
+   "All Bank Customers" (or "All [Bank Name] Customers") rather than listing every
+   employment category named in the document.
    If not mentioned → "N/A"
 
 9. TARGET_SEGMENT (max 50 chars)
-   A more specific segment name.
-   Examples: "Education Planning", "Healthcare Coverage", "Marriage Planning", "Protection Planning"
-   Derive from TARGET_GOAL if not explicitly stated.
+   WHAT need/goal the product addresses, stated as a short 2-4 word planning label —
+   NOT a repeat of CUSTOMER_SEGMENT and NOT an eligibility description.
+   Correct style: "Education Planning", "Healthcare Coverage", "Marriage Planning",
+   "Protection Planning", "Savings Planning"
+   Derive from TARGET_GOAL if not explicitly stated (e.g. TARGET_GOAL "Health" →
+   "Healthcare Coverage").
    If not mentioned → "N/A"
 
 10. SEGMENT_TIER
@@ -124,9 +157,12 @@ COLUMN-BY-COLUMN RULES
 
 13. GENDER
     EXACTLY one of: "All" | "Male" | "Female" | "N/A"
-    - Female-only product (like Zeenat) → "Female"
-    - Male-only → "Male"
-    - Open to all → "All"
+    - Product explicitly restricted to females only → "Female"
+    - Product explicitly restricted to males only → "Male"
+    - Eligibility/target market section exists and does NOT restrict by gender → "All"
+      (this is the default whenever an eligibility section is present but silent on gender —
+      do NOT output "N/A" just because gender isn't explicitly mentioned)
+    - Use "N/A" ONLY when there is no eligibility/target market information at all
     CASE MATTERS: use exact capitalization shown above.
 
 14. IS_BANK_OFFERED
@@ -199,8 +235,13 @@ COLUMN-BY-COLUMN RULES
 
 31. FINANCING_TYPE
     EXACTLY one of: "Conventional" | "Islamic" | "Takaful" | "Mudarabah" | "N/A"
-    All Takaful plans → "Takaful"
-    If not specified → "N/A"
+    ALWAYS check the product name and description for these keywords before defaulting to
+    "N/A" — this field is frequently missed:
+    - "Takaful" appears anywhere in the product name or text → "Takaful"
+    - "Islamic", "Shariah-compliant", "Halal" → "Islamic"
+    - "Mudarabah" explicitly mentioned → "Mudarabah"
+    - No Islamic/Takaful/Shariah language anywhere → "Conventional"
+    Only use "N/A" if the document gives no basis at all to infer this.
 
 32. DEPOSIT_PROFIT_TYPE
     EXACTLY one of: Variable | Tier-based | Fixed | Bonus-based | Bonus-based & Unit-linked | N/A
@@ -214,6 +255,9 @@ COLUMN-BY-COLUMN RULES
     
     IMPORTANT: "Bonus-based & Unit-linked" means the product explicitly mentions BOTH a bonus allocation
     (e.g. Yr6+ 3% bonus) AND unit-linked investment. Do NOT use this for plain unit-linked plans.
+    Apply these rules to EVERY savings/investment/endowment product individually — do not
+    leave this field blank or "N/A" for a savings-type product just because an earlier
+    product in the same document already got a value.
 
 33. DEPOSIT_PROFIT_FREQUENCY
     EXACTLY one of: Monthly | Quarterly | Semi-annual | Annual | At Maturity | N/A
@@ -223,12 +267,16 @@ COLUMN-BY-COLUMN RULES
     - This field = when the customer RECEIVES profit/returns
     
     RULES:
-    - Health/protection insurance (Shifa, Zaamin) → "N/A"
+    - Pure health/protection (no savings/investment component) → "N/A"
     - Savings/investment/endowment plans → "At Maturity" (DEFAULT — profit paid when plan matures)
     - Only override default if document explicitly says "annual profit distribution"
+    - Apply this default to EVERY qualifying product in the document, even the last ones
+      processed — do not skip it.
 
 34. TENURE (max 30 chars)
     Readable format: "1 year", "10-25 years", "1 year, yearly renewable"
+    If the document gives a minimum AND a maximum term (or a minimum term plus a maximum
+    attained/coverage age), report the full range "MIN-MAX years", not just the minimum.
     For yearly renewable plans → mention "yearly renewable"
 
 35. TENURE_OPTIONS (max 50 chars)
@@ -259,21 +307,25 @@ COLUMN-BY-COLUMN RULES
     A concise summary of what the product is and does.
 
 45. PROVIDER_NAME (max 100 chars)
-    The insurer or bank offering the product.
+    The insurer or bank offering the product, plus the distribution channel if stated.
+    Format: "[Underwriting Insurer/Provider], distributed/administered via [Bank Name]"
     Example: "IGI Life Insurance (WTO), distributed via Bank Alfalah Ltd"
-    Example: "Jubilee Life Insurance Company Ltd (WTO), distributed via Bank Alfalah Ltd"
-    Example: "State Life Insurance Corporation (SLIC), administered via Bank Alfalah Ltd"
-    If not mentioned → "N/A"
+    Look for words like "Underwritten by", "Underwriter", or a provider logo/name near the
+    product heading — this is almost always present for insurance/takaful products, so only
+    use "N/A" after checking the full document for any provider/underwriter mention.
 
 46. PRODUCT_VARIANT_TIER (max 50 chars)
     Tier/variant/package names if stated.
     Example: "Bronze, Silver, Gold, Platinum" or "Plan A, Plan B" or "N/A"
 
 47. PRICING_RATE (max 50 chars)
-    Rate, contribution amount, or pricing summary.
+    Rate, contribution amount, or pricing summary — check any pricing/contribution table,
+    "minimum contribution", or premium schedule for this specific product before using "N/A".
     Example: "Bronze:5000, Silver:10000, Gold:15000 PKR/yr"
     Example: "Min contribution PKR 25,000/yr"
-    If not mentioned → "N/A"
+    If MIN_CONTRIBUTION or a tiered price table is present for this product, PRICING_RATE
+    must not be "N/A".
+    If truly not mentioned anywhere → "N/A"
 
 48. FEES_AND_CHARGES (max 200 chars)
     Concise fee summary. Key fees only.
@@ -351,92 +403,67 @@ STEP 8: Extract SPECIAL_CONDITIONS (max 200 chars)
 STEP 9: Extract benefits, riders, documents, claims contact, exclusions
 
 STEP 10: VALIDATE before output:
-  ☑ All 55 fields present
+  ☑ One JSON object exists for EVERY distinct product found in the document (recount them)
+  ☑ All 55 fields present in each object
   ☑ No null/None/NaN values — use "N/A"
-  ☑ GENDER is exactly "All", "Male", "Female", or "N/A" (exact case)
+  ☑ GENDER is exactly "All", "Male", "Female", or "N/A" (exact case); default "All" when
+    eligibility exists but doesn't restrict gender
   ☑ CURRENCY_TYPE is exactly "PKR", "FCY", "PKR + FCY", or "N/A"
   ☑ CUSTOMER_TYPE has exactly ONE value (no commas)
   ☑ PLAN_TYPE is one word
-  ☑ Numeric fields contain ONLY numbers or "N/A"
-  ☑ SPECIAL_CONDITIONS is under 200 characters
-  ☑ SOURCE_FILE_PRODUCT has no folder path
-  ☑ IS_BANK_OFFERED = 1 for all Banca Takaful products
-  ☑ DEPOSIT_PROFIT_TYPE = "N/A" for health/protection insurance
-  ☑ DEPOSIT_PROFIT_FREQUENCY = "N/A" for health/protection insurance
+  ☑ Numeric fields contain ONLY whole numbers (no ".0") or "N/A"
+  ☑ SPECIAL_CONDITIONS is under 200 characters, cut at a word boundary
+  ☑ SOURCE_FILE_PRODUCT has no folder path, and is identical across all products from the
+    same source document
+  ☑ DEPOSIT_PROFIT_TYPE / DEPOSIT_PROFIT_FREQUENCY = "N/A" only for pure health/protection
+    products with no savings/investment component
   ☑ ACCOUNT_TYPE = "N/A" for insurance plans
-  ☑ No markdown — output ONLY the JSON object
+  ☑ No value in any field was copied from a different product's section
+  ☑ No markdown — output ONLY the JSON object(s)
 
 ================================================================================
-PRODUCT-SPECIFIC QUICK REFERENCE
+GENERAL PATTERN REFERENCE (applies to any bank/insurer/product)
 ================================================================================
 
-Alfalah Insurance Zaamin Takaful Plan:
-  - EMPLOYMENT_TYPE = "N/A" (no Target Market section for Zaamin)
-  - CARD_TYPE = "Debit" (linked to Alfalah Debit Card)
-  - DEPOSIT_PROFIT_TYPE = "N/A" (protection plan)
-  - DEPOSIT_PROFIT_FREQUENCY = "N/A" (protection plan)
-  - FREE_LOOK_PERIOD_DAYS = "N/A" (not mentioned for Zaamin)
-  - COVERAGE_AMOUNT = "Bronze:500K, Silver:1M, Gold:1.5M, Platinum:1.75M"
+Use these general patterns instead of memorizing specific products:
 
-IGI LIFE WTO Shifa Takaful Plan:
-  - EMPLOYMENT_TYPE = "N/A" (no Target Market section for Shifa)
-  - SEGMENT_TIER = "Mass Market" (health plan, open to all)
-  - DEPOSIT_PROFIT_TYPE = "N/A" (health insurance)
-  - DEPOSIT_PROFIT_FREQUENCY = "N/A" (health insurance)
-  - MIN_CONTRIBUTION = "N/A" (age-tiered, no single minimum)
-  - MAX_AGE = 75 (renewable to 75, entry max is 59 — use 75 since that is the outer limit)
-  - ACCOUNT_TYPE = "N/A" (not a bank account)
-
-IGI LIFE WTO Zeenat Takaful Plan:
-  - GENDER = "Female" (female-specific plan)
-  - SEGMENT_TIER = "Niche" (female-only → Niche)
-  - MAX_AGE = 65 (entry age limit)
-  - MAX_TERM_YEARS = 67 (max term = 85 - 18)
-
-IGI LIFE WTO Zindagi Premier Takaful Savings Plan:
-  - SEGMENT_TIER = "Premium" (MIN_CONTRIBUTION = 250000 ≥ 250000)
-  - SERVICE_TYPE = "Wellness Savings" (linked to Vitality)
-  - REWARD_TYPE = "Vitality Points"
-  - MAX_AGE = 65 (entry age limit; 85 is max attained age)
-  - BUSINESS_TENURE = "N/A" (not an SME product)
-  - CURRENCY_TYPE = "PKR" (no FCY mentioned)
-  - ACCOUNT_TYPE = "N/A" (insurance plan, not a bank account)
-
-JUBILEE KAMIL TAKAFUL SAVINGS PLAN:
-  - PRODUCT_NAME = "Jubilee Kamil Takaful Savings Plan" (normalize case)
-  - CUSTOMER_TYPE = "Retail" (not "Salaried Individuals")
-  - IS_BANK_OFFERED = 1 (distributed via Bank Alfalah)
-  - DEPOSIT_PROFIT_TYPE = "Bonus-based & Unit-linked" (unit allocation + bonus from Yr6)
-  - DEPOSIT_PROFIT_FREQUENCY = "At Maturity" (NOT "Yearly")
-
-SLIC Tayyab Takaful Endowment Plan:
-  - CUSTOMER_TYPE = "Retail" (not "Salaried")
-  - IS_BANK_OFFERED = 1 (administered via Bank Alfalah)
-  - DEPOSIT_PROFIT_TYPE = "Bonus-based & Unit-linked" (hybrid)
-  - TENURE_OPTIONS = "Annual contributions; Ad-hoc 100% allocation"
-
-IGI LIFE WTO Uroos Marriage Plan:
-  - TARGET_GOAL = "Marriage" (Uroos = Marriage)
-  - SERVICE_TYPE = "Marriage Planning"
-  - PRODUCT_DESCRIPTION: about marriage planning, not education
-
-IGI LIFE WTO Danish Education Plan:
-  - MAX_AGE = 55 (eligibility says 18 to 55, not 65)
-  - SERVICE_TYPE = "Education Planning"
-  - TENURE_OPTIONS = "Annual, Semi-Annual, Quarterly contributions"
+- PRODUCT_NAME: normalize casing/spacing from the heading; do not output an ALL-CAPS
+  heading verbatim if the rest of the document uses normal title case.
+- CUSTOMER_TYPE: if the product is open to all bank customers regardless of employment
+  type, use "Retail" even if a Target Market list happens to mention "Salaried" first.
+- Products with no dedicated "Target Market" section but sold through a bank branch are
+  still bank-offered (IS_BANK_OFFERED = 1); the absence of a Target Market section affects
+  EMPLOYMENT_TYPE, not IS_BANK_OFFERED.
+- MAX_AGE: use the ENTRY age limit from eligibility, not a "renewable to" or "maximum
+  attained age" figure — UNLESS the product has no separate entry-age cutoff, in which case
+  use the one age limit that is given.
+- A product name containing a purpose word (Education, Marriage, Health, Protection,
+  Savings, Retirement, etc., in any language used by the source bank) should drive
+  TARGET_GOAL and SERVICE_TYPE consistently with the mapping in Rule 19.
+- SEGMENT_TIER, DEPOSIT_PROFIT_TYPE/FREQUENCY, ACCOUNT_TYPE, CARD_TYPE, TENURE_OPTIONS:
+  apply the decision rules in their own numbered sections above to each product's own
+  content — never copy a sibling product's resolved value.
 
 ================================================================================
 OUTPUT FORMAT
 ================================================================================
 
-Return ONLY a valid JSON object. No markdown, no backticks, no explanation:
+Return ONLY valid JSON. No markdown, no backticks, no explanation.
 
+Single product → one JSON object:
 {
   "PRODUCT_NAME": "value",
   "LEAD_MARKER": "IBG",
   ...all 55 fields...
   "TAX_ZAKAT_TREATMENT": "N/A"
 }
+
+Multiple products in one document → a JSON array with one complete object per product,
+covering every product found in the document:
+[
+  { "PRODUCT_NAME": "value", ...all 55 fields... },
+  { "PRODUCT_NAME": "value", ...all 55 fields... }
+]
 
 ================================================================================
 COMMON MISTAKES TO AVOID FOR SMALL MODELS
@@ -485,11 +512,24 @@ MISTAKE 12: CUSTOMER_TYPE = "Salaried Individuals"
 MISTAKE 13: PLAN_TYPE = "Savings" for a Takaful savings plan
   Takaful savings plans are still Insurance → PLAN_TYPE = "Insurance"
 
-MISTAKE 14: TARGET_GOAL = nan for products with clear purpose
-  Uroos = Marriage, Saholat/Tadbeer/Zeenat/Zindagi/SLIC/Jubilee = Savings, Banca IBG = Savings
+MISTAKE 14: TARGET_GOAL = "N/A" when the product name or description clearly implies a
+  purpose (education, marriage, health, protection, savings, retirement, etc.)
+  Always resolve TARGET_GOAL to a concrete value if any purpose keyword exists.
 
 MISTAKE 15: SPECIAL_CONDITIONS containing fee schedules or full feature lists
   Keep it under 200 chars with only critical conditions (look period, waiting periods, key restrictions)
+
+MISTAKE 16: Copying a field value (coverage tiers, exclusions, fees, riders) from one
+  product into a different product in the same document because they look similar
+  Extract every field strictly from that product's own section; use "N/A" if that
+  product's own section doesn't mention it.
+
+MISTAKE 17: Writing numeric fields with a trailing decimal, e.g. "18.0" or "250000.0"
+  Always output whole numbers as plain integers: "18", "250000"
+
+MISTAKE 18: Stopping partway through a multi-product document and leaving remaining
+  products (especially ones near the end) mostly "N/A" or omitting them entirely
+  Count all product sections first, then produce a complete object for each one.
 
 ================================================================================
 REMINDER FOR QWEN2.5-3B
@@ -497,12 +537,15 @@ REMINDER FOR QWEN2.5-3B
 
 You must:
 1. Return ONLY JSON — no text before or after
-2. Include all 55 fields
+2. Include all 55 fields for EVERY product in the document (never skip a product)
 3. Never use null, NaN, nan, or empty string — always use "N/A"
-4. Keep GENDER as exactly "All", "Male", or "Female"
+4. Keep GENDER as exactly "All", "Male", or "Female"; default to "All" when eligibility
+   exists but doesn't mention gender
 5. Keep CUSTOMER_TYPE as exactly one allowed value
-6. Set numeric fields to numbers only (no PKR, no commas, no text)
-7. Set SOURCE_FILE_PRODUCT to filename only
-8. Set SPECIAL_CONDITIONS to under 200 characters
-9. Set DEPOSIT_PROFIT_TYPE and DEPOSIT_PROFIT_FREQUENCY to "N/A" for health/protection plans
+6. Set numeric fields to plain whole numbers only — no PKR, no commas, no text, no ".0"
+7. Set SOURCE_FILE_PRODUCT to filename only, identical for every product from the same file
+8. Set SPECIAL_CONDITIONS to under 200 characters, cut at a word boundary
+9. Set DEPOSIT_PROFIT_TYPE and DEPOSIT_PROFIT_FREQUENCY to "N/A" only for pure
+   health/protection plans with no savings component
 10. Set ACCOUNT_TYPE to "N/A" for insurance/takaful plans
+11. Never copy a field value from a different product in the same document
