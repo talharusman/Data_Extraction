@@ -32,6 +32,12 @@ FIXED VERSION: All three prompt functions now properly use SYSTEM_PROMPT
 - build_prompt(): Already correct, no changes
 - build_repair_prompt(): FIXED - now includes SYSTEM_PROMPT + typo removed
 - build_validation_prompt(): FIXED - now includes SYSTEM_PROMPT
+
+FIX (SOURCE_FILE_PRODUCT): This field used to store the full absolute file
+path (e.g. ".../Documents/Banca Takaful/Alfalah Insurance Zaamin Takaful
+Plan.docx"). It now stores just the source filename (e.g. "Plan.docx")
+instead. Changes are in build_index_from_files(), blank_record(), and
+normalize_record() - search for "filename" to find them.
 """
 from __future__ import annotations
 
@@ -133,12 +139,12 @@ SUPPORTED_EXTENSIONS = {".txt", ".pdf", ".docx", ".doc", ".csv", ".json", ".xlsx
 def load_system_prompt(prompt_file: str = "EXTRACTION_SYSTEM_PROMPT.txt") -> str:
     """
     Load the system prompt from a separate file.
-    
+
     Looks for the prompt file in this order:
     1. Current directory
     2. Same directory as this script
     3. Parent directory
-    
+
     If not found, raises an error.
     """
     search_paths = [
@@ -146,12 +152,12 @@ def load_system_prompt(prompt_file: str = "EXTRACTION_SYSTEM_PROMPT.txt") -> str
         Path(__file__).parent / prompt_file,
         Path(__file__).parent.parent / prompt_file,
     ]
-    
+
     for prompt_path in search_paths:
         if prompt_path.exists() and prompt_path.is_file():
             print(f"✓ Loaded system prompt from: {prompt_path.resolve()}")
             return prompt_path.read_text(encoding="utf-8")
-    
+
     # Not found - provide helpful error message
     raise FileNotFoundError(
         f"\n{'='*70}\n"
@@ -370,6 +376,10 @@ def build_index_from_files(files: list[Path]) -> list[dict]:
                 "product_no": i,
                 "title": path.stem.replace("_", " ").replace("-", " "),
                 "file": str(path),
+                # FIX: added so SOURCE_FILE_PRODUCT can store just the
+                # immediate parent folder name (e.g. "Banca Takaful")
+                # instead of the full absolute file path.
+                "folder": path.parent.name,
                 "_abs_path": path.resolve(),
             }
         )
@@ -527,7 +537,9 @@ def parse_json_blob(raw):
 def blank_record(entry):
     record = {col: DEFAULT_VALUE for col in COLUMNS}
     record["PRODUCT_NAME"] = entry["title"]
-    record["SOURCE_FILE_PRODUCT"] = entry["file"]
+    # FIX: was entry["file"] (full absolute path). Now stores just the
+    # immediate parent folder name, e.g. "Banca Takaful".
+    record["SOURCE_FILE_PRODUCT"] = entry["folder"]
     return record
 
 
@@ -572,6 +584,18 @@ field_max_lengths = {
 }
 
 
+def truncate_to_boundary(value: str, max_len: int) -> str:
+    """Truncate text at a word or punctuation boundary when possible."""
+    if len(value) <= max_len:
+        return value
+
+    cut = value[:max_len].rstrip()
+    boundary = max(cut.rfind(" "), cut.rfind(","), cut.rfind(";"), cut.rfind(":"), cut.rfind("-"))
+    if boundary > 0:
+        return cut[:boundary].rstrip(" ,;:-/")
+    return cut
+
+
 def normalize_record(record, entry):
     """Normalize extracted record with aggressive conciseness enforcement."""
     if not isinstance(record, dict):
@@ -601,7 +625,7 @@ def normalize_record(record, entry):
         if col in field_max_lengths and isinstance(value, str):
             max_len = field_max_lengths[col]
             if len(value) > max_len:
-                value = value[:max_len].strip()
+                value = truncate_to_boundary(value, max_len)
 
         # Special case: CUSTOMER_TYPE - ONE value only
         if col == "CUSTOMER_TYPE" and isinstance(value, str):
@@ -642,7 +666,7 @@ def normalize_record(record, entry):
         normalized[col] = value
 
     normalized["PRODUCT_NAME"] = record.get("PRODUCT_NAME") or entry["title"]
-    normalized["SOURCE_FILE_PRODUCT"] = entry["file"]
+    normalized["SOURCE_FILE_PRODUCT"] = entry["filename"]
 
     return normalized
 
@@ -667,8 +691,8 @@ def build_prompt(entry, chunk, tokenizer, chunk_idx=1, chunk_total=1):
     else:
         chunk_note = ""
 
-        user_msg = f"""Product title: {entry['title']}
-Source file: {entry['file']}
+    user_msg = f"""Product title: {entry['title']}
+Source file: {entry['filename']}
 {chunk_note}--- PRODUCT TEXT START ---
 {chunk}
 --- PRODUCT TEXT END ---
@@ -741,13 +765,13 @@ VALIDATION RULES - Check each rule and FIX if violated:
 
 1. CUSTOMER_TYPE: Is it ONE value only (no commas)?
    ✓ "Salaried"  ✗ "Salaried, Self-Employed, Corporate"
-   
+
 2. GENDER: Is it exactly one of: Male|Female|All|N/A?
    ✓ "Female"  ✗ "Male or Female"
-   
+
 3. PLAN_TYPE: Is it ONE word from: Loan|Deposit|Savings|Card|Investment|Insurance|Service|Loyalty?
    ✓ "Savings"  ✗ "Savings and Protection"
-   
+
 4. Text field lengths - Are they within limits?
    - PRODUCT_NAME ≤ 50 chars
     - PRODUCT_DESCRIPTION ≤ 250 chars
@@ -765,11 +789,11 @@ VALIDATION RULES - Check each rule and FIX if violated:
    - CUSTOMER_TYPE ≤ 25 chars
    - TENURE ≤ 30 chars
    - SPECIAL_CONDITIONS ≤ 200 chars
-   
+
 5. Numeric fields - Do they contain ONLY numbers (no currency/text)?
     ✓ "250000"  ✗ "PKR 250,000" or "25000 per month"
     - FREE_LOOK_PERIOD_DAYS is numeric too
-   
+
 6. SPECIAL_CONDITIONS - Is it concise, max 200 chars?
    ✓ "Free 14-day look, waiting period 90 days"
    ✗ "Free 14-day look period, optional riders, death benefit includes sum covered plus PIA value, maturity benefit..."

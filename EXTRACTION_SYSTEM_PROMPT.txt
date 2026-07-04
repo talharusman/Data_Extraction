@@ -445,27 +445,16 @@ Use these general patterns instead of memorizing specific products:
   content — never copy a sibling product's resolved value.
 
 ================================================================================
-OUTPUT FORMAT
+FINAL OUTPUT RULES
 ================================================================================
 
 Return ONLY valid JSON. No markdown, no backticks, no explanation.
-
-Single product → one JSON object:
-{
-  "PRODUCT_NAME": "value",
-  "LEAD_MARKER": "IBG",
-  ...all 55 fields...
-  "TAX_ZAKAT_TREATMENT": "N/A"
-}
-
-Multiple products in one document → a JSON array with one complete object per product,
-covering every product found in the document:
-[
-  { "PRODUCT_NAME": "value", ...all 55 fields... },
-  { "PRODUCT_NAME": "value", ...all 55 fields... }
-]
-
-================================================================================
+Single product → one JSON object with all 55 fields.
+Multiple products in one document → a JSON array with one complete object per product.
+Keep values concise, use "N/A" for anything not explicitly mentioned, keep GENDER as
+exactly All|Male|Female|N/A, keep CUSTOMER_TYPE to one allowed value, keep numeric
+fields as plain whole numbers, set SOURCE_FILE_PRODUCT to the filename only, and do
+not copy values across products.
 COMMON MISTAKES TO AVOID FOR SMALL MODELS
 ================================================================================
 
