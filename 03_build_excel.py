@@ -221,6 +221,7 @@ def build_dictionary_sheet(wb):
         "CLAIMS_SERVICE_CONTACT": ("Claims or service contact details.", "Text / categorical", "Call center 111-111-111"),
         "KEY_EXCLUSIONS": ("Main exclusions or limitations.", "Text / categorical", "Pre-existing conditions excluded"),
         "TAX_ZAKAT_TREATMENT": ("Tax or zakat treatment note.", "Text / categorical", "Zakat applicable"),
+        "PREMIUM_PAYMENT_FREQUENCY": ("Frequency at which premiums/contributions may be paid, when explicitly stated (e.g., Annual, Semi-Annual, Quarterly, Monthly).", "Text / categorical", "Annual"),
     }
 
     for r_idx, col_name in enumerate(COLUMNS, start=3):

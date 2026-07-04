@@ -1,5 +1,5 @@
 """
- Step 2: Extract the fixed 56-column schema as JSON from product files.
+Step 2: Extract the fixed 56-column schema as JSON from product files.
 ENHANCED with 3 advanced prompting techniques:
   1. Few-shot examples showing correct vs incorrect extraction
   2. Step-by-step extraction workflow
@@ -28,16 +28,25 @@ Configure the model through .env:
 Resumable: already-extracted products (present in OUT_JSONL) are skipped,
 so you can safely re-run after an interruption.
 
-FIXED VERSION: All three prompt functions now properly use SYSTEM_PROMPT
-- build_prompt(): Already correct, no changes
-- build_repair_prompt(): FIXED - now includes SYSTEM_PROMPT + typo removed
-- build_validation_prompt(): FIXED - now includes SYSTEM_PROMPT
-
-FIX (SOURCE_FILE_PRODUCT): This field used to store the full absolute file
-path (e.g. ".../Documents/Banca Takaful/Alfalah Insurance Zaamin Takaful
-Plan.docx"). It now stores just the source filename (e.g. "Plan.docx")
-instead. Changes are in build_index_from_files(), blank_record(), and
-normalize_record() - search for "filename" to find them.
+CHANGES IN THIS VERSION:
+- Added PREMIUM_PAYMENT_FREQUENCY as the 56th column (injected if missing from
+  pipeline_config to maintain backward compatibility).
+- PLAN_TYPE normalization now accepts Protection and Health in addition to the
+  original set.
+- FINANCING_TYPE normalization added: maps "unit linked", "hybrid" patterns to
+  canonical values.
+- PRODUCT_NAME normalization: ALL-CAPS product names are converted to Title Case.
+- OPTIONAL_RIDERS normalization: ensures comma-separated output.
+- Updated field_max_lengths to match corrected-dataset ground-truth lengths
+  (PRICING_RATE 400, FEES_AND_CHARGES 300, KEY_BENEFITS 250, OPTIONAL_RIDERS 300,
+  TENURE 50, TARGET_GOAL 50, COVERAGE_AMOUNT 150, ELIGIBILITY_TYPE 100,
+  EMPLOYMENT_TYPE 500, FINANCING_TYPE 50, PREMIUM_PAYMENT_FREQUENCY 50).
+- Repair prompt is now a compact focused version (no full SYSTEM_PROMPT duplication)
+  to stay within Qwen2.5-3B's context limit during error recovery.
+- Validation prompt updated with corrected field rules (GENDER, DEPOSIT_PROFIT,
+  FINANCING_TYPE, TENURE_OPTIONS vs PREMIUM_PAYMENT_FREQUENCY, etc.).
+- MAX_NEW_TOKENS default raised to 1500 to accommodate 56-field JSON with
+  longer EMPLOYMENT_TYPE and PRICING_RATE values.
 """
 from __future__ import annotations
 
@@ -75,44 +84,33 @@ from pipeline_config import (
 
 load_local_env()
 
+# ---------------------------------------------------------------------------
+# Inject PREMIUM_PAYMENT_FREQUENCY if pipeline_config was not yet updated.
+# This keeps the script backward-compatible: older pipeline_config files that
+# only define 55 columns will still work; the 56th column is added here.
+# ---------------------------------------------------------------------------
+_NEW_COLUMNS = ["PREMIUM_PAYMENT_FREQUENCY"]
+for _col in _NEW_COLUMNS:
+    if _col not in COLUMNS:
+        COLUMNS = list(COLUMNS) + [_col]
+
 MODEL_NAME = os.environ.get("HF_MODEL_NAME_OR_PATH", "").strip()
 MODEL_CLASS = os.environ.get("HF_MODEL_CLASS", "causal").strip().lower()
 LOCAL_FILES_ONLY = env_bool("HF_LOCAL_FILES_ONLY", True)
 TRUST_REMOTE_CODE = env_bool("HF_TRUST_REMOTE_CODE", False)
-MAX_NEW_TOKENS = env_int("HF_MAX_NEW_TOKENS", 1000)
+# Raised from 1000 to 1500: 56-field JSON with long EMPLOYMENT_TYPE and
+# PRICING_RATE values can approach ~1100 tokens; 1500 gives safe headroom.
+MAX_NEW_TOKENS = env_int("HF_MAX_NEW_TOKENS", 1500)
 TEMPERATURE = env_float("HF_TEMPERATURE", 0.0)
 TOP_P = env_float("HF_TOP_P", 1.0)
 REPETITION_PENALTY = env_float("HF_REPETITION_PENALTY", 1.03)
-# FIX: TEXT_CHUNK_SIZE used to be 15000 chars and was sent in ONE shot
-# together with the ~8000-token system prompt, which spiked prefill memory
-# enough to OOM on a single generate() call before any token was even
-# produced. It's now the size of each CHUNK (documents longer than this are
-# split into multiple smaller calls and the results are merged - see
-# chunk_text() / extract_one_product()).
 TEXT_CHUNK_SIZE = env_int("TEXT_CHUNK_SIZE", 6000)
 TEXT_CHUNK_OVERLAP = env_int("TEXT_CHUNK_OVERLAP", 300)
 LOAD_IN_4BIT = env_bool("HF_LOAD_IN_4BIT", False)
 LOAD_IN_8BIT = env_bool("HF_LOAD_IN_8BIT", False)
 DEVICE_MAP = os.environ.get("HF_DEVICE_MAP", "auto").strip() or "auto"
 TORCH_DTYPE = os.environ.get("HF_TORCH_DTYPE", "auto").strip().lower()
-
-# FIX (root cause of the "OOM on the very first generate() call" behavior):
-# With device_map="auto", Accelerate is free to pack model weights onto the
-# GPU up to (almost) its full physical capacity, because by default it has
-# no idea you also need room left over for the KV-cache/activations that
-# generate() allocates on top of the weights. On a ~14-15GB Colab GPU this
-# means the model alone can end up occupying 13+ GB, leaving well under 1GB
-# free - so the very first generate() call (which needs a few hundred MB for
-# activations) fails immediately, before it even gets to process a large
-# prompt. HF_GPU_RESERVE_GIB tells the loader to hold back this much GPU
-# memory from the weight placement step, guaranteeing headroom for inference.
 GPU_RESERVE_GIB = env_float("HF_GPU_RESERVE_GIB", 3.0)
-
-# FIX: chunking is what lets one call's prefill stay small instead of
-# stuffing (system prompt + entire document) into a single generate() call.
-# It is kept as a togglable flag (not deleted) because turning it off just
-# brings back the original large-single-prompt OOM risk on the longer
-# documents in this dataset - see the note in extract_one_product() below.
 ENABLE_CHUNKING = env_bool("ENABLE_CHUNKING", True)
 DEFAULT_VALUE = "N/A"
 NUMERIC_COLUMNS = {
@@ -158,7 +156,6 @@ def load_system_prompt(prompt_file: str = "EXTRACTION_SYSTEM_PROMPT.txt") -> str
             print(f"✓ Loaded system prompt from: {prompt_path.resolve()}")
             return prompt_path.read_text(encoding="utf-8")
 
-    # Not found - provide helpful error message
     raise FileNotFoundError(
         f"\n{'='*70}\n"
         f"ERROR: System prompt file not found!\n"
@@ -394,9 +391,9 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
     process chunk_size characters instead of the whole document at once.
 
     Breaks are made on a paragraph/sentence boundary near chunk_size where
-    possible (instead of a hard character cut) so a field's value isn't
-    split mid-sentence across two chunks. A small overlap is carried into
-    the next chunk so context right at a boundary isn't lost.
+    possible so a field's value isn't split mid-sentence across two chunks.
+    A small overlap is carried into the next chunk so context right at a
+    boundary isn't lost.
     """
     text = text.strip()
     if len(text) <= chunk_size:
@@ -433,7 +430,7 @@ def merge_records(accumulated: dict, new_record: dict, columns) -> dict:
     Merge a single chunk's extracted record into the running accumulated
     record for the product. A field is filled in from this chunk only if it
     hasn't already been found (still DEFAULT_VALUE/empty) in an earlier
-    chunk - first chunk to find a real value for a field wins.
+    chunk — first chunk to find a real value for a field wins.
     """
     for col in columns:
         old = accumulated.get(col)
@@ -529,7 +526,7 @@ def parse_json_blob(raw):
 
 
 # ============================================================================
-# Record helpers with aggressive normalization
+# Record helpers with normalization
 # ============================================================================
 
 def blank_record(entry):
@@ -553,37 +550,40 @@ def get_source_filename(entry) -> str:
     return entry.get("title", DEFAULT_VALUE)
 
 
+# Updated max lengths to match corrected-dataset ground-truth observations.
+# Fields absent from this dict are not truncated (e.g. EMPLOYMENT_TYPE can
+# be a long semicolon-separated Target Market list).
 field_max_lengths = {
     "PRODUCT_NAME": 50,
     "PRODUCT_DESCRIPTION": 250,
     "PROVIDER_NAME": 100,
     "PRODUCT_VARIANT_TIER": 50,
-    "PRICING_RATE": 50,
-    "FEES_AND_CHARGES": 200,
-    "KEY_BENEFITS": 200,
-    "OPTIONAL_RIDERS": 200,
+    "PRICING_RATE": 400,           # age-band pricing tables can be ~370 chars
+    "FEES_AND_CHARGES": 300,       # detailed fee schedules up to ~256 chars
+    "KEY_BENEFITS": 250,           # benefits list up to ~212 chars
+    "OPTIONAL_RIDERS": 300,        # rider lists up to ~253 chars
     "REQUIRED_DOCUMENTS": 200,
     "CLAIMS_SERVICE_CONTACT": 200,
     "KEY_EXCLUSIONS": 200,
     "TAX_ZAKAT_TREATMENT": 100,
     "PLAN_TYPE": 15,
-    "TARGET_GOAL": 30,
+    "TARGET_GOAL": 50,             # "Children's Education Planning" style values
     "CUSTOMER_TYPE": 25,
-    "EMPLOYMENT_TYPE": 20,
+    "EMPLOYMENT_TYPE": 500,        # full Target Market list ~334 chars
     "ACCOUNT_TYPE": 20,
     "CARD_TYPE": 25,
     "CHANNEL": 30,
-    "ELIGIBILITY_TYPE": 50,
+    "ELIGIBILITY_TYPE": 100,       # brief eligibility summaries up to ~52 chars
     "SERVICE_TYPE": 25,
     "REWARD_TYPE": 25,
     "CURRENCY": 30,
     "CURRENCY_TYPE": 15,
     "LOAN_AMOUNT_RANGE": 50,
-    "COVERAGE_AMOUNT": 50,
-    "FINANCING_TYPE": 30,
+    "COVERAGE_AMOUNT": 150,        # tier coverage descriptions up to ~94 chars
+    "FINANCING_TYPE": 50,          # "Hybrid (Bonus Based and Unit Linked)" = 36 chars
     "DEPOSIT_PROFIT_TYPE": 30,
     "DEPOSIT_PROFIT_FREQUENCY": 20,
-    "TENURE": 30,
+    "TENURE": 50,                  # "10-67 years (up to attained age of 85)" = 38 chars
     "TENURE_OPTIONS": 50,
     "BUSINESS_TENURE": 30,
     "COLLATERAL_TYPE": 50,
@@ -591,6 +591,7 @@ field_max_lengths = {
     "DBR_LIMIT": 20,
     "TRANSACTION_LIMIT": 50,
     "SPECIAL_CONDITIONS": 200,
+    "PREMIUM_PAYMENT_FREQUENCY": 50,
 }
 
 
@@ -606,8 +607,88 @@ def truncate_to_boundary(value: str, max_len: int) -> str:
     return cut
 
 
+def _normalize_plan_type(value: str) -> str:
+    """
+    Normalize PLAN_TYPE to exactly one of the allowed values.
+    Now includes Protection and Health in addition to the original set.
+    """
+    # Expanded set includes Protection and Health added in corrected dataset.
+    valid_types = {
+        "Loan", "Deposit", "Savings", "Card", "Investment",
+        "Insurance", "Service", "Loyalty", "Protection", "Health",
+    }
+    stripped = value.strip()
+    # Exact match first (case-sensitive)
+    if stripped in valid_types:
+        return stripped
+    # Case-insensitive exact match
+    for vt in valid_types:
+        if stripped.lower() == vt.lower():
+            return vt
+    # Find the first valid type word inside the value
+    for word in re.split(r"[\s,;/]+", stripped):
+        word_clean = word.strip(".,;:()")
+        if word_clean in valid_types:
+            return word_clean
+        for vt in valid_types:
+            if word_clean.lower() == vt.lower():
+                return vt
+    return DEFAULT_VALUE
+
+
+def _normalize_financing_type(value: str) -> str:
+    """
+    Normalize FINANCING_TYPE to a canonical form.
+    Added Unit Linked and Hybrid (Bonus Based and Unit Linked) per corrected dataset.
+    """
+    stripped = value.strip()
+    lower = stripped.lower()
+
+    # Hybrid check first (most specific)
+    if "hybrid" in lower or ("bonus" in lower and "unit" in lower):
+        return "Hybrid (Bonus Based and Unit Linked)"
+
+    # Unit Linked
+    if "unit linked" in lower or "unit-linked" in lower:
+        return "Unit Linked"
+
+    # Known single-word canonicals
+    canonical_map = {
+        "conventional": "Conventional",
+        "islamic": "Islamic",
+        "takaful": "Takaful",
+        "mudarabah": "Mudarabah",
+        "mudarabah": "Mudarabah",
+    }
+    for key, canonical in canonical_map.items():
+        if key in lower:
+            return canonical
+
+    # Pass through if already in a known exact form
+    known_exact = {
+        "Conventional", "Islamic", "Takaful", "Mudarabah",
+        "Unit Linked", "Hybrid (Bonus Based and Unit Linked)", DEFAULT_VALUE,
+    }
+    if stripped in known_exact:
+        return stripped
+
+    # Unknown value — preserve as-is (don't silently discard it)
+    return stripped
+
+
 def normalize_record(record, entry):
-    """Normalize extracted record with aggressive conciseness enforcement."""
+    """
+    Normalize an extracted record with corrections for all known model errors.
+
+    Key normalization rules applied here:
+    - PRODUCT_NAME: ALL-CAPS converted to Title Case
+    - PLAN_TYPE: expanded valid set (Protection, Health now accepted)
+    - FINANCING_TYPE: canonical Unit Linked / Hybrid mapping
+    - GENDER: strict allowed-value enforcement
+    - CUSTOMER_TYPE: single-value enforcement
+    - Numeric fields: strip units, commas, currency symbols
+    - All text fields: truncated at word boundary to max length
+    """
     if not isinstance(record, dict):
         return blank_record(entry)
 
@@ -619,95 +700,158 @@ def normalize_record(record, entry):
         if value in (None, "", []):
             value = DEFAULT_VALUE
 
+        # ----------------------------------------------------------------
         # Numeric columns: numbers ONLY
+        # ----------------------------------------------------------------
         if col in NUMERIC_COLUMNS and isinstance(value, str):
             stripped = value.strip()
             if not stripped or stripped.upper() == DEFAULT_VALUE:
                 value = DEFAULT_VALUE
             else:
-                match = re.match(r'^(\d+(?:\.\d+)?)', stripped)
+                match = re.match(r'^(\d+(?:\.\d+)?)', stripped.replace(",", ""))
                 if match:
-                    value = match.group(1)
+                    num_str = match.group(1)
+                    # Strip trailing ".0"
+                    if "." in num_str:
+                        try:
+                            value = str(int(float(num_str)))
+                        except ValueError:
+                            value = DEFAULT_VALUE
+                    else:
+                        value = num_str
                 else:
                     value = DEFAULT_VALUE
 
-        # Truncate verbose text
-        if col in field_max_lengths and isinstance(value, str):
-            max_len = field_max_lengths[col]
-            if len(value) > max_len:
-                value = truncate_to_boundary(value, max_len)
+        # ----------------------------------------------------------------
+        # PRODUCT_NAME: normalize ALL-CAPS headings to Title Case
+        # ----------------------------------------------------------------
+        if col == "PRODUCT_NAME" and isinstance(value, str):
+            stripped_name = value.strip()
+            if (stripped_name
+                    and stripped_name == stripped_name.upper()
+                    and len(stripped_name.split()) > 1
+                    and len(stripped_name) > 5):
+                value = stripped_name.title()
 
-        # Special case: CUSTOMER_TYPE - ONE value only
-        if col == "CUSTOMER_TYPE" and isinstance(value, str):
-            if "," in value and len(value) > 25:
-                first_item = value.split(",")[0].strip()
-                if len(first_item) < 25:
-                    value = first_item
-                else:
-                    value = DEFAULT_VALUE
+        # ----------------------------------------------------------------
+        # PLAN_TYPE: expanded valid set
+        # ----------------------------------------------------------------
+        if col == "PLAN_TYPE" and isinstance(value, str):
+            value = _normalize_plan_type(value)
 
-        # Special case: GENDER - standardize
+        # ----------------------------------------------------------------
+        # FINANCING_TYPE: canonical mapping
+        # ----------------------------------------------------------------
+        if col == "FINANCING_TYPE" and isinstance(value, str):
+            if value not in (DEFAULT_VALUE, ""):
+                value = _normalize_financing_type(value)
+
+        # ----------------------------------------------------------------
+        # GENDER: strict enforcement of allowed values
+        # ----------------------------------------------------------------
         if col == "GENDER" and isinstance(value, str):
             value_lower = value.strip().lower()
             if value_lower in ("male", "m"):
                 value = "Male"
             elif value_lower in ("female", "f"):
                 value = "Female"
-            elif value_lower in ("all", "both"):
-                # FIX: spec requires exactly "All" (see EXTRACTION_SYSTEM_PROMPT.txt
-                # rule #13) - this was writing "ALL", which fails validation.
+            elif value_lower in ("all", "both", "all genders", "all customers"):
                 value = "All"
-            elif value_lower not in ("male", "female", "all"):
+            elif value_lower in ("n/a", "na", ""):
+                value = DEFAULT_VALUE
+            else:
+                # Unrecognized value — do not silently accept
                 value = DEFAULT_VALUE
 
-        # Special case: PLAN_TYPE - single word
-        if col == "PLAN_TYPE" and isinstance(value, str):
-            valid_types = {"Loan", "Deposit", "Savings", "Card", "Investment", "Insurance", "Service", "Loyalty"}
-            words = value.strip().split()
-            found = False
-            for word in words:
-                if word in valid_types:
-                    value = word
-                    found = True
-                    break
-            if not found:
+        # ----------------------------------------------------------------
+        # CUSTOMER_TYPE: single value only
+        # ----------------------------------------------------------------
+        if col == "CUSTOMER_TYPE" and isinstance(value, str):
+            allowed = {
+                "Salaried", "Self-Employed", "SME",
+                "Corporate", "Retail", "Government",
+            }
+            stripped_ct = value.strip()
+            if stripped_ct in allowed:
+                pass  # already valid
+            elif "," in stripped_ct:
+                # Multiple values — take first valid token
+                first = stripped_ct.split(",")[0].strip()
+                value = first if first in allowed else DEFAULT_VALUE
+            elif stripped_ct.lower() == "n/a":
                 value = DEFAULT_VALUE
+            # Note: values like "Salaried Individuals" are not in the allowed set;
+            # keep them as-is so the validation pass can flag and fix them.
+
+        # ----------------------------------------------------------------
+        # PLAN_TYPE length guard (single word expected)
+        # ----------------------------------------------------------------
+        # Already handled above by _normalize_plan_type.
+
+        # ----------------------------------------------------------------
+        # OPTIONAL_RIDERS: ensure comma-separated (not semicolon-separated)
+        # The corrected dataset uses commas for rider lists.
+        # ----------------------------------------------------------------
+        if col == "OPTIONAL_RIDERS" and isinstance(value, str):
+            if value != DEFAULT_VALUE:
+                # Replace semicolons with commas if the field is a flat list
+                # (i.e. not a descriptive sentence containing semicolons for
+                #  different purposes). Heuristic: if no period in the value,
+                # it's a list — replace semicolons.
+                if "." not in value:
+                    value = re.sub(r"\s*;\s*", ", ", value).strip().strip(",").strip()
+
+        # ----------------------------------------------------------------
+        # Truncate verbose text fields to max length
+        # ----------------------------------------------------------------
+        if col in field_max_lengths and isinstance(value, str):
+            max_len = field_max_lengths[col]
+            if len(value) > max_len:
+                value = truncate_to_boundary(value, max_len)
 
         normalized[col] = value
 
-    normalized["PRODUCT_NAME"] = record.get("PRODUCT_NAME") or entry["title"]
+    # Always preserve PRODUCT_NAME and SOURCE_FILE_PRODUCT
+    raw_name = record.get("PRODUCT_NAME") or entry["title"]
+    # Apply title-case fix to the preserved name too
+    if isinstance(raw_name, str):
+        if (raw_name.strip()
+                and raw_name.strip() == raw_name.strip().upper()
+                and len(raw_name.strip().split()) > 1):
+            raw_name = raw_name.strip().title()
+    normalized["PRODUCT_NAME"] = raw_name
     normalized["SOURCE_FILE_PRODUCT"] = get_source_filename(entry)
 
     return normalized
 
 
 # ============================================================================
-# Prompt builders - using the loaded system prompt (ALL FIXED)
+# Prompt builders
 # ============================================================================
 
 def build_prompt(entry, chunk, tokenizer, chunk_idx=1, chunk_total=1):
-    """Build prompt with step-by-step extraction workflow for ONE chunk of
-    the document. `chunk` is already cut to size by the caller (chunk_text())
-    - do not slice it again here, that's the whole point of chunking."""
-
+    """
+    Build the extraction prompt for ONE chunk of the document.
+    `chunk` is already cut to size by chunk_text() — do not slice it again.
+    """
     if chunk_total > 1:
         chunk_note = (
             f"\nNOTE: This is PART {chunk_idx} of {chunk_total} of a single, longer "
-            f"product document (it has been split only because of length, not because "
-            f"it is a different product). Extract whatever fields you can find in THIS "
-            f"part only. If a field is not mentioned in this part, set it to \"N/A\" - "
-            f"it may simply be described in another part of the same document.\n"
+            f"product document (split only because of length). Extract whatever fields "
+            f"you can find in THIS part only. Set missing fields to \"N/A\".\n"
         )
     else:
         chunk_note = ""
 
-    user_msg = f"""Product title: {entry['title']}
-Source file: {get_source_filename(entry)}
-{chunk_note}--- PRODUCT TEXT START ---
-{chunk}
---- PRODUCT TEXT END ---
-
-Return only one JSON object that matches the system prompt exactly."""
+    user_msg = (
+        f"Product title: {entry['title']}\n"
+        f"Source file: {get_source_filename(entry)}\n"
+        f"{chunk_note}"
+        f"--- PRODUCT TEXT START ---\n"
+        f"{chunk}\n"
+        f"--- PRODUCT TEXT END ---\n\n"
+        f"Return only one JSON object with all 56 fields as defined in the system prompt."
+    )
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -736,85 +880,134 @@ Return only one JSON object that matches the system prompt exactly."""
 
 
 def build_repair_prompt(entry, raw_text):
-    """Build repair prompt using the full system context. (FIXED - now includes SYSTEM_PROMPT)"""
-    repair_instructions = f"""You are repairing a failed extraction.
-Return exactly ONE valid JSON object and nothing else.
+    """
+    Compact repair prompt for malformed JSON output.
 
+    Intentionally does NOT include the full SYSTEM_PROMPT to avoid exceeding
+    Qwen2.5-3B's context limit when the broken output is also long. The essential
+    rules are inlined here instead.
+    """
+    repair_instructions = f"""You are repairing broken JSON from a data extraction task.
 Product: {entry['title']}
+Source file: {get_source_filename(entry)}
 
-Broken output to repair:
-{raw_text[:5000]}
+BROKEN OUTPUT TO REPAIR:
+{raw_text[:3000]}
 
-Apply ALL rules from the system prompt above. Focus on:
-- Use "N/A" for missing fields
-- Keep values SHORT and within character limits
-- CUSTOMER_TYPE: ONE value only: Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A
-- GENDER: Must be Male, Female, All, or N/A only
-- PLAN_TYPE: ONE word: Loan|Deposit|Savings|Card|Investment|Insurance|Service|Loyalty
-- Numeric fields: NUMBERS ONLY (no currency, no text)
-- New detail fields must stay concise:
-    PRODUCT_DESCRIPTION, PROVIDER_NAME, PRODUCT_VARIANT_TIER, PRICING_RATE,
-    FEES_AND_CHARGES, KEY_BENEFITS, OPTIONAL_RIDERS, REQUIRED_DOCUMENTS,
-    CLAIMS_SERVICE_CONTACT, KEY_EXCLUSIONS, TAX_ZAKAT_TREATMENT,
-- No markdown fences or explanations
+REPAIR RULES — apply all of these:
+- Return exactly ONE valid JSON object with 56 fields, nothing else
+- Use "N/A" for every missing or unparseable field (never null/None/NaN/"")
+- PRODUCT_NAME: Title Case (never ALL CAPS)
+- LEAD_MARKER: exactly "IBG" or "BNK"
+- PLAN_TYPE: one word from Insurance|Protection|Health|Savings|Deposit|Loan|Card|Investment|Service|Loyalty
+- CUSTOMER_TYPE: exactly one of Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A
+- GENDER: exactly one of Male|Female|All|N/A
+- FINANCING_TYPE: one of Conventional|Islamic|Takaful|Mudarabah|Unit Linked|Hybrid (Bonus Based and Unit Linked)|N/A
+- Numeric fields (MIN_AGE, MAX_AGE, MIN_BALANCE, MIN_INCOME, MIN_INCOME_USD,
+  MIN_INVESTMENT, MIN_CONTRIBUTION, MIN_TERM_YEARS, MAX_TERM_YEARS,
+  FREE_LOOK_PERIOD_DAYS, IS_BANK_OFFERED): integers only, no units, no .0
+- TENURE_OPTIONS: plan duration choices only, NOT payment frequency
+- PREMIUM_PAYMENT_FREQUENCY: how customer pays (Annual/Quarterly/etc.) or "N/A"
+- OPTIONAL_RIDERS: comma-separated, not semicolons
+- SPECIAL_CONDITIONS: max 200 chars
+- SOURCE_FILE_PRODUCT: filename only, no path
+- No markdown fences, no explanations outside the JSON
 
 Return the repaired JSON object now."""
 
-    # Return with SYSTEM_PROMPT prepended for full context
-    return f"{SYSTEM_PROMPT}\n\n{repair_instructions}"
+    messages = [
+        {"role": "user", "content": repair_instructions},
+    ]
+
+    # Use chat template if available (no system prompt to save tokens)
+    if hasattr(entry.get("_tokenizer_ref"), "apply_chat_template"):
+        pass  # no tokenizer ref stored in entry; fall through
+
+    return repair_instructions
 
 
 def build_validation_prompt(entry, extracted_json):
-    """Build prompt for self-validation and correction using full system context. (FIXED - now includes SYSTEM_PROMPT)"""
+    """
+    Validation and correction prompt using the full system context.
+    Checks the 56-field output against the corrected extraction rules.
+    """
     validation_instructions = f"""You extracted this JSON. Validate and fix any issues:
 
 EXTRACTED JSON:
 {json.dumps(extracted_json, indent=2)}
 
-VALIDATION RULES - Check each rule and FIX if violated:
+VALIDATION RULES — check each and FIX if violated:
 
-1. CUSTOMER_TYPE: Is it ONE value only (no commas)?
-   ✓ "Salaried"  ✗ "Salaried, Self-Employed, Corporate"
+1. PRODUCT_NAME: Is it Title Case? Not ALL CAPS?
+   WRONG: "JUBILEE KAMIL TAKAFUL SAVINGS PLAN"
+   CORRECT: "Jubilee Kamil Takaful Savings Plan"
 
-2. GENDER: Is it exactly one of: Male|Female|All|N/A?
-   ✓ "Female"  ✗ "Male or Female"
+2. PLAN_TYPE: Is it ONE word from Insurance|Protection|Health|Savings|Deposit|Loan|Card|Investment|Service|Loyalty?
+   Protection plans (accident/theft only) → "Protection"
+   Hospitalization plans → "Health"
+   Unit-linked savings/endowment → "Savings"
 
-3. PLAN_TYPE: Is it ONE word from: Loan|Deposit|Savings|Card|Investment|Insurance|Service|Loyalty?
-   ✓ "Savings"  ✗ "Savings and Protection"
+3. CUSTOMER_TYPE: Is it exactly ONE value (no commas)?
+   Allowed: Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A
 
-4. Text field lengths - Are they within limits?
-   - PRODUCT_NAME ≤ 50 chars
-    - PRODUCT_DESCRIPTION ≤ 250 chars
-    - PROVIDER_NAME ≤ 100 chars
-    - PRODUCT_VARIANT_TIER ≤ 50 chars
-    - PRICING_RATE ≤ 50 chars
-    - FEES_AND_CHARGES ≤ 200 chars
-    - KEY_BENEFITS ≤ 200 chars
-    - OPTIONAL_RIDERS ≤ 200 chars
-    - REQUIRED_DOCUMENTS ≤ 200 chars
-    - CLAIMS_SERVICE_CONTACT ≤ 200 chars
-    - KEY_EXCLUSIONS ≤ 200 chars
-    - TAX_ZAKAT_TREATMENT ≤ 100 chars
-    - PDF_PAGE_REFERENCE ≤ 50 chars
-   - CUSTOMER_TYPE ≤ 25 chars
-   - TENURE ≤ 30 chars
-   - SPECIAL_CONDITIONS ≤ 200 chars
+4. GENDER: Is it exactly one of Male|Female|All|N/A?
+   "N/A" if gender is not mentioned. "All" ONLY if explicitly stated in document.
+   Do NOT use "All" merely because an eligibility section exists.
 
-5. Numeric fields - Do they contain ONLY numbers (no currency/text)?
-    ✓ "250000"  ✗ "PKR 250,000" or "25000 per month"
-    - FREE_LOOK_PERIOD_DAYS is numeric too
+5. FINANCING_TYPE: For unit-linked plans (PIA, fund allocation) → "Unit Linked"
+   Hybrid (bonus + unit-linked) → "Hybrid (Bonus Based and Unit Linked)"
+   NOT "N/A" for plans that explicitly mention unit-linked structure.
 
-6. SPECIAL_CONDITIONS - Is it concise, max 200 chars?
-   ✓ "Free 14-day look, waiting period 90 days"
-   ✗ "Free 14-day look period, optional riders, death benefit includes sum covered plus PIA value, maturity benefit..."
+6. DEPOSIT_PROFIT_TYPE / DEPOSIT_PROFIT_FREQUENCY: Unit-linked plans → both "N/A"
+   Health/protection plans (no savings) → both "N/A"
+   Do NOT set "At Maturity" for unit-linked plans.
 
-Refer to the system prompt above for full field definitions and critical rules.
+7. TENURE_OPTIONS: Is it ONLY plan duration choices (e.g. "10, 15, 20 years")?
+   Payment frequencies ("Annual, Quarterly") belong in PREMIUM_PAYMENT_FREQUENCY.
+   If no distinct plan duration menu → "N/A"
+
+8. PREMIUM_PAYMENT_FREQUENCY: Is it the payment frequency (Annual/Semi-Annual/Quarterly/Monthly)?
+   Example: "Annual, Semi-Annual, Quarterly" or "N/A"
+
+9. OPTIONAL_RIDERS: Are they comma-separated (not semicolons)?
+   WRONG: "Accidental Death; Income Benefit"
+   CORRECT: "Accidental Death, Income Benefit"
+
+10. Numeric fields: Do they contain ONLY integers (no PKR, no commas, no .0)?
+    Fields: MIN_AGE, MAX_AGE, MIN_BALANCE, AVG_BALANCE_REQUIREMENT, MIN_INCOME,
+    MIN_INCOME_USD, MIN_INVESTMENT, MIN_CONTRIBUTION, MIN_TERM_YEARS,
+    MAX_TERM_YEARS, FREE_LOOK_PERIOD_DAYS, IS_BANK_OFFERED
+    WRONG: "18.0", "PKR 250,000"  CORRECT: "18", "250000"
+
+11. FREE_LOOK_PERIOD_DAYS: Is it set ONLY because this product explicitly mentions it?
+    If not explicitly stated → "N/A". Do NOT default to 14.
+
+12. SEGMENT_TIER / SERVICE_TYPE / CUSTOMER_SEGMENT / TARGET_SEGMENT:
+    "N/A" unless explicitly stated in the document. Do NOT derive from other fields.
+
+13. SOURCE_FILE_PRODUCT: Filename only (no folder path).
+
+14. All 56 fields present? No null/None/NaN/empty string → "N/A"
+    Columns: PRODUCT_NAME, LEAD_MARKER, SOURCE_FILE_PRODUCT, PLAN_TYPE, TARGET_GOAL,
+    CUSTOMER_TYPE, EMPLOYMENT_TYPE, CUSTOMER_SEGMENT, TARGET_SEGMENT, SEGMENT_TIER,
+    MIN_AGE, MAX_AGE, GENDER, IS_BANK_OFFERED, ACCOUNT_TYPE, CARD_TYPE, CHANNEL,
+    ELIGIBILITY_TYPE, SERVICE_TYPE, REWARD_TYPE, CURRENCY, CURRENCY_TYPE,
+    MIN_BALANCE, AVG_BALANCE_REQUIREMENT, MIN_INCOME, MIN_INCOME_USD,
+    MIN_INVESTMENT, MIN_CONTRIBUTION, LOAN_AMOUNT_RANGE, COVERAGE_AMOUNT,
+    FINANCING_TYPE, DEPOSIT_PROFIT_TYPE, DEPOSIT_PROFIT_FREQUENCY,
+    TENURE, TENURE_OPTIONS, MIN_TERM_YEARS, MAX_TERM_YEARS, BUSINESS_TENURE,
+    COLLATERAL_TYPE, EQUITY_REQUIREMENT, DBR_LIMIT, TRANSACTION_LIMIT,
+    SPECIAL_CONDITIONS, PRODUCT_DESCRIPTION, PROVIDER_NAME, PRODUCT_VARIANT_TIER,
+    PRICING_RATE, FEES_AND_CHARGES, KEY_BENEFITS, OPTIONAL_RIDERS,
+    FREE_LOOK_PERIOD_DAYS, REQUIRED_DOCUMENTS, CLAIMS_SERVICE_CONTACT,
+    KEY_EXCLUSIONS, TAX_ZAKAT_TREATMENT, PREMIUM_PAYMENT_FREQUENCY
+
+Refer to the system prompt above for full field definitions and all rules.
 
 If ANY rule is violated, return CORRECTED JSON. Otherwise return JSON unchanged.
-Fix ONLY the violations, keep everything else as-is.
+Fix ONLY the violations, preserve everything else.
 Return ONLY valid JSON, no explanations."""
 
-    # Return with SYSTEM_PROMPT prepended for full context
     return f"{SYSTEM_PROMPT}\n\n{validation_instructions}"
 
 
@@ -824,25 +1017,10 @@ Return ONLY valid JSON, no explanations."""
 
 def free_gpu_memory():
     """
-    FIX: Release cached/fragmented CUDA memory between generate() calls.
-    PyTorch's caching allocator keeps freed tensors reserved for reuse, but
-    with varying prompt/KV-cache lengths across calls that cache fragments
-    instead of being reused, eventually exhausting the GPU. Without this,
-    successive products on a small Colab GPU (T4/L4, ~15GB) run out of
-    memory after just 1-2 products even though each individual call would
-    fit in memory on its own.
-
-    IMPORTANT LIMITATION (why this only ever frees ~1-2GB, not more):
-    empty_cache() can only return memory that is RESERVED-but-UNUSED back to
-    the CUDA driver - i.e. leftover KV-cache/activation buffers from past
-    generate() calls that PyTorch is holding "just in case". It cannot
-    touch memory backing a live tensor. The model's weights stay resident
-    for the entire run, so no amount of gc.collect()/empty_cache() will ever
-    shrink that footprint. The only ways to reduce it are: use a smaller or
-    more heavily quantized model, or cap how much of the GPU the loader is
-    allowed to fill in the first place (see GPU_RESERVE_GIB above). This
-    function fixes cross-call fragmentation; it cannot fix a model that is
-    simply too big for the GPU.
+    Release cached/fragmented CUDA memory between generate() calls.
+    empty_cache() returns RESERVED-but-UNUSED memory to the CUDA driver.
+    It cannot free the model's weights (live tensors). Use GPU_RESERVE_GIB
+    to limit how much of the GPU the loader fills with weights.
     """
     gc.collect()
     if torch.cuda.is_available():
@@ -879,11 +1057,7 @@ def get_raw_generation(model, tokenizer, prompt):
         clean_up_tokenization_spaces=False,
     )
 
-    # FIX: explicitly drop references to the input/output tensors (which can
-    # hold a full KV cache worth of GPU memory) and clear the CUDA cache
-    # before returning. Without this, every generate() call across every
-    # product leaves fragmented memory behind, which is why later products
-    # in a batch OOM even though the first one succeeded.
+    # Explicitly drop tensor references to free GPU memory before next call.
     del inputs, output_ids, generated_ids
     free_gpu_memory()
 
@@ -892,14 +1066,10 @@ def get_raw_generation(model, tokenizer, prompt):
 
 def extract_one_chunk(model, tokenizer, entry, chunk, chunk_idx, chunk_total):
     """
-    Run extraction on a SINGLE chunk of the document (initial attempt, with
-    one repair retry if the model's output isn't parseable JSON). No
-    self-validation here on purpose - validation is run once on the final
-    merged record instead, to avoid multiplying generate() calls by the
-    number of chunks.
-    Returns a normalized record dict, or None if both attempts failed to
-    produce parseable JSON for this chunk (the chunk is then simply skipped;
-    other chunks may still cover those fields).
+    Run extraction on a SINGLE chunk of the document (initial attempt +
+    one compact repair retry if output is not parseable JSON).
+    Validation is done once on the final merged record, not per chunk.
+    Returns a normalized record dict, or None if both attempts failed.
     """
     prompt = build_prompt(entry, chunk, tokenizer, chunk_idx, chunk_total)
     raw = get_raw_generation(model, tokenizer, prompt)
@@ -908,6 +1078,7 @@ def extract_one_chunk(model, tokenizer, entry, chunk, chunk_idx, chunk_total):
         parsed = parse_json_blob(raw)
         return normalize_record(parsed, entry)
     except Exception:
+        # Compact repair prompt (no full SYSTEM_PROMPT) to stay within context
         repair_prompt = build_repair_prompt(entry, raw)
         repaired_raw = get_raw_generation(model, tokenizer, repair_prompt)
         try:
@@ -923,26 +1094,15 @@ def extract_one_chunk(model, tokenizer, entry, chunk, chunk_idx, chunk_total):
 
 def extract_one_product(model, tokenizer, entry, text):
     """
-    FIX (large-document OOM): instead of sending the ENTIRE document text in
-    one giant prompt (which on top of the long system prompt was enough to
-    blow past available GPU memory during a single prefill), the document is
-    split into chunk_text()-sized pieces and each piece is sent to the model
-    SEPARATELY. Results are merged field-by-field (merge_records picks the
-    first real value found for each field across chunks), so a field
-    mentioned anywhere in the document is still captured even though no
-    single call ever sees the whole document at once.
+    Chunked extraction + field-level merge + single validation pass.
 
-    A single self-validation pass runs once on the final merged record
-    (not once per chunk) to keep the number of generate() calls roughly the
-    same as before for short documents, while still being far cheaper than
-    validating every chunk for long ones.
+    The document is split into TEXT_CHUNK_SIZE-char pieces. Each piece is
+    sent to the model separately. Results are merged field-by-field
+    (first real value found for a field across chunks wins). A single
+    validation pass runs on the final merged record.
 
-    If ENABLE_CHUNKING=False, this falls back to sending the whole document
-    in one call. That is a real regression risk: this dataset's longer PDFs
-    combined with the ~8k-token system prompt are exactly what caused the
-    original single-shot OOM, so only disable this if GPU_RESERVE_GIB /
-    HF_LOAD_IN_4BIT headroom fixes below have already been verified to give
-    enough free VRAM for the longest document in your batch.
+    If ENABLE_CHUNKING=False, the whole document is sent in one call
+    (risks OOM on long documents + large system prompt).
     """
     if ENABLE_CHUNKING:
         chunks = chunk_text(text, TEXT_CHUNK_SIZE, TEXT_CHUNK_OVERLAP)
@@ -976,7 +1136,7 @@ def extract_one_product(model, tokenizer, entry, text):
 
 
 def extract_one(model, tokenizer, entry, text):
-    """Main extraction function: chunked extraction + merge + single validation."""
+    """Main extraction entry point: chunked extraction + merge + validation."""
     return extract_one_product(model, tokenizer, entry, text)
 
 
@@ -1031,13 +1191,8 @@ def make_generator():
     if DEVICE_MAP.lower() != "none":
         model_kwargs["device_map"] = DEVICE_MAP
 
-        # FIX: cap how much GPU memory Accelerate is allowed to fill with
-        # weights, so it always leaves GPU_RESERVE_GIB free for the KV-cache
-        # and activation memory that generate() needs on top of the weights.
-        # Without this, device_map="auto" happily packs the model up to
-        # ~full physical capacity (that's why the log showed 13.71/14.56 GiB
-        # already in use immediately after loading, before generation even
-        # produced one token).
+        # Cap how much GPU memory Accelerate fills with weights, leaving
+        # GPU_RESERVE_GIB free for the KV-cache that generate() needs.
         if torch.cuda.is_available() and DEVICE_MAP.lower() == "auto":
             max_memory = {}
             for i in range(torch.cuda.device_count()):
@@ -1125,7 +1280,7 @@ def main():
             "HF_LOAD_IN_4BIT=true\n"
             "HF_DEVICE_MAP=auto\n"
             "HF_TORCH_DTYPE=float16\n"
-            "HF_GPU_RESERVE_GIB=3.0   # leaves headroom for generate(), see comment above\n"
+            "HF_GPU_RESERVE_GIB=3.0\n"
             "You can also use a smaller model like Qwen/Qwen2.5-3B-Instruct."
         ) from exc
 
@@ -1167,11 +1322,8 @@ def main():
                     )
                     break
                 except torch.cuda.OutOfMemoryError as e:
-                    # FIX: an OOM mid-generation leaves the allocator in a
-                    # fragmented state. Clear it BEFORE retrying, otherwise
-                    # each retry starts from an even worse memory state than
-                    # the last (which is what caused every retry in the
-                    # original run to fail worse than the one before it).
+                    # Clear fragmented allocator state before retrying —
+                    # each retry must start from a clean memory state.
                     free_gpu_memory()
                     print(
                         f"[{entry['product_no']:03d}/{len(index)}] "
@@ -1187,9 +1339,7 @@ def main():
             else:
                 print(f"[{entry['product_no']:03d}/{len(index)}] FAILED after retries")
 
-            # FIX: also clean up after every product (success or failure),
-            # not just on error, so memory doesn't slowly accumulate across
-            # a long batch even when nothing technically throws an OOM.
+            # Clean up after every product to prevent slow memory accumulation.
             free_gpu_memory()
 
     print("Done. Output:", OUT_JSONL)
