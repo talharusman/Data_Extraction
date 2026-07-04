@@ -376,9 +376,7 @@ def build_index_from_files(files: list[Path]) -> list[dict]:
                 "product_no": i,
                 "title": path.stem.replace("_", " ").replace("-", " "),
                 "file": str(path),
-                # FIX: added so SOURCE_FILE_PRODUCT can store just the
-                # immediate parent folder name (e.g. "Banca Takaful")
-                # instead of the full absolute file path.
+                "filename": path.name,
                 "folder": path.parent.name,
                 "_abs_path": path.resolve(),
             }
@@ -537,10 +535,22 @@ def parse_json_blob(raw):
 def blank_record(entry):
     record = {col: DEFAULT_VALUE for col in COLUMNS}
     record["PRODUCT_NAME"] = entry["title"]
-    # FIX: was entry["file"] (full absolute path). Now stores just the
-    # immediate parent folder name, e.g. "Banca Takaful".
-    record["SOURCE_FILE_PRODUCT"] = entry["folder"]
+    record["SOURCE_FILE_PRODUCT"] = get_source_filename(entry)
     return record
+
+
+def get_source_filename(entry) -> str:
+    """Return the source filename for prompt/output fields."""
+    for key in ("filename", "file"):
+        raw = entry.get(key)
+        if raw:
+            return Path(str(raw)).name
+
+    abs_path = entry.get("_abs_path")
+    if abs_path:
+        return Path(str(abs_path)).name
+
+    return entry.get("title", DEFAULT_VALUE)
 
 
 field_max_lengths = {
@@ -666,7 +676,7 @@ def normalize_record(record, entry):
         normalized[col] = value
 
     normalized["PRODUCT_NAME"] = record.get("PRODUCT_NAME") or entry["title"]
-    normalized["SOURCE_FILE_PRODUCT"] = entry["filename"]
+    normalized["SOURCE_FILE_PRODUCT"] = get_source_filename(entry)
 
     return normalized
 
@@ -692,7 +702,7 @@ def build_prompt(entry, chunk, tokenizer, chunk_idx=1, chunk_total=1):
         chunk_note = ""
 
     user_msg = f"""Product title: {entry['title']}
-Source file: {entry['filename']}
+Source file: {get_source_filename(entry)}
 {chunk_note}--- PRODUCT TEXT START ---
 {chunk}
 --- PRODUCT TEXT END ---
