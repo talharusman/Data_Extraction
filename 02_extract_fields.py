@@ -98,9 +98,12 @@ MODEL_NAME = os.environ.get("HF_MODEL_NAME_OR_PATH", "").strip()
 MODEL_CLASS = os.environ.get("HF_MODEL_CLASS", "causal").strip().lower()
 LOCAL_FILES_ONLY = env_bool("HF_LOCAL_FILES_ONLY", True)
 TRUST_REMOTE_CODE = env_bool("HF_TRUST_REMOTE_CODE", False)
-# Raised from 1000 to 1500: 56-field JSON with long EMPLOYMENT_TYPE and
-# PRICING_RATE values can approach ~1100 tokens; 1500 gives safe headroom.
-MAX_NEW_TOKENS = env_int("HF_MAX_NEW_TOKENS", 1500)
+# Raised from 1500 to 2200: the 1500 budget was still getting hit on
+# products with long CUSTOMER_TYPE lists, EMPLOYMENT_TYPE target-market
+# text, and multi-tier PRICING_RATE tables, which truncated the JSON
+# mid-field (see _close_unterminated_json for the recovery path when this
+# still happens). Override via HF_MAX_NEW_TOKENS in .env if needed.
+MAX_NEW_TOKENS = env_int("HF_MAX_NEW_TOKENS", 2200)
 TEMPERATURE = env_float("HF_TEMPERATURE", 0.0)
 TOP_P = env_float("HF_TOP_P", 1.0)
 REPETITION_PENALTY = env_float("HF_REPETITION_PENALTY", 1.03)
@@ -516,12 +519,109 @@ def _iter_json_candidates(text):
                         break
 
 
+def _close_unterminated_json(text: str):
+    """
+    Best-effort recovery for JSON that was cut off mid-generation (i.e. the
+    model hit MAX_NEW_TOKENS before finishing the object) rather than being
+    genuinely malformed. All the existing candidate strategies in
+    _iter_json_candidates() require a BALANCED object ({...} fully closed);
+    a mid-field truncation never satisfies that, so they all fail together.
+
+    Strategy:
+      1. Walk the text tracking bracket/string nesting, remembering the last
+         position where we had a *structurally complete* token (end of a
+         closed string, a closed {}/[], or just before a trailing comma).
+      2. If we end while still inside an open string, we don't know how the
+         string was meant to end, so we rewind to that last safe position
+         instead of guessing at the missing content.
+      3. Recompute the open-bracket stack up to that safe cut point and
+         append the matching closers.
+
+    This sacrifices only the one field that was mid-generation when the
+    model was cut off (it will fall back to "N/A" via normalize_record);
+    every field completed before the cutoff is preserved. Returns the
+    repaired JSON text, or None if the input doesn't even start with '{'.
+    """
+    start = text.find("{")
+    if start == -1:
+        return None
+    text = text[start:]
+
+    def bracket_stack(s: str):
+        stack = []
+        in_str = False
+        esc = False
+        for ch in s:
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            else:
+                if ch == '"':
+                    in_str = True
+                elif ch in "{[":
+                    stack.append(ch)
+                elif ch in "}]":
+                    if stack:
+                        stack.pop()
+        return stack, in_str
+
+    stack, in_string = bracket_stack(text)
+
+    if in_string:
+        # Rewind to the last point where we had a fully-closed string, a
+        # fully-closed nested object/array, or a trailing comma — i.e. the
+        # last spot we can safely cut without inventing content.
+        in_str = False
+        esc = False
+        last_safe_end = 0
+        for i, ch in enumerate(text):
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                    last_safe_end = i + 1
+            else:
+                if ch == '"':
+                    in_str = True
+                elif ch in "}]":
+                    last_safe_end = i + 1
+                elif ch == ",":
+                    last_safe_end = i
+        text = text[:last_safe_end]
+        stack, _ = bracket_stack(text)
+
+    text = text.rstrip().rstrip(",").rstrip()
+
+    closers = {"{": "}", "[": "]"}
+    for opener in reversed(stack):
+        text += closers[opener]
+
+    return text
+
+
 def parse_json_blob(raw):
     for candidate in _iter_json_candidates(raw):
         cleaned = re.sub(r",\s*([}\]])", r"\1", candidate)
         parsed = _parse_candidate(cleaned)
         if parsed is not None:
             return parsed
+
+    # Last resort: the output may be a genuinely truncated (not malformed)
+    # JSON object — try to close it deterministically before giving up.
+    # This is cheap (no model call) and recovers most MAX_NEW_TOKENS cutoffs.
+    closed = _close_unterminated_json(raw)
+    if closed:
+        parsed = _parse_candidate(closed)
+        if parsed is not None:
+            return parsed
+
     raise ValueError(f"Could not parse JSON from model output: {raw[:500]}")
 
 
@@ -1056,6 +1156,17 @@ def get_raw_generation(model, tokenizer, prompt):
         skip_special_tokens=True,
         clean_up_tokenization_spaces=False,
     )
+
+    hit_token_limit = generated_ids.shape[-1] >= MAX_NEW_TOKENS
+    if hit_token_limit:
+        # The model ran out of budget before emitting EOS on its own, which
+        # means the JSON is almost certainly truncated mid-field rather than
+        # genuinely malformed. Surface this distinctly from a real parse
+        # error so it's obvious in the logs which one you're dealing with.
+        print(
+            f"    note: generation hit MAX_NEW_TOKENS={MAX_NEW_TOKENS} "
+            f"(output likely truncated, not malformed) — attempting auto-close recovery"
+        )
 
     # Explicitly drop tensor references to free GPU memory before next call.
     del inputs, output_ids, generated_ids
