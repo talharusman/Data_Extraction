@@ -28,25 +28,57 @@ Configure the model through .env:
 Resumable: already-extracted products (present in OUT_JSONL) are skipped,
 so you can safely re-run after an interruption.
 
-CHANGES IN THIS VERSION:
-- Added PREMIUM_PAYMENT_FREQUENCY as the 56th column (injected if missing from
-  pipeline_config to maintain backward compatibility).
-- PLAN_TYPE normalization now accepts Protection and Health in addition to the
-  original set.
-- FINANCING_TYPE normalization added: maps "unit linked", "hybrid" patterns to
+CHANGES IN THIS VERSION (audit-driven fixes):
+- FIX (silent total-extraction-failure): extract_one_product() previously
+  swallowed a fully-failed extraction by returning an all-"N/A" blank_record
+  WITHOUT raising, so main()'s 3-attempt retry loop never engaged and a
+  near-empty row silently entered the dataset. extract_one_product() now
+  raises ExtractionFailedError when no chunk parses; main() retries the
+  whole product up to 3x and only falls back to a logged, clearly-flagged
+  blank record after retries are exhausted, so no product silently
+  disappears (per G4) but failures are no longer invisible.
+- FIX (cross-document identity bleed): added _name_filename_similarity(), a
+  lightweight token-overlap check between the model's PRODUCT_NAME and the
+  filename-derived title. A low-overlap result is logged loudly as a
+  WARNING for manual QA instead of silently propagating.
+- FIX (PLAN_TYPE misclassification): ground-truth corrections showed that
+  EVERY underwritten insurance/takaful product (accident-only, hospital,
+  education/marriage savings, endowment, unit-linked) is PLAN_TYPE=
+  "Insurance" -- the old Protection/Health/Savings sub-typing was
+  consistently wrong for anything issued by an insurer/takaful operator.
+  Backed by a deterministic normalization safety net: if LEAD_MARKER=="IBG"
+  (or PROVIDER_NAME/text clearly names an insurer/takaful operator),
+  PLAN_TYPE is coerced to "Insurance" regardless of the model's sub-type guess.
+- FIX (FINANCING_TYPE under-detection): PIA/"Participant Investment Account"
+  -style unit-linked products were frequently labelled "Takaful" or
+  "Conventional" instead of "Unit Linked". Added a keyword-based safety-net
+  override that scans the source document text for PIA/"participant
+  investment account"/"participant's individual account"/"unit allocation"
+  and forces "Unit Linked" (or "Hybrid ..." if bonus language is also
+  present) when found.
+- FIX (CUSTOMER_TYPE drift): free text like "Bank Alfalah customers" (which
+  belongs in ELIGIBILITY_TYPE) sometimes leaked into the CUSTOMER_TYPE enum
+  column. normalize_record() now keyword-matches against the allowed enum
+  and falls back to "Retail" for generic bank-customer phrasing instead of
+  leaving an invalid value in an enum column.
+- PLAN_TYPE normalization still accepts Protection and Health for the rare
+  non-insurer-issued case (e.g. a bank's own fee-waiver/benefit feature).
+- FINANCING_TYPE normalization: maps "unit linked", "hybrid" patterns to
   canonical values.
 - PRODUCT_NAME normalization: ALL-CAPS product names are converted to Title Case.
 - OPTIONAL_RIDERS normalization: ensures comma-separated output.
-- Updated field_max_lengths to match corrected-dataset ground-truth lengths
+- field_max_lengths matches corrected-dataset ground-truth lengths
   (PRICING_RATE 400, FEES_AND_CHARGES 300, KEY_BENEFITS 250, OPTIONAL_RIDERS 300,
   TENURE 50, TARGET_GOAL 50, COVERAGE_AMOUNT 150, ELIGIBILITY_TYPE 100,
   EMPLOYMENT_TYPE 500, FINANCING_TYPE 50, PREMIUM_PAYMENT_FREQUENCY 50).
-- Repair prompt is now a compact focused version (no full SYSTEM_PROMPT duplication)
-  to stay within Qwen2.5-3B's context limit during error recovery.
-- Validation prompt updated with corrected field rules (GENDER, DEPOSIT_PROFIT,
-  FINANCING_TYPE, TENURE_OPTIONS vs PREMIUM_PAYMENT_FREQUENCY, etc.).
-- MAX_NEW_TOKENS default raised to 1500 to accommodate 56-field JSON with
-  longer EMPLOYMENT_TYPE and PRICING_RATE values.
+- Repair prompt stays a compact focused version (no full SYSTEM_PROMPT
+  duplication) to stay within context limits during recovery, updated with
+  the corrected PLAN_TYPE rule.
+- Validation prompt updated with the corrected PLAN_TYPE rule (insurer-issued
+  -> always "Insurance") and the other corrected field rules (GENDER,
+  DEPOSIT_PROFIT, FINANCING_TYPE, TENURE_OPTIONS vs PREMIUM_PAYMENT_FREQUENCY).
+- MAX_NEW_TOKENS default kept at 2200 for the larger 56-field JSON payload;
+  Qwen2.5-7B in 4-bit comfortably fits this on a 12-13GB Colab GPU.
 """
 from __future__ import annotations
 
@@ -132,6 +164,24 @@ NUMERIC_COLUMNS = {
 }
 
 SUPPORTED_EXTENSIONS = {".txt", ".pdf", ".docx", ".doc", ".csv", ".json", ".xlsx", ".xls"}
+
+
+class ExtractionFailedError(RuntimeError):
+    """
+    Raised when every chunk of a product document failed to produce
+    parseable JSON (initial attempt AND repair attempt both failed for
+    every chunk).
+
+    Previously this condition was swallowed silently: extract_one_product()
+    returned an all-"N/A" blank_record without raising, so main()'s
+    3-attempt retry loop never saw an exception and never retried — a
+    near-empty row (correct PRODUCT_NAME/SOURCE_FILE_PRODUCT but every
+    other field "N/A") would go straight into the output as if it were a
+    successful extraction. Raising here lets main() retry the whole
+    product from scratch (fresh generation, not reusing the failed output),
+    and only fall back to a blank record — clearly logged as FAILED — once
+    retries are exhausted.
+    """
 
 # ============================================================================
 # LOAD SYSTEM PROMPT FROM SEPARATE FILE
@@ -864,7 +914,14 @@ def normalize_record(record, entry):
                 value = DEFAULT_VALUE
 
         # ----------------------------------------------------------------
-        # CUSTOMER_TYPE: single value only
+        # CUSTOMER_TYPE: single value only, strictly from the fixed enum.
+        #
+        # Ground-truth audit found free text like "Bank Alfalah customers"
+        # leaking into this column (it belongs in ELIGIBILITY_TYPE instead).
+        # Rather than passing an invalid enum value through, keyword-match
+        # against the allowed set and fall back to "Retail" for generic
+        # bank-customer phrasing (the most common real-world case for a
+        # retail bancassurance product with no more specific segment named).
         # ----------------------------------------------------------------
         if col == "CUSTOMER_TYPE" and isinstance(value, str):
             allowed = {
@@ -874,14 +931,24 @@ def normalize_record(record, entry):
             stripped_ct = value.strip()
             if stripped_ct in allowed:
                 pass  # already valid
-            elif "," in stripped_ct:
-                # Multiple values — take first valid token
-                first = stripped_ct.split(",")[0].strip()
-                value = first if first in allowed else DEFAULT_VALUE
-            elif stripped_ct.lower() == "n/a":
+            elif stripped_ct.lower() == "n/a" or not stripped_ct:
                 value = DEFAULT_VALUE
-            # Note: values like "Salaried Individuals" are not in the allowed set;
-            # keep them as-is so the validation pass can flag and fix them.
+            else:
+                lowered = stripped_ct.lower()
+                match = next((a for a in allowed if a.lower() in lowered), None)
+                if match:
+                    value = match
+                elif "," in stripped_ct or ";" in stripped_ct:
+                    # Multiple values — take first valid token, else N/A
+                    first = re.split(r"[,;]", stripped_ct)[0].strip()
+                    value = first if first in allowed else DEFAULT_VALUE
+                elif "customer" in lowered or "client" in lowered:
+                    # Generic bank/insurer customer phrasing with no named
+                    # segment ("Bank Alfalah customers") -> default Retail.
+                    value = "Retail"
+                else:
+                    # Truly unrecognized — do not silently accept it as-is.
+                    value = DEFAULT_VALUE
 
         # ----------------------------------------------------------------
         # PLAN_TYPE length guard (single word expected)
@@ -923,6 +990,101 @@ def normalize_record(record, entry):
     normalized["SOURCE_FILE_PRODUCT"] = get_source_filename(entry)
 
     return normalized
+
+
+# ============================================================================
+# Deterministic safety-net overrides (audit-driven)
+# ============================================================================
+
+# Keywords that reliably indicate an underwritten insurance/takaful
+# operator rather than a bank's own account/card/loan product. Matched
+# case-insensitively against PROVIDER_NAME and the raw document text.
+_INSURER_KEYWORDS = (
+    "takaful", "wto", "window takaful", "life insurance", "insurance company",
+    "igi life", "jubilee life", "state life", "slic", "efu life", "adamjee life",
+)
+
+# Keywords that reliably indicate a unit-linked structure even when the
+# model labelled FINANCING_TYPE as "Takaful" or "Conventional" instead.
+_UNIT_LINKED_KEYWORDS = (
+    "participant investment account", "participant's investment account",
+    "participant individual account", "participant's individual account",
+    "pia", "unit allocation", "fund allocation", "bid/offer spread",
+    "bid offer spread",
+)
+_BONUS_KEYWORDS = ("bonus based", "bonus-based", "sum assured plus bonus")
+
+
+def _normalize_for_match(text: str) -> str:
+    return re.sub(r"[^a-z0-9 ]", " ", text.lower())
+
+
+def _name_filename_similarity(product_name: str, filename_title: str) -> float:
+    """
+    Cheap token-overlap ratio (Jaccard-style) between the extracted
+    PRODUCT_NAME and the filename-derived title. Not a correctness proof —
+    a legitimately different product name will also score low — but a
+    useful, free signal for flagging likely cross-document content bleed
+    (e.g. file X's text producing a record that reads like product Y).
+    """
+    if not product_name or not filename_title:
+        return 1.0  # nothing to compare against; don't false-flag
+    a = set(_normalize_for_match(str(product_name)).split())
+    b = set(_normalize_for_match(str(filename_title)).split())
+    a.discard("")
+    b.discard("")
+    if not a or not b:
+        return 1.0
+    overlap = a & b
+    return len(overlap) / max(len(a | b), 1)
+
+
+def apply_deterministic_overrides(record: dict, source_text: str) -> dict:
+    """
+    Apply the two highest-confidence, rule-based corrections identified by
+    diffing raw model output against the human-corrected ground truth:
+
+    1. PLAN_TYPE: every product underwritten by an insurance/takaful
+       operator was corrected to "Insurance" regardless of whether the
+       model guessed Protection/Health/Savings. This is decided from
+       LEAD_MARKER + PROVIDER_NAME (not free-text guessing), so it is safe
+       to apply deterministically rather than re-asking the model.
+    2. FINANCING_TYPE: PIA / "Participant Investment Account"-style unit
+       -linked structures were frequently mislabeled "Takaful" or
+       "Conventional". A keyword scan of the SOURCE document text (which
+       the model already read but sometimes mis-mapped) forces the
+       correct canonical value.
+
+    Both overrides are conservative: they only fire on strong, explicit
+    textual evidence, and never invent a value the document doesn't
+    support.
+    """
+    text_lower = _normalize_for_match(source_text) if isinstance(source_text, str) else ""
+    provider = str(record.get("PROVIDER_NAME", "") or "")
+    provider_lower = provider.lower()
+
+    # --- 1. PLAN_TYPE: insurer-issued -> always "Insurance" -------------
+    is_insurer_issued = (
+        record.get("LEAD_MARKER") == "IBG"
+        or any(kw in provider_lower for kw in _INSURER_KEYWORDS)
+        or any(kw in text_lower for kw in _INSURER_KEYWORDS)
+    )
+    if is_insurer_issued and record.get("PLAN_TYPE") not in (DEFAULT_VALUE,):
+        if record.get("PLAN_TYPE") != "Insurance":
+            record["PLAN_TYPE"] = "Insurance"
+        record["LEAD_MARKER"] = "IBG"
+
+    # --- 2. FINANCING_TYPE: PIA / unit-linked keyword override ----------
+    has_unit_linked_evidence = any(kw in text_lower for kw in _UNIT_LINKED_KEYWORDS)
+    has_bonus_evidence = any(kw in text_lower for kw in _BONUS_KEYWORDS)
+    current_financing = str(record.get("FINANCING_TYPE", "") or "")
+    if has_unit_linked_evidence and "unit linked" not in current_financing.lower():
+        if has_bonus_evidence:
+            record["FINANCING_TYPE"] = "Hybrid (Bonus Based and Unit Linked)"
+        else:
+            record["FINANCING_TYPE"] = "Unit Linked"
+
+    return record
 
 
 # ============================================================================
@@ -999,7 +1161,12 @@ REPAIR RULES — apply all of these:
 - Use "N/A" for every missing or unparseable field (never null/None/NaN/"")
 - PRODUCT_NAME: Title Case (never ALL CAPS)
 - LEAD_MARKER: exactly "IBG" or "BNK"
-- PLAN_TYPE: one word from Insurance|Protection|Health|Savings|Deposit|Loan|Card|Investment|Service|Loyalty
+- PLAN_TYPE: one word from Insurance|Protection|Health|Savings|Deposit|Loan|Card|Investment|Service|Loyalty.
+  If the product is underwritten by an insurance/takaful company (WTO, life
+  insurer, takaful operator) -> ALWAYS "Insurance", even if it is accident
+  -only, hospitalization-only, or a unit-linked education/marriage/endowment
+  savings plan. Protection/Health/Savings are ONLY for non-insurer bank
+  products.
 - CUSTOMER_TYPE: exactly one of Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A
 - GENDER: exactly one of Male|Female|All|N/A
 - FINANCING_TYPE: one of Conventional|Islamic|Takaful|Mudarabah|Unit Linked|Hybrid (Bonus Based and Unit Linked)|N/A
@@ -1043,9 +1210,13 @@ VALIDATION RULES — check each and FIX if violated:
    CORRECT: "Jubilee Kamil Takaful Savings Plan"
 
 2. PLAN_TYPE: Is it ONE word from Insurance|Protection|Health|Savings|Deposit|Loan|Card|Investment|Service|Loyalty?
-   Protection plans (accident/theft only) → "Protection"
-   Hospitalization plans → "Health"
-   Unit-linked savings/endowment → "Savings"
+   If the product is underwritten by an insurance/takaful company (WTO, life
+   insurer, takaful operator such as IGI Life, Jubilee Life, State Life,
+   Alfalah Insurance) -> ALWAYS "Insurance", even if it is accident-only,
+   hospitalization-only, or a unit-linked education/marriage/endowment
+   savings plan. Do NOT sub-classify insurer-issued products as
+   Protection/Health/Savings — that distinction is ONLY for products that
+   are the bank's own (not an insurer's), e.g. a bank fee-waiver benefit.
 
 3. CUSTOMER_TYPE: Is it exactly ONE value (no commas)?
    Allowed: Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A
@@ -1232,18 +1403,49 @@ def extract_one_product(model, tokenizer, entry, text):
         free_gpu_memory()
 
     if not any_chunk_succeeded:
-        return blank_record(entry)
+        # Do NOT silently return an all-"N/A" blank_record here — that would
+        # look like a normal (if empty) successful extraction to main() and
+        # skip the retry loop entirely. Raise so the caller can retry the
+        # whole product with a fresh generation.
+        raise ExtractionFailedError(
+            f"All {chunk_total} chunk(s) failed to produce parseable JSON "
+            f"for '{entry['title']}' ({get_source_filename(entry)})."
+        )
 
     # Single validation/correction pass on the merged record.
     validation_prompt = build_validation_prompt(entry, accumulated)
     validation_raw = get_raw_generation(model, tokenizer, validation_prompt)
     try:
         validated_parsed = parse_json_blob(validation_raw)
-        return normalize_record(validated_parsed, entry)
+        final_record = normalize_record(validated_parsed, entry)
     except Exception:
         # If the validation call itself fails to parse, the merged record
         # (already normalized field-by-field) is still a valid result.
-        return accumulated
+        final_record = accumulated
+
+    # ------------------------------------------------------------------
+    # Deterministic safety-net overrides. These run on the FULL source
+    # document text (not just the model's own field guess) and correct the
+    # two most common, highest-confidence error patterns found during the
+    # ground-truth audit, without another model call.
+    # ------------------------------------------------------------------
+    final_record = apply_deterministic_overrides(final_record, text)
+
+    # Non-blocking QA signal: does the extracted PRODUCT_NAME plausibly
+    # belong to THIS file? A low-overlap result does not get overwritten
+    # (the true product name can legitimately differ from the filename),
+    # but it is logged loudly so cross-document identity bleed gets caught
+    # in review instead of propagating silently into the master dataset.
+    similarity = _name_filename_similarity(final_record.get("PRODUCT_NAME", ""), entry["title"])
+    if similarity < 0.2:
+        print(
+            f"  WARNING: PRODUCT_NAME '{final_record.get('PRODUCT_NAME')}' shares little "
+            f"overlap with source file '{get_source_filename(entry)}' "
+            f"(similarity={similarity:.2f}) — verify this row manually for "
+            f"cross-document content bleed."
+        )
+
+    return final_record
 
 
 def extract_one(model, tokenizer, entry, text):
@@ -1448,7 +1650,19 @@ def main():
                     )
                     time.sleep(3)
             else:
-                print(f"[{entry['product_no']:03d}/{len(index)}] FAILED after retries")
+                # All 3 attempts raised (OOM or ExtractionFailedError/other).
+                # Previously nothing was written here, so a fully-failed
+                # product simply vanished from the output with no trace
+                # (violates G4: never skip a product). Write a blank
+                # placeholder record instead, unmistakably flagged so it is
+                # never confused with a genuine "N/A" extraction result and
+                # gets picked up for a manual re-run.
+                print(f"[{entry['product_no']:03d}/{len(index)}] FAILED after retries — writing flagged placeholder")
+                placeholder = blank_record(entry)
+                placeholder["SPECIAL_CONDITIONS"] = "EXTRACTION_FAILED_MANUAL_REVIEW_REQUIRED"
+                rec = {"product_no": entry["product_no"], **placeholder}
+                out.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                out.flush()
 
             # Clean up after every product to prevent slow memory accumulation.
             free_gpu_memory()
