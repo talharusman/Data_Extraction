@@ -522,7 +522,60 @@ def parse_json_blob(raw):
         parsed = _parse_candidate(cleaned)
         if parsed is not None:
             return parsed
+
+    salvaged = salvage_json_object(raw)
+    if salvaged is not None:
+        return salvaged
+
     raise ValueError(f"Could not parse JSON from model output: {raw[:500]}")
+
+
+def salvage_json_object(raw):
+    """Recover a best-effort JSON object from line-oriented model output."""
+    if not raw:
+        return None
+
+    text = _strip_wrappers(raw)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return None
+
+    record = {col: DEFAULT_VALUE for col in COLUMNS}
+    found_any = False
+
+    pair_pattern = re.compile(r'^"(?P<key>[^"]+)"\s*:\s*(?P<value>.*?)(?:,)?\s*$')
+    for line in lines:
+        match = pair_pattern.match(line)
+        if not match:
+            continue
+
+        key = match.group("key")
+        if key not in record:
+            continue
+
+        value_text = match.group("value").strip()
+        if value_text.endswith(","):
+            value_text = value_text[:-1].rstrip()
+
+        if value_text.startswith('"') and value_text.endswith('"') and len(value_text) >= 2:
+            try:
+                value = json.loads(value_text)
+            except Exception:
+                value = value_text[1:-1]
+        elif value_text.lower() in {"null", "none", "n/a", "na", "nan"}:
+            value = DEFAULT_VALUE
+        elif value_text.startswith("[") and value_text.endswith("]"):
+            try:
+                value = json.loads(value_text)
+            except Exception:
+                value = value_text
+        else:
+            value = value_text
+
+        record[key] = value
+        found_any = True
+
+    return record if found_any else None
 
 
 # ============================================================================
@@ -887,15 +940,20 @@ def build_repair_prompt(entry, raw_text):
     Qwen2.5-3B's context limit when the broken output is also long. The essential
     rules are inlined here instead.
     """
+    template_json = json.dumps(blank_record(entry), indent=2, ensure_ascii=False)
+
     repair_instructions = f"""You are repairing broken JSON from a data extraction task.
 Product: {entry['title']}
 Source file: {get_source_filename(entry)}
 
 BROKEN OUTPUT TO REPAIR:
-{raw_text[:3000]}
+{raw_text[:2000]}
+
+EXPECTED JSON TEMPLATE:
+{template_json}
 
 REPAIR RULES — apply all of these:
-- Return exactly ONE valid JSON object with 56 fields, nothing else
+- Return exactly ONE valid JSON object with all fields from the template, nothing else
 - Use "N/A" for every missing or unparseable field (never null/None/NaN/"")
 - PRODUCT_NAME: Title Case (never ALL CAPS)
 - LEAD_MARKER: exactly "IBG" or "BNK"
@@ -912,6 +970,9 @@ REPAIR RULES — apply all of these:
 - SPECIAL_CONDITIONS: max 200 chars
 - SOURCE_FILE_PRODUCT: filename only, no path
 - No markdown fences, no explanations outside the JSON
+
+If the broken output already contains most of the JSON, correct only the invalid parts and
+keep the existing structure. Do not add prose before or after the object.
 
 Return the repaired JSON object now."""
 
