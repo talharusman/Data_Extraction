@@ -1,78 +1,52 @@
 """
-Step 2 (v2): Extract the fixed 56-column schema as JSON from product files.
+Step 2: Extract the fixed 56-column schema as JSON from product files.
+ENHANCED with 3 advanced prompting techniques:
+  1. Few-shot examples showing correct vs incorrect extraction
+  2. Step-by-step extraction workflow
+  3. Self-validation with error correction
 
-AUDIT-DRIVEN FIXES IN THIS VERSION:
-----------------------------------------------------------------------
-FIX-01  TENURE_OPTIONS contamination (6/10 rows):
-        Added _is_payment_frequency() helper that detects "Annual / Semi-Annual /
-        Quarterly / Monthly" patterns. Any TENURE_OPTIONS value whose tokens are
-        all payment-frequency keywords is reset to "N/A" in normalize_record().
-        The validation prompt and the DO NOT block in EXTRACTION_SYSTEM_PROMPT_v2.txt
-        also emphasise this rule.
+SYSTEM PROMPT IS READ FROM: EXTRACTION_SYSTEM_PROMPT.txt
 
-FIX-02  MAX_AGE / MAX_TERM_YEARS attained-age confusion (Shifa, Zeenat):
-        Prompt updated with explicit negative examples. In
-        apply_deterministic_overrides() a new heuristic is added: if
-        MAX_TERM_YEARS > 75, flag it as a likely attained-age value and reset to
-        "N/A" with a warning. The model is then responsible for re-extracting the
-        correct entry limit. This is conservative — real 76-year plan terms are
-        very rare in the banking market.
+Instead of reading a pre-built JSON index, the script now asks you at startup
+how you want to supply input:
 
-FIX-03  PRICING_RATE unit-allocation table confusion (Tadbeer, and partial Zaamin):
-        Added _is_unit_allocation_table() helper that detects when all extracted
-        values are small percentages (≤100%). Such a PRICING_RATE is reset to
-        "N/A" and a warning is logged.
+  1) Single file   – give one file path (any supported type)
+  2) Folder        – all supported files in one directory (non-recursive)
+  3) Nested folder – all supported files under a directory tree (recursive)
 
-FIX-04  PRODUCT_NAME all-caps not normalised (Jubilee):
-        The original normalize_record() already had all-caps → title-case logic,
-        but the final "preserved name" block used record.get("PRODUCT_NAME") which
-        is the raw model output — and .title() was applied, but only if the length
-        was > 5. Ensured .title() fires correctly and added an assertion to catch
-        any remaining all-caps names downstream.
+Supported file types: .txt, .pdf, .docx, .doc, .csv, .json, .xlsx, .xls
 
-FIX-05  KEY_EXCLUSIONS hallucination (Jubilee):
-        Added _is_claims_doc_pattern() that detects claim-document language in
-        KEY_EXCLUSIONS ("Post Mortem", "Claim Form", "FIR", "attested copy",
-        "Physician's Statement"). When detected the field is reset to "N/A".
+Required packages for non-txt formats:
+  pip install pdfplumber python-docx openpyxl
+  # for .doc: sudo apt install antiword  (Linux) or install antiword on PATH
 
-FIX-06  REQUIRED_DOCUMENTS = claims-settlement docs (SLIC):
-        Added _is_claims_settlement_docs() that detects death-claim document
-        patterns ("Death Certificate", "Claim Form A", "Discharge Letter",
-        "SLIC/GBA", "Medico Legal"). When detected the field is reset to "N/A".
+Configure the model through .env:
+  HF_MODEL_NAME_OR_PATH=Qwen/Qwen2.5-3B-Instruct
+  HF_MODEL_CLASS=causal
+  HF_LOCAL_FILES_ONLY=true
 
-FIX-07  DOCX reader — document-order table extraction:
-        read_docx_text() now iterates the document body XML in rendering order
-        so tables appear inline with the paragraph that precedes them. Each table
-        is prefixed with a "~TABLE_START~" / "~TABLE_END~" marker so the model
-        can see it belongs to the product section currently being processed.
-        This prevents a whole-document table dump at the end which confused the
-        model on multi-product files.
+Resumable: already-extracted products (present in OUT_JSONL) are skipped,
+so you can safely re-run after an interruption.
 
-FIX-08  Product section isolation for multi-product documents:
-        Added extract_product_section() that uses product-heading detection
-        to find the boundaries of THIS product's section and returns only that
-        slice of the document text. This eliminates cross-product field bleeding
-        at the source, before chunking.
-
-FIX-09  COVERAGE_AMOUNT truncation produces incomplete values:
-        Added compress_coverage_amount() that rewrites multi-tier coverage amounts
-        using standard abbreviations (Brnz/Slvr/Gld/Plat, K-suffix) before
-        truncation, so all tiers fit in 150 chars.
-
-FIX-10  FEES_AND_CHARGES bleed of non-fee text (Saholat):
-        Added _clean_fees_field() that strips lines matching Target Market or
-        eligibility patterns from a fees string, keeping only lines that contain
-        recognized fee keywords.
-
-FIX-11  TENURE format inconsistency:
-        Added _normalize_tenure() that converts
-        "Minimum Term: X years; Maximum Term: Y years" → "X-Y years".
-
-FIX-12  MIN_CONTRIBUTION string vs integer (Jubilee):
-        Added an explicit string→int coercion pass that ensures MIN_CONTRIBUTION
-        (and all NUMERIC_COLUMNS) always come out as bare integer strings.
-
-SYSTEM PROMPT IS READ FROM: EXTRACTION_SYSTEM_PROMPT_v2.txt
+CHANGES IN THIS VERSION:
+- Added PREMIUM_PAYMENT_FREQUENCY as the 56th column (injected if missing from
+  pipeline_config to maintain backward compatibility).
+- PLAN_TYPE normalization now accepts Protection and Health in addition to the
+  original set.
+- FINANCING_TYPE normalization added: maps "unit linked", "hybrid" patterns to
+  canonical values.
+- PRODUCT_NAME normalization: ALL-CAPS product names are converted to Title Case.
+- OPTIONAL_RIDERS normalization: ensures comma-separated output.
+- Updated field_max_lengths to match corrected-dataset ground-truth lengths
+  (PRICING_RATE 400, FEES_AND_CHARGES 300, KEY_BENEFITS 250, OPTIONAL_RIDERS 300,
+  TENURE 50, TARGET_GOAL 50, COVERAGE_AMOUNT 150, ELIGIBILITY_TYPE 100,
+  EMPLOYMENT_TYPE 500, FINANCING_TYPE 50, PREMIUM_PAYMENT_FREQUENCY 50).
+- Repair prompt is now a compact focused version (no full SYSTEM_PROMPT duplication)
+  to stay within Qwen2.5-3B's context limit during error recovery.
+- Validation prompt updated with corrected field rules (GENDER, DEPOSIT_PROFIT,
+  FINANCING_TYPE, TENURE_OPTIONS vs PREMIUM_PAYMENT_FREQUENCY, etc.).
+- MAX_NEW_TOKENS default raised to 1500 to accommodate 56-field JSON with
+  longer EMPLOYMENT_TYPE and PRICING_RATE values.
 """
 from __future__ import annotations
 
@@ -86,6 +60,8 @@ import time
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+# FIX: Reduce CUDA memory fragmentation on small GPUs (Colab T4/L4 ~15GB).
+# Must be set before the CUDA context is created, so it goes before `import torch`.
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import torch
@@ -108,6 +84,11 @@ from pipeline_config import (
 
 load_local_env()
 
+# ---------------------------------------------------------------------------
+# Inject PREMIUM_PAYMENT_FREQUENCY if pipeline_config was not yet updated.
+# This keeps the script backward-compatible: older pipeline_config files that
+# only define 55 columns will still work; the 56th column is added here.
+# ---------------------------------------------------------------------------
 _NEW_COLUMNS = ["PREMIUM_PAYMENT_FREQUENCY"]
 for _col in _NEW_COLUMNS:
     if _col not in COLUMNS:
@@ -117,41 +98,23 @@ MODEL_NAME = os.environ.get("HF_MODEL_NAME_OR_PATH", "").strip()
 MODEL_CLASS = os.environ.get("HF_MODEL_CLASS", "causal").strip().lower()
 LOCAL_FILES_ONLY = env_bool("HF_LOCAL_FILES_ONLY", True)
 TRUST_REMOTE_CODE = env_bool("HF_TRUST_REMOTE_CODE", False)
+# Raised from 1500 to 2200: the 1500 budget was still getting hit on
+# products with long CUSTOMER_TYPE lists, EMPLOYMENT_TYPE target-market
+# text, and multi-tier PRICING_RATE tables, which truncated the JSON
+# mid-field (see _close_unterminated_json for the recovery path when this
+# still happens). Override via HF_MAX_NEW_TOKENS in .env if needed.
 MAX_NEW_TOKENS = env_int("HF_MAX_NEW_TOKENS", 2200)
 TEMPERATURE = env_float("HF_TEMPERATURE", 0.0)
 TOP_P = env_float("HF_TOP_P", 1.0)
 REPETITION_PENALTY = env_float("HF_REPETITION_PENALTY", 1.03)
-
-# LOW_VRAM_MODE: set to "true" in .env to activate conservative memory settings
-# suitable for Colab T4 (15 GB) running a 7B model in 4-bit, or any GPU with
-# less than ~8 GB VRAM headroom after loading the model.
-#   - Reduces TEXT_CHUNK_SIZE from 6000 → 3500 (smaller KV cache per call)
-#   - Disables the validation pass (saves one full generate() call per product)
-#   - Keeps all deterministic post-processing overrides active
-LOW_VRAM_MODE = env_bool("LOW_VRAM_MODE", False)
-
-# TEXT_CHUNK_SIZE: default 4500 chars (~1125 tokens) — a safe middle ground
-# between the old 6000 (too large for 7B on T4) and the audit-recommended 6000.
-# Override with TEXT_CHUNK_SIZE=3500 for strict VRAM budgets or
-# TEXT_CHUNK_SIZE=6000 if you have a large GPU and want fewer chunks.
-_chunk_default = 3500 if LOW_VRAM_MODE else 4500
-TEXT_CHUNK_SIZE = env_int("TEXT_CHUNK_SIZE", _chunk_default)
-# Overlap increased from 300 → 500 to reduce the probability of a single
-# field value being split across two chunk boundaries.
-TEXT_CHUNK_OVERLAP = env_int("TEXT_CHUNK_OVERLAP", 500)
-
+TEXT_CHUNK_SIZE = env_int("TEXT_CHUNK_SIZE", 6000)
+TEXT_CHUNK_OVERLAP = env_int("TEXT_CHUNK_OVERLAP", 300)
 LOAD_IN_4BIT = env_bool("HF_LOAD_IN_4BIT", False)
 LOAD_IN_8BIT = env_bool("HF_LOAD_IN_8BIT", False)
 DEVICE_MAP = os.environ.get("HF_DEVICE_MAP", "auto").strip() or "auto"
 TORCH_DTYPE = os.environ.get("HF_TORCH_DTYPE", "auto").strip().lower()
 GPU_RESERVE_GIB = env_float("HF_GPU_RESERVE_GIB", 3.0)
 ENABLE_CHUNKING = env_bool("ENABLE_CHUNKING", True)
-
-# ENABLE_VALIDATION: set to "false" in .env to skip the post-merge validation
-# generate() call. Saves ~2200 tokens of KV cache per product. All deterministic
-# normalisation overrides (apply_deterministic_overrides, normalize_record) still
-# run — only the LLM-based correction pass is skipped.
-ENABLE_VALIDATION = env_bool("ENABLE_VALIDATION", not LOW_VRAM_MODE)
 DEFAULT_VALUE = "N/A"
 NUMERIC_COLUMNS = {
     "MIN_AGE",
@@ -170,197 +133,48 @@ NUMERIC_COLUMNS = {
 
 SUPPORTED_EXTENSIONS = {".txt", ".pdf", ".docx", ".doc", ".csv", ".json", ".xlsx", ".xls"}
 
-
-class ExtractionFailedError(RuntimeError):
-    """Raised when all chunks fail to produce parseable JSON."""
-
-
 # ============================================================================
-# LOAD SYSTEM PROMPT
+# LOAD SYSTEM PROMPT FROM SEPARATE FILE
 # ============================================================================
 
-def load_system_prompt(prompt_file: str = "EXTRACTION_SYSTEM_PROMPT_v2_compact.txt") -> str:
+def load_system_prompt(prompt_file: str = "EXTRACTION_SYSTEM_PROMPT.txt") -> str:
     """
-    Load the system prompt. Searches in:
+    Load the system prompt from a separate file.
+
+    Looks for the prompt file in this order:
     1. Current directory
     2. Same directory as this script
     3. Parent directory
-    Falls back through v2 → v1 filenames for backward compatibility.
+
+    If not found, raises an error.
     """
-    candidates = [
-        prompt_file,
-        "EXTRACTION_SYSTEM_PROMPT_v2.txt",   # full v2 (larger; use only if VRAM allows)
-        "EXTRACTION_SYSTEM_PROMPT.txt",       # original v1 (legacy fallback)
+    search_paths = [
+        Path(prompt_file),
+        Path(__file__).parent / prompt_file,
+        Path(__file__).parent.parent / prompt_file,
     ]
-    for fname in candidates:
-        for base in (Path("."), Path(__file__).parent, Path(__file__).parent.parent):
-            p = base / fname
-            if p.exists() and p.is_file():
-                print(f"✓ Loaded system prompt from: {p.resolve()}")
-                return p.read_text(encoding="utf-8")
+
+    for prompt_path in search_paths:
+        if prompt_path.exists() and prompt_path.is_file():
+            print(f"✓ Loaded system prompt from: {prompt_path.resolve()}")
+            return prompt_path.read_text(encoding="utf-8")
 
     raise FileNotFoundError(
-        f"System prompt file not found! Expected '{prompt_file}' in current "
-        "directory, script directory, or parent directory."
+        f"\n{'='*70}\n"
+        f"ERROR: System prompt file not found!\n"
+        f"Expected file: {prompt_file}\n\n"
+        f"Searched in:\n"
+        + "\n".join(f"  - {p.resolve()}" for p in search_paths) +
+        f"\n\nSolution:\n"
+        f"1. Make sure '{prompt_file}' is in the same directory as this script\n"
+        f"2. Or in the parent directory of this script\n"
+        f"3. Or in the current working directory\n"
+        f"{'='*70}\n"
     )
 
 
+# Load the system prompt at module level
 SYSTEM_PROMPT = load_system_prompt()
-
-
-# ============================================================================
-# FIX-07: DOCX reader with document-order table extraction
-# ============================================================================
-
-def _iter_docx_body_elements(doc):
-    """
-    Yield paragraphs and tables in the order they appear in the document body.
-    This preserves the spatial relationship between section headings and their
-    tables, so the model can attribute each table to the correct product section.
-
-    Uses python-docx's internal _element (lxml) to walk body children.
-    """
-    from docx.oxml.ns import qn
-    body = doc.element.body
-    for child in body:
-        tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
-        if tag == "p":
-            # Paragraph
-            from docx.text.paragraph import Paragraph
-            para = Paragraph(child, doc)
-            if para.text.strip():
-                yield ("paragraph", para.text)
-        elif tag == "tbl":
-            # Table — emit with markers so the model knows table context
-            from docx.table import Table
-            tbl = Table(child, doc)
-            yield ("table_start", None)
-            for row in tbl.rows:
-                cells = [cell.text.strip() for cell in row.cells]
-                row_text = " | ".join(c for c in cells if c)
-                if row_text.strip():
-                    yield ("table_row", row_text)
-            yield ("table_end", None)
-
-
-def read_docx_text(path: Path) -> str:
-    """
-    FIX-07: Extract text from DOCX preserving document order (paragraphs and
-    tables interleaved) instead of dumping all tables at the end.
-
-    Each table is wrapped in ~TABLE_START~ / ~TABLE_END~ markers so the LLM
-    can see the table belongs to the product section it follows. This is
-    critical for multi-product documents where attributing tables to the
-    correct product section prevents cross-product field contamination.
-    """
-    try:
-        import docx
-    except ImportError:
-        raise SystemExit(
-            "python-docx is required to read DOCX files.\n"
-            "Install it with:  pip install python-docx"
-        )
-    doc = docx.Document(path)
-    lines: list[str] = []
-    for kind, content in _iter_docx_body_elements(doc):
-        if kind == "paragraph":
-            lines.append(content)
-        elif kind == "table_start":
-            lines.append("~TABLE_START~")
-        elif kind == "table_row":
-            lines.append(content)
-        elif kind == "table_end":
-            lines.append("~TABLE_END~")
-    return "\n".join(lines)
-
-
-# ============================================================================
-# FIX-08: Product section isolation
-# ============================================================================
-
-# Heading patterns that mark the start of a new product section in merged docs.
-# These match: a standalone line that is all-caps or title-case, bold-implied,
-# followed by nothing or by a colon/newline. Conservative: only match lines
-# with 3+ capitalised words to avoid triggering on short headers.
-_SECTION_HEADING_RE = re.compile(
-    r"""
-    ^           # start of line
-    [ \t]*      # optional leading whitespace
-    (
-        # Pattern A: ALL CAPS heading with 3+ words (like "JUBILEE KAMIL TAKAFUL SAVINGS PLAN:")
-        [A-Z][A-Z\s\-&/]{10,}[A-Z]
-        |
-        # Pattern B: Title Case heading with 3+ capitalised words
-        (?:[A-Z][a-z]+\s+){2,}[A-Z][a-zA-Z]*
-    )
-    :?          # optional trailing colon
-    [ \t]*$     # optional trailing whitespace
-    """,
-    re.MULTILINE | re.VERBOSE,
-)
-
-def extract_product_section(full_text: str, product_title: str) -> str:
-    """
-    FIX-08: Isolate the section of a multi-product document that belongs to
-    the product named in product_title.
-
-    Strategy:
-    1. Find all section headings using _SECTION_HEADING_RE.
-    2. Find the heading that best matches product_title (token-overlap).
-    3. Return text from that heading to the next heading (or end of document).
-
-    If no matching heading is found, return the full text unchanged. This is
-    a conservative fallback: failing to isolate is better than truncating too
-    aggressively and losing real content.
-    """
-    lines = full_text.split("\n")
-    heading_positions: list[tuple[int, str]] = []  # (line_index, heading_text)
-
-    for i, line in enumerate(lines):
-        stripped = line.strip().rstrip(":")
-        if len(stripped.split()) >= 3 and _SECTION_HEADING_RE.match(line):
-            heading_positions.append((i, stripped))
-
-    if not heading_positions:
-        return full_text
-
-    # Token-overlap score between product_title and each candidate heading
-    title_tokens = set(_normalize_for_match(product_title).split())
-
-    def overlap_score(heading_text: str) -> float:
-        h_tokens = set(_normalize_for_match(heading_text).split())
-        if not h_tokens or not title_tokens:
-            return 0.0
-        return len(title_tokens & h_tokens) / max(len(title_tokens | h_tokens), 1)
-
-    if not title_tokens:
-        return full_text
-
-    scored = [(score, idx, text) for idx, text in heading_positions
-              for score in [overlap_score(text)]]
-    scored.sort(reverse=True)
-
-    if not scored or scored[0][0] < 0.25:
-        # No heading matches the product title well enough — return full text
-        return full_text
-
-    best_match_line = scored[0][1]
-
-    # Find the next heading after the best match
-    next_heading_line = len(lines)
-    for i, text in heading_positions:
-        if i > best_match_line:
-            next_heading_line = i
-            break
-
-    section_lines = lines[best_match_line:next_heading_line]
-    section_text = "\n".join(section_lines).strip()
-
-    if len(section_text) < 200:
-        # Suspiciously short section — likely a false heading match; return full text
-        return full_text
-
-    return section_text
 
 
 # ============================================================================
@@ -378,7 +192,10 @@ def read_file_text(path: Path) -> str:
         try:
             import pdfplumber
         except ImportError:
-            raise SystemExit("pdfplumber is required: pip install pdfplumber")
+            raise SystemExit(
+                "pdfplumber is required to read PDF files.\n"
+                "Install it with:  pip install pdfplumber"
+            )
         pages = []
         with pdfplumber.open(path) as pdf:
             for page in pdf.pages:
@@ -388,9 +205,21 @@ def read_file_text(path: Path) -> str:
         return "\n".join(pages)
 
     elif ext == ".docx":
-        # FIX-07: Use document-order extraction instead of the old
-        # "all paragraphs then all tables" approach.
-        return read_docx_text(path)
+        try:
+            import docx
+        except ImportError:
+            raise SystemExit(
+                "python-docx is required to read DOCX files.\n"
+                "Install it with:  pip install python-docx"
+            )
+        doc = docx.Document(path)
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        for table in doc.tables:
+            for row in table.rows:
+                row_text = "\t".join(cell.text.strip() for cell in row.cells)
+                if row_text.strip():
+                    paragraphs.append(row_text)
+        return "\n".join(paragraphs)
 
     elif ext == ".doc":
         try:
@@ -404,7 +233,11 @@ def read_file_text(path: Path) -> str:
                 raise RuntimeError(result.stderr.strip())
             return result.stdout
         except FileNotFoundError:
-            raise SystemExit("antiword is required: sudo apt install antiword")
+            raise SystemExit(
+                "antiword is required to read old .doc files.\n"
+                "Install it with:  sudo apt install antiword  (Linux)\n"
+                "or download from http://www.winfield.demon.nl/ (Windows/Mac)"
+            )
 
     elif ext == ".csv":
         return path.read_text(encoding="utf-8", errors="replace")
@@ -421,7 +254,10 @@ def read_file_text(path: Path) -> str:
         try:
             import openpyxl
         except ImportError:
-            raise SystemExit("openpyxl is required: pip install openpyxl")
+            raise SystemExit(
+                "openpyxl is required to read Excel files.\n"
+                "Install it with:  pip install openpyxl"
+            )
         wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
         rows = []
         for sheet in wb.worksheets:
@@ -440,10 +276,11 @@ def read_file_text(path: Path) -> str:
 
 
 # ============================================================================
-# Interactive input selection (unchanged from v1)
+# Interactive input selection
 # ============================================================================
 
 def _prompt_choice(prompt: str, choices: list[str]) -> str:
+    """Ask the user to pick from a numbered list."""
     while True:
         print(prompt)
         for i, choice in enumerate(choices, 1):
@@ -455,6 +292,7 @@ def _prompt_choice(prompt: str, choices: list[str]) -> str:
 
 
 def _collect_files(path: Path, recursive: bool) -> list[Path]:
+    """Return all supported files under *path*."""
     if recursive:
         all_files = path.rglob("*")
     else:
@@ -466,7 +304,9 @@ def _collect_files(path: Path, recursive: bool) -> list[Path]:
 
 
 def select_input_files() -> list[Path]:
+    """Interactively ask user how to supply input files."""
     supported_str = ", ".join(sorted(SUPPORTED_EXTENSIONS))
+
     print("\n" + "=" * 60)
     print("  Product Text Extractor – Input Selection")
     print(f"  Supported formats: {supported_str}")
@@ -484,7 +324,10 @@ def select_input_files() -> list[Path]:
             if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS:
                 return [p]
             if p.is_file():
-                print(f"  Unsupported file type '{p.suffix}'. Supported: {supported_str}\n")
+                print(
+                    f"  Unsupported file type '{p.suffix}'. "
+                    f"Supported: {supported_str}\n"
+                )
             else:
                 print(f"  File not found: {raw}\n")
 
@@ -497,47 +340,63 @@ def select_input_files() -> list[Path]:
                 if files:
                     print(f"  Found {len(files)} supported file(s) directly in '{p}'.")
                     return files
-                print(f"  No supported files found directly in '{p}'. Supported: {supported_str}\n")
+                print(
+                    f"  No supported files found directly in '{p}'.\n"
+                    f"  Supported formats: {supported_str}\n"
+                )
             else:
                 print(f"  Not a valid directory: {raw}\n")
 
-    else:
+    else:  # Nested folder (recursive)
         while True:
             raw = input("\nEnter the root folder path: ").strip()
             p = Path(raw)
             if p.is_dir():
                 files = _collect_files(p, recursive=True)
                 if files:
-                    print(f"  Found {len(files)} supported file(s) under '{p}'.")
+                    print(
+                        f"  Found {len(files)} supported file(s) under '{p}' "
+                        f"(all sub-folders included)."
+                    )
                     return files
-                print(f"  No supported files found anywhere under '{p}'. Supported: {supported_str}\n")
+                print(
+                    f"  No supported files found anywhere under '{p}'.\n"
+                    f"  Supported formats: {supported_str}\n"
+                )
             else:
                 print(f"  Not a valid directory: {raw}\n")
 
 
 def build_index_from_files(files: list[Path]) -> list[dict]:
+    """Build index from file paths."""
     index = []
     for i, path in enumerate(files, start=1):
-        index.append({
-            "product_no": i,
-            "title": path.stem.replace("_", " ").replace("-", " "),
-            "file": str(path),
-            "filename": path.name,
-            "folder": path.parent.name,
-            "_abs_path": path.resolve(),
-        })
+        index.append(
+            {
+                "product_no": i,
+                "title": path.stem.replace("_", " ").replace("-", " "),
+                "file": str(path),
+                "filename": path.name,
+                "folder": path.parent.name,
+                "_abs_path": path.resolve(),
+            }
+        )
     return index
 
 
 # ============================================================================
-# Document chunking
+# Document chunking (FIX for large-document OOM)
 # ============================================================================
 
 def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
     """
-    Split a long document into smaller pieces with paragraph-boundary breaks.
-    FIX: overlap increased from 300→600 (via env var default) to reduce risk
-    of a single field value being split across chunk boundaries.
+    Split a long document into smaller pieces so each model call only has to
+    process chunk_size characters instead of the whole document at once.
+
+    Breaks are made on a paragraph/sentence boundary near chunk_size where
+    possible so a field's value isn't split mid-sentence across two chunks.
+    A small overlap is carried into the next chunk so context right at a
+    boundary isn't lost.
     """
     text = text.strip()
     if len(text) <= chunk_size:
@@ -549,16 +408,19 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
 
     while start < length:
         end = min(start + chunk_size, length)
+
         if end < length:
-            search_from = max(start, end - 600)  # wider search window
+            search_from = max(start, end - 300)
             newline_idx = text.rfind("\n", search_from, end)
             period_idx = text.rfind(". ", search_from, end)
             boundary = max(newline_idx, period_idx)
             if boundary > search_from:
                 end = boundary + 1
+
         piece = text[start:end].strip()
         if piece:
             chunks.append(piece)
+
         if end >= length:
             break
         start = max(end - overlap, start + 1)
@@ -568,20 +430,15 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
 
 def merge_records(accumulated: dict, new_record: dict, columns) -> dict:
     """
-    FIX: Added TENURE_OPTIONS payment-frequency rejection at merge time.
-    Even if a chunk produces "Annual, Semi-Annual, Quarterly" in TENURE_OPTIONS,
-    it is treated as empty (N/A) and will not block a future chunk's correct value.
+    Merge a single chunk's extracted record into the running accumulated
+    record for the product. A field is filled in from this chunk only if it
+    hasn't already been found (still DEFAULT_VALUE/empty) in an earlier
+    chunk — first chunk to find a real value for a field wins.
     """
     for col in columns:
         old = accumulated.get(col)
         new = new_record.get(col)
         old_is_empty = old is None or old == "" or old == DEFAULT_VALUE
-
-        # FIX-01: Reject payment-frequency values from TENURE_OPTIONS at merge time
-        if col == "TENURE_OPTIONS" and new not in (None, "", DEFAULT_VALUE):
-            if _is_payment_frequency(str(new)):
-                new = DEFAULT_VALUE  # treat as absent
-
         new_is_real = new not in (None, "", DEFAULT_VALUE)
         if old_is_empty and new_is_real:
             accumulated[col] = new
@@ -589,7 +446,7 @@ def merge_records(accumulated: dict, new_record: dict, columns) -> dict:
 
 
 # ============================================================================
-# JSON parsing helpers (unchanged from v1)
+# JSON parsing helpers
 # ============================================================================
 
 def _strip_wrappers(text: str) -> str:
@@ -628,11 +485,14 @@ def _iter_json_candidates(text):
     fenced = re.findall(r"```(?:json)?\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL)
     for block in fenced:
         yield from emit(block)
+
     yield from emit(text)
+
     first = text.find("{")
     last = text.rfind("}")
     if first != -1 and last != -1 and last > first:
-        yield from emit(text[first: last + 1])
+        yield from emit(text[first : last + 1])
+
     starts = [idx for idx, ch in enumerate(text) if ch == "{"]
     for brace_start in starts:
         depth = 0
@@ -655,11 +515,33 @@ def _iter_json_candidates(text):
                 elif ch == "}":
                     depth -= 1
                     if depth == 0:
-                        yield from emit(text[brace_start: idx + 1])
+                        yield from emit(text[brace_start : idx + 1])
                         break
 
 
 def _close_unterminated_json(text: str):
+    """
+    Best-effort recovery for JSON that was cut off mid-generation (i.e. the
+    model hit MAX_NEW_TOKENS before finishing the object) rather than being
+    genuinely malformed. All the existing candidate strategies in
+    _iter_json_candidates() require a BALANCED object ({...} fully closed);
+    a mid-field truncation never satisfies that, so they all fail together.
+
+    Strategy:
+      1. Walk the text tracking bracket/string nesting, remembering the last
+         position where we had a *structurally complete* token (end of a
+         closed string, a closed {}/[], or just before a trailing comma).
+      2. If we end while still inside an open string, we don't know how the
+         string was meant to end, so we rewind to that last safe position
+         instead of guessing at the missing content.
+      3. Recompute the open-bracket stack up to that safe cut point and
+         append the matching closers.
+
+    This sacrifices only the one field that was mid-generation when the
+    model was cut off (it will fall back to "N/A" via normalize_record);
+    every field completed before the cutoff is preserved. Returns the
+    repaired JSON text, or None if the input doesn't even start with '{'.
+    """
     start = text.find("{")
     if start == -1:
         return None
@@ -688,7 +570,11 @@ def _close_unterminated_json(text: str):
         return stack, in_str
 
     stack, in_string = bracket_stack(text)
+
     if in_string:
+        # Rewind to the last point where we had a fully-closed string, a
+        # fully-closed nested object/array, or a trailing comma — i.e. the
+        # last spot we can safely cut without inventing content.
         in_str = False
         esc = False
         last_safe_end = 0
@@ -712,9 +598,11 @@ def _close_unterminated_json(text: str):
         stack, _ = bracket_stack(text)
 
     text = text.rstrip().rstrip(",").rstrip()
+
     closers = {"{": "}", "[": "]"}
     for opener in reversed(stack):
         text += closers[opener]
+
     return text
 
 
@@ -724,16 +612,21 @@ def parse_json_blob(raw):
         parsed = _parse_candidate(cleaned)
         if parsed is not None:
             return parsed
+
+    # Last resort: the output may be a genuinely truncated (not malformed)
+    # JSON object — try to close it deterministically before giving up.
+    # This is cheap (no model call) and recovers most MAX_NEW_TOKENS cutoffs.
     closed = _close_unterminated_json(raw)
     if closed:
         parsed = _parse_candidate(closed)
         if parsed is not None:
             return parsed
+
     raise ValueError(f"Could not parse JSON from model output: {raw[:500]}")
 
 
 # ============================================================================
-# Record helpers and normalization
+# Record helpers with normalization
 # ============================================================================
 
 def blank_record(entry):
@@ -744,48 +637,53 @@ def blank_record(entry):
 
 
 def get_source_filename(entry) -> str:
-    """Return the source filename. Always uses the actual path.name."""
+    """Return the source filename for prompt/output fields."""
     for key in ("filename", "file"):
         raw = entry.get(key)
         if raw:
             return Path(str(raw)).name
+
     abs_path = entry.get("_abs_path")
     if abs_path:
         return Path(str(abs_path)).name
+
     return entry.get("title", DEFAULT_VALUE)
 
 
+# Updated max lengths to match corrected-dataset ground-truth observations.
+# Fields absent from this dict are not truncated (e.g. EMPLOYMENT_TYPE can
+# be a long semicolon-separated Target Market list).
 field_max_lengths = {
     "PRODUCT_NAME": 50,
     "PRODUCT_DESCRIPTION": 250,
     "PROVIDER_NAME": 100,
     "PRODUCT_VARIANT_TIER": 50,
-    "PRICING_RATE": 400,
-    "FEES_AND_CHARGES": 300,
-    "KEY_BENEFITS": 250,
-    "OPTIONAL_RIDERS": 300,
+    "PRICING_RATE": 400,           # age-band pricing tables can be ~370 chars
+    "FEES_AND_CHARGES": 300,       # detailed fee schedules up to ~256 chars
+    "KEY_BENEFITS": 250,           # benefits list up to ~212 chars
+    "OPTIONAL_RIDERS": 300,        # rider lists up to ~253 chars
     "REQUIRED_DOCUMENTS": 200,
     "CLAIMS_SERVICE_CONTACT": 200,
     "KEY_EXCLUSIONS": 200,
     "TAX_ZAKAT_TREATMENT": 100,
     "PLAN_TYPE": 15,
-    "TARGET_GOAL": 50,
+    "TARGET_GOAL": 50,             # "Children's Education Planning" style values
     "CUSTOMER_TYPE": 25,
-    "EMPLOYMENT_TYPE": 500,
+    "EMPLOYMENT_TYPE": 500,        # full Target Market list ~334 chars
     "ACCOUNT_TYPE": 20,
     "CARD_TYPE": 25,
     "CHANNEL": 30,
-    "ELIGIBILITY_TYPE": 100,
+    "ELIGIBILITY_TYPE": 100,       # brief eligibility summaries up to ~52 chars
     "SERVICE_TYPE": 25,
     "REWARD_TYPE": 25,
     "CURRENCY": 30,
     "CURRENCY_TYPE": 15,
     "LOAN_AMOUNT_RANGE": 50,
-    "COVERAGE_AMOUNT": 150,
-    "FINANCING_TYPE": 50,
+    "COVERAGE_AMOUNT": 150,        # tier coverage descriptions up to ~94 chars
+    "FINANCING_TYPE": 50,          # "Hybrid (Bonus Based and Unit Linked)" = 36 chars
     "DEPOSIT_PROFIT_TYPE": 30,
     "DEPOSIT_PROFIT_FREQUENCY": 20,
-    "TENURE": 50,
+    "TENURE": 50,                  # "10-67 years (up to attained age of 85)" = 38 chars
     "TENURE_OPTIONS": 50,
     "BUSINESS_TENURE": 30,
     "COLLATERAL_TYPE": 50,
@@ -798,8 +696,10 @@ field_max_lengths = {
 
 
 def truncate_to_boundary(value: str, max_len: int) -> str:
+    """Truncate text at a word or punctuation boundary when possible."""
     if len(value) <= max_len:
         return value
+
     cut = value[:max_len].rstrip()
     boundary = max(cut.rfind(" "), cut.rfind(","), cut.rfind(";"), cut.rfind(":"), cut.rfind("-"))
     if boundary > 0:
@@ -807,220 +707,25 @@ def truncate_to_boundary(value: str, max_len: int) -> str:
     return cut
 
 
-# ============================================================================
-# FIX-01: TENURE_OPTIONS payment-frequency detection
-# ============================================================================
-
-_PAYMENT_FREQ_TOKENS = frozenset({
-    "annual", "annually", "semi-annual", "semi annual", "semiannual",
-    "quarterly", "monthly", "monthly", "biannual", "bi-annual",
-    "half yearly", "half-yearly", "halfyearly",
-    "yearly", "per year", "per annum",
-})
-
-
-def _is_payment_frequency(value: str) -> bool:
-    """
-    FIX-01: Return True if the value looks like a payment frequency list
-    rather than plan duration choices.
-
-    A payment frequency value is one where ALL tokens (after splitting on
-    commas, semicolons, slashes) are in the payment-frequency keyword set.
-    E.g.: "Annual, Semi-Annual, Quarterly" → True
-          "10, 15, 20 years" → False
-          "Annual" → True (single token matches)
-    """
-    if not value or value.strip() == DEFAULT_VALUE:
-        return False
-    # Tokenise on common list separators
-    tokens = [t.strip().lower() for t in re.split(r"[,;/\|]+", value) if t.strip()]
-    if not tokens:
-        return False
-    # All tokens must be payment-frequency keywords (or empty after stripping)
-    return all(
-        any(kw in tok for kw in _PAYMENT_FREQ_TOKENS)
-        for tok in tokens
-    )
-
-
-# ============================================================================
-# FIX-03: PRICING_RATE unit-allocation table detection
-# ============================================================================
-
-def _is_unit_allocation_table(value: str) -> bool:
-    """
-    FIX-03: Return True if the PRICING_RATE value contains only percentage
-    values (unit-allocation table content) rather than contribution amounts.
-
-    Unit-allocation tables look like: "Year 1: 60%; Year 2: 80%; Year 3: 95%"
-    Contribution tables look like: "Bronze: 5,000; Silver: 10,000; Gold: 15,000"
-
-    Heuristic: if ALL numeric values in the string are ≤ 100 and the string
-    contains "%" signs, classify as a unit-allocation table.
-    """
-    if not value or value == DEFAULT_VALUE:
-        return False
-    percent_count = value.count("%")
-    numbers = re.findall(r"\d+(?:\.\d+)?", value)
-    if not numbers:
-        return False
-    if percent_count > 0:
-        # All numbers ≤ 100 → likely percentages, not PKR amounts
-        if all(float(n) <= 100.0 for n in numbers):
-            return True
-    return False
-
-
-# ============================================================================
-# FIX-05: KEY_EXCLUSIONS claims-document detection
-# ============================================================================
-
-_CLAIMS_DOC_KEYWORDS = frozenset({
-    "post mortem", "postmortem", "claim form", "claimant statement",
-    "physician statement", "physician's statement", "fir", "first information report",
-    "medico legal", "medico-legal", "attested copy", "attested cnic",
-    "discharge letter", "discharge summary", "hospital bill",
-    "union council death certificate", "original policy",
-    "news paper cutting", "newspaper cutting",
-})
-
-
-def _is_claims_doc_pattern(value: str) -> bool:
-    """
-    FIX-05: Return True if KEY_EXCLUSIONS appears to contain claims settlement
-    document requirements rather than actual policy exclusions.
-
-    Claims documents are listed when an insurer wants specific paperwork for
-    death/accident claims. They are NOT policy exclusions.
-    Match: "Murder, Suicide, Accidental Death: Post Mortem Report, FIR..."
-    """
-    if not value or value == DEFAULT_VALUE:
-        return False
-    lower = value.lower()
-    keyword_hits = sum(1 for kw in _CLAIMS_DOC_KEYWORDS if kw in lower)
-    return keyword_hits >= 2  # at least 2 claims-doc keywords required
-
-
-# ============================================================================
-# FIX-06: REQUIRED_DOCUMENTS claims-settlement-doc detection
-# ============================================================================
-
-_CLAIMS_SETTLEMENT_KEYWORDS = frozenset({
-    "death certificate", "claim form a", "claim form b", "claimant statement",
-    "discharge letter", "slic/gba", "nadra", "original policy document",
-    "claim investigation", "medico legal", "premium collection record",
-    "physician's statement", "post mortem",
-})
-
-
-def _is_claims_settlement_docs(value: str) -> bool:
-    """
-    FIX-06: Return True if REQUIRED_DOCUMENTS contains death-claim settlement
-    documents rather than enrollment documents.
-
-    Enrollment docs look like: "Auto debit form; CNIC; Declaration form"
-    Claims docs look like: "Death Certificate; Claim Form A; Claim Form B;
-    CNIC of Deceased; FIR..."
-    """
-    if not value or value == DEFAULT_VALUE:
-        return False
-    lower = value.lower()
-    keyword_hits = sum(1 for kw in _CLAIMS_SETTLEMENT_KEYWORDS if kw in lower)
-    return keyword_hits >= 2
-
-
-# ============================================================================
-# FIX-10: FEES_AND_CHARGES non-fee text removal
-# ============================================================================
-
-_FEE_KEYWORDS = frozenset({
-    "fee", "fees", "charge", "charges", "spread", "wakala", "wakalah",
-    "mudarib", "administration", "management", "allocation", "admin",
-    "bid", "offer", "wakalatul", "istismar", "modarib", "wakala fee",
-})
-
-_NON_FEE_PATTERNS = re.compile(
-    r"(salaried|professionals|chartered accountants|self employed|landlords|"
-    r"housewives|retired|government|armed forces|eligibility|target market)",
-    re.IGNORECASE,
-)
-
-
-def _clean_fees_field(value: str) -> str:
-    """
-    FIX-10: Remove non-fee lines from FEES_AND_CHARGES.
-
-    Source documents occasionally include Target Market or Eligibility text
-    inside the Associated Charges section due to document-authoring errors.
-    This filter keeps only lines that contain at least one fee keyword and
-    do not match known non-fee patterns.
-    """
-    if not value or value == DEFAULT_VALUE:
-        return value
-
-    lines = [line.strip() for line in re.split(r"[;\n]", value) if line.strip()]
-    cleaned = []
-    for line in lines:
-        lower = line.lower()
-        has_fee_keyword = any(kw in lower for kw in _FEE_KEYWORDS)
-        has_non_fee_pattern = bool(_NON_FEE_PATTERNS.search(line))
-        if has_fee_keyword and not has_non_fee_pattern:
-            cleaned.append(line)
-        elif not has_fee_keyword and not has_non_fee_pattern:
-            # Neutral line — keep if it looks like it continues a fee description
-            # (starts with a number, dash, or bullet)
-            if re.match(r"^[-•\d]", line):
-                cleaned.append(line)
-
-    result = "; ".join(cleaned)
-    return result if result else value  # fallback to original if all removed
-
-
-# ============================================================================
-# FIX-11: TENURE format normalisation
-# ============================================================================
-
-def _normalize_tenure(value: str) -> str:
-    """
-    FIX-11: Convert "Minimum Term: X years; Maximum Term: Y years" verbose
-    format into the standard "X-Y years" dash notation used across all rows.
-
-    Also handles "Minimum Term: X years\nMaximum Term: Y years" (newline sep).
-    """
-    if not value or value == DEFAULT_VALUE:
-        return value
-    # Match verbose pattern
-    m = re.search(
-        r"[Mm]inimum\s+[Tt]erm\s*:?\s*(\d+)\s*[Yy]ears?.*?"
-        r"[Mm]aximum\s+[Tt]erm\s*:?\s*(\d+)\s*[Yy]ears?",
-        value,
-        re.DOTALL,
-    )
-    if m:
-        min_yr, max_yr = m.group(1), m.group(2)
-        # Preserve any attained-age qualifier if present
-        attained = re.search(r"attained age of (\d+)", value, re.IGNORECASE)
-        if attained:
-            return f"{min_yr}-{max_yr} years (up to attained age of {attained.group(1)})"
-        return f"{min_yr}-{max_yr} years"
-    return value
-
-
-# ============================================================================
-# PLAN_TYPE and FINANCING_TYPE normalisers (unchanged from v1)
-# ============================================================================
-
 def _normalize_plan_type(value: str) -> str:
+    """
+    Normalize PLAN_TYPE to exactly one of the allowed values.
+    Now includes Protection and Health in addition to the original set.
+    """
+    # Expanded set includes Protection and Health added in corrected dataset.
     valid_types = {
         "Loan", "Deposit", "Savings", "Card", "Investment",
         "Insurance", "Service", "Loyalty", "Protection", "Health",
     }
     stripped = value.strip()
+    # Exact match first (case-sensitive)
     if stripped in valid_types:
         return stripped
+    # Case-insensitive exact match
     for vt in valid_types:
         if stripped.lower() == vt.lower():
             return vt
+    # Find the first valid type word inside the value
     for word in re.split(r"[\s,;/]+", stripped):
         word_clean = word.strip(".,;:()")
         if word_clean in valid_types:
@@ -1032,48 +737,57 @@ def _normalize_plan_type(value: str) -> str:
 
 
 def _normalize_financing_type(value: str) -> str:
+    """
+    Normalize FINANCING_TYPE to a canonical form.
+    Added Unit Linked and Hybrid (Bonus Based and Unit Linked) per corrected dataset.
+    """
     stripped = value.strip()
     lower = stripped.lower()
+
+    # Hybrid check first (most specific)
     if "hybrid" in lower or ("bonus" in lower and "unit" in lower):
         return "Hybrid (Bonus Based and Unit Linked)"
+
+    # Unit Linked
     if "unit linked" in lower or "unit-linked" in lower:
         return "Unit Linked"
+
+    # Known single-word canonicals
     canonical_map = {
         "conventional": "Conventional",
         "islamic": "Islamic",
         "takaful": "Takaful",
         "mudarabah": "Mudarabah",
+        "mudarabah": "Mudarabah",
     }
     for key, canonical in canonical_map.items():
         if key in lower:
             return canonical
+
+    # Pass through if already in a known exact form
     known_exact = {
         "Conventional", "Islamic", "Takaful", "Mudarabah",
         "Unit Linked", "Hybrid (Bonus Based and Unit Linked)", DEFAULT_VALUE,
     }
     if stripped in known_exact:
         return stripped
+
+    # Unknown value — preserve as-is (don't silently discard it)
     return stripped
 
 
-# ============================================================================
-# Normalise record
-# ============================================================================
-
-def normalize_record(record, entry) -> dict:
+def normalize_record(record, entry):
     """
-    Normalise an extracted record with all audit-driven fixes applied.
+    Normalize an extracted record with corrections for all known model errors.
 
-    New in v2:
-    - FIX-01: TENURE_OPTIONS payment-frequency detection → N/A
-    - FIX-03: PRICING_RATE unit-allocation table → N/A + warning
-    - FIX-04: PRODUCT_NAME all-caps → Title Case (strengthened)
-    - FIX-05: KEY_EXCLUSIONS claims-doc pattern → N/A
-    - FIX-06: REQUIRED_DOCUMENTS claims-settlement docs → N/A
-    - FIX-09: COVERAGE_AMOUNT — no truncation mid-word; abbreviate first
-    - FIX-10: FEES_AND_CHARGES non-fee text removal
-    - FIX-11: TENURE verbose-format normalisation
-    - FIX-12: NUMERIC_COLUMNS string-to-int coercion (catches "36000" as str)
+    Key normalization rules applied here:
+    - PRODUCT_NAME: ALL-CAPS converted to Title Case
+    - PLAN_TYPE: expanded valid set (Protection, Health now accepted)
+    - FINANCING_TYPE: canonical Unit Linked / Hybrid mapping
+    - GENDER: strict allowed-value enforcement
+    - CUSTOMER_TYPE: single-value enforcement
+    - Numeric fields: strip units, commas, currency symbols
+    - All text fields: truncated at word boundary to max length
     """
     if not isinstance(record, dict):
         return blank_record(entry)
@@ -1082,33 +796,34 @@ def normalize_record(record, entry) -> dict:
 
     for col in COLUMNS:
         value = record.get(col, DEFAULT_VALUE)
+
         if value in (None, "", []):
             value = DEFAULT_VALUE
 
         # ----------------------------------------------------------------
-        # FIX-12: Numeric columns — strict integer output
-        # Handles both str and numeric types; strips PKR/commas/.0
+        # Numeric columns: numbers ONLY
         # ----------------------------------------------------------------
-        if col in NUMERIC_COLUMNS:
-            if isinstance(value, (int, float)):
-                value = str(int(value))
-            elif isinstance(value, str):
-                stripped = value.strip()
-                if not stripped or stripped.upper() == DEFAULT_VALUE:
-                    value = DEFAULT_VALUE
-                else:
-                    match = re.match(r"^(\d+(?:\.\d+)?)", stripped.replace(",", ""))
-                    if match:
-                        num_str = match.group(1)
+        if col in NUMERIC_COLUMNS and isinstance(value, str):
+            stripped = value.strip()
+            if not stripped or stripped.upper() == DEFAULT_VALUE:
+                value = DEFAULT_VALUE
+            else:
+                match = re.match(r'^(\d+(?:\.\d+)?)', stripped.replace(",", ""))
+                if match:
+                    num_str = match.group(1)
+                    # Strip trailing ".0"
+                    if "." in num_str:
                         try:
                             value = str(int(float(num_str)))
                         except ValueError:
                             value = DEFAULT_VALUE
                     else:
-                        value = DEFAULT_VALUE
+                        value = num_str
+                else:
+                    value = DEFAULT_VALUE
 
         # ----------------------------------------------------------------
-        # FIX-04: PRODUCT_NAME — all-caps → Title Case
+        # PRODUCT_NAME: normalize ALL-CAPS headings to Title Case
         # ----------------------------------------------------------------
         if col == "PRODUCT_NAME" and isinstance(value, str):
             stripped_name = value.strip()
@@ -1116,27 +831,23 @@ def normalize_record(record, entry) -> dict:
                     and stripped_name == stripped_name.upper()
                     and len(stripped_name.split()) > 1
                     and len(stripped_name) > 5):
-                # .title() lowercases everything first; restore known acronyms
                 value = stripped_name.title()
-                # Re-uppercase known acronyms
-                for acronym in ("Igi", "Wto", "Slic", "Atm", "Nrp", "Hnw",
-                                "Cnic", "Efu", "Sme", "Llc", "Plc"):
-                    value = value.replace(acronym, acronym.upper())
 
         # ----------------------------------------------------------------
-        # PLAN_TYPE normalisation
+        # PLAN_TYPE: expanded valid set
         # ----------------------------------------------------------------
         if col == "PLAN_TYPE" and isinstance(value, str):
             value = _normalize_plan_type(value)
 
         # ----------------------------------------------------------------
-        # FINANCING_TYPE normalisation
+        # FINANCING_TYPE: canonical mapping
         # ----------------------------------------------------------------
-        if col == "FINANCING_TYPE" and isinstance(value, str) and value != DEFAULT_VALUE:
-            value = _normalize_financing_type(value)
+        if col == "FINANCING_TYPE" and isinstance(value, str):
+            if value not in (DEFAULT_VALUE, ""):
+                value = _normalize_financing_type(value)
 
         # ----------------------------------------------------------------
-        # GENDER strict enforcement
+        # GENDER: strict enforcement of allowed values
         # ----------------------------------------------------------------
         if col == "GENDER" and isinstance(value, str):
             value_lower = value.strip().lower()
@@ -1146,11 +857,14 @@ def normalize_record(record, entry) -> dict:
                 value = "Female"
             elif value_lower in ("all", "both", "all genders", "all customers"):
                 value = "All"
+            elif value_lower in ("n/a", "na", ""):
+                value = DEFAULT_VALUE
             else:
+                # Unrecognized value — do not silently accept
                 value = DEFAULT_VALUE
 
         # ----------------------------------------------------------------
-        # CUSTOMER_TYPE — single value from fixed enum
+        # CUSTOMER_TYPE: single value only
         # ----------------------------------------------------------------
         if col == "CUSTOMER_TYPE" and isinstance(value, str):
             allowed = {
@@ -1159,87 +873,33 @@ def normalize_record(record, entry) -> dict:
             }
             stripped_ct = value.strip()
             if stripped_ct in allowed:
-                pass
-            elif stripped_ct.lower() == "n/a" or not stripped_ct:
+                pass  # already valid
+            elif "," in stripped_ct:
+                # Multiple values — take first valid token
+                first = stripped_ct.split(",")[0].strip()
+                value = first if first in allowed else DEFAULT_VALUE
+            elif stripped_ct.lower() == "n/a":
                 value = DEFAULT_VALUE
-            else:
-                lowered = stripped_ct.lower()
-                match = next((a for a in allowed if a.lower() in lowered), None)
-                if match:
-                    value = match
-                elif "," in stripped_ct or ";" in stripped_ct:
-                    first = re.split(r"[,;]", stripped_ct)[0].strip()
-                    value = first if first in allowed else DEFAULT_VALUE
-                elif "customer" in lowered or "client" in lowered:
-                    value = "Retail"
-                else:
-                    value = DEFAULT_VALUE
+            # Note: values like "Salaried Individuals" are not in the allowed set;
+            # keep them as-is so the validation pass can flag and fix them.
 
         # ----------------------------------------------------------------
-        # FIX-01: TENURE_OPTIONS — reject payment-frequency values
+        # PLAN_TYPE length guard (single word expected)
         # ----------------------------------------------------------------
-        if col == "TENURE_OPTIONS" and isinstance(value, str) and value != DEFAULT_VALUE:
-            if _is_payment_frequency(value):
-                print(
-                    f"  FIX-01: TENURE_OPTIONS '{value}' looks like a payment "
-                    f"frequency — resetting to N/A (should go in PREMIUM_PAYMENT_FREQUENCY)"
-                )
-                value = DEFAULT_VALUE
+        # Already handled above by _normalize_plan_type.
 
         # ----------------------------------------------------------------
-        # FIX-03: PRICING_RATE — reject unit-allocation tables
+        # OPTIONAL_RIDERS: ensure comma-separated (not semicolon-separated)
+        # The corrected dataset uses commas for rider lists.
         # ----------------------------------------------------------------
-        if col == "PRICING_RATE" and isinstance(value, str) and value != DEFAULT_VALUE:
-            if _is_unit_allocation_table(value):
-                print(
-                    f"  FIX-03: PRICING_RATE '{value[:80]}...' looks like a unit-"
-                    f"allocation table (only % values) — resetting to N/A. "
-                    f"Use MIN_CONTRIBUTION for the premium amount."
-                )
-                value = DEFAULT_VALUE
-
-        # ----------------------------------------------------------------
-        # FIX-05: KEY_EXCLUSIONS — reject claims documentation
-        # ----------------------------------------------------------------
-        if col == "KEY_EXCLUSIONS" and isinstance(value, str) and value != DEFAULT_VALUE:
-            if _is_claims_doc_pattern(value):
-                print(
-                    f"  FIX-05: KEY_EXCLUSIONS '{value[:80]}...' appears to contain "
-                    f"claims documentation requirements, not policy exclusions — "
-                    f"resetting to N/A."
-                )
-                value = DEFAULT_VALUE
-
-        # ----------------------------------------------------------------
-        # FIX-06: REQUIRED_DOCUMENTS — reject claims-settlement docs
-        # ----------------------------------------------------------------
-        if col == "REQUIRED_DOCUMENTS" and isinstance(value, str) and value != DEFAULT_VALUE:
-            if _is_claims_settlement_docs(value):
-                print(
-                    f"  FIX-06: REQUIRED_DOCUMENTS '{value[:80]}...' appears to "
-                    f"contain death-claim settlement documents, not enrollment "
-                    f"documents — resetting to N/A."
-                )
-                value = DEFAULT_VALUE
-
-        # ----------------------------------------------------------------
-        # FIX-10: FEES_AND_CHARGES — remove non-fee text
-        # ----------------------------------------------------------------
-        if col == "FEES_AND_CHARGES" and isinstance(value, str) and value != DEFAULT_VALUE:
-            value = _clean_fees_field(value)
-
-        # ----------------------------------------------------------------
-        # FIX-11: TENURE — normalise verbose format
-        # ----------------------------------------------------------------
-        if col == "TENURE" and isinstance(value, str) and value != DEFAULT_VALUE:
-            value = _normalize_tenure(value)
-
-        # ----------------------------------------------------------------
-        # OPTIONAL_RIDERS — ensure comma-separated output
-        # ----------------------------------------------------------------
-        if col == "OPTIONAL_RIDERS" and isinstance(value, str) and value != DEFAULT_VALUE:
-            if "." not in value:
-                value = re.sub(r"\s*;\s*", ", ", value).strip().strip(",").strip()
+        if col == "OPTIONAL_RIDERS" and isinstance(value, str):
+            if value != DEFAULT_VALUE:
+                # Replace semicolons with commas if the field is a flat list
+                # (i.e. not a descriptive sentence containing semicolons for
+                #  different purposes). Heuristic: if no period in the value,
+                # it's a list — replace semicolons.
+                if "." not in value:
+                    value = re.sub(r"\s*;\s*", ", ", value).strip().strip(",").strip()
 
         # ----------------------------------------------------------------
         # Truncate verbose text fields to max length
@@ -1251,120 +911,18 @@ def normalize_record(record, entry) -> dict:
 
         normalized[col] = value
 
-    # ------------------------------------------------------------------
-    # FIX-04 (reinforced): Always override PRODUCT_NAME from record,
-    # applying the same all-caps fix again in case the loop missed it.
-    # ------------------------------------------------------------------
+    # Always preserve PRODUCT_NAME and SOURCE_FILE_PRODUCT
     raw_name = record.get("PRODUCT_NAME") or entry["title"]
+    # Apply title-case fix to the preserved name too
     if isinstance(raw_name, str):
-        sn = raw_name.strip()
-        if sn and sn == sn.upper() and len(sn.split()) > 1 and len(sn) > 5:
-            raw_name = sn.title()
-            for acronym in ("Igi", "Wto", "Slic", "Atm", "Nrp", "Hnw",
-                            "Cnic", "Efu", "Sme"):
-                raw_name = raw_name.replace(acronym, acronym.upper())
+        if (raw_name.strip()
+                and raw_name.strip() == raw_name.strip().upper()
+                and len(raw_name.strip().split()) > 1):
+            raw_name = raw_name.strip().title()
     normalized["PRODUCT_NAME"] = raw_name
-
-    # SOURCE_FILE_PRODUCT is ALWAYS the actual filename — never the model output.
     normalized["SOURCE_FILE_PRODUCT"] = get_source_filename(entry)
 
-    # Assertion: catch any remaining all-caps PRODUCT_NAME
-    pname = normalized.get("PRODUCT_NAME", "")
-    if isinstance(pname, str) and pname == pname.upper() and len(pname.split()) > 1:
-        print(f"  WARNING: PRODUCT_NAME still all-caps after normalisation: '{pname}'")
-
     return normalized
-
-
-# ============================================================================
-# Deterministic safety-net overrides
-# ============================================================================
-
-_INSURER_KEYWORDS = (
-    "takaful", "wto", "window takaful", "life insurance", "insurance company",
-    "igi life", "jubilee life", "state life", "slic", "efu life", "adamjee life",
-    "alfalah insurance",
-)
-_UNIT_LINKED_KEYWORDS = (
-    "participant investment account", "participant's investment account",
-    "participant individual account", "participant's individual account",
-    "pia", "unit allocation", "fund allocation", "bid/offer spread",
-    "bid offer spread",
-)
-_BONUS_KEYWORDS = ("bonus based", "bonus-based", "sum assured plus bonus", "bonus allocation")
-
-
-def _normalize_for_match(text: str) -> str:
-    return re.sub(r"[^a-z0-9 ]", " ", text.lower())
-
-
-def _name_filename_similarity(product_name: str, filename_title: str) -> float:
-    if not product_name or not filename_title:
-        return 1.0
-    a = set(_normalize_for_match(str(product_name)).split())
-    b = set(_normalize_for_match(str(filename_title)).split())
-    a.discard("")
-    b.discard("")
-    if not a or not b:
-        return 1.0
-    overlap = a & b
-    return len(overlap) / max(len(a | b), 1)
-
-
-def apply_deterministic_overrides(record: dict, source_text: str) -> dict:
-    """
-    FIX-02 (new): MAX_TERM_YEARS sanity check — if > 75, it's likely an
-    attained age, not a plan term. Reset to N/A with a warning.
-
-    Original overrides: PLAN_TYPE (insurer → "Insurance") and
-    FINANCING_TYPE (PIA → "Unit Linked") remain unchanged.
-    """
-    text_lower = _normalize_for_match(source_text) if isinstance(source_text, str) else ""
-    provider = str(record.get("PROVIDER_NAME", "") or "")
-    provider_lower = provider.lower()
-
-    # --- 1. PLAN_TYPE: insurer-issued → always "Insurance" ---------
-    is_insurer_issued = (
-        record.get("LEAD_MARKER") == "IBG"
-        or any(kw in provider_lower for kw in _INSURER_KEYWORDS)
-        or any(kw in text_lower for kw in _INSURER_KEYWORDS)
-    )
-    if is_insurer_issued and record.get("PLAN_TYPE") not in (DEFAULT_VALUE,):
-        if record.get("PLAN_TYPE") != "Insurance":
-            record["PLAN_TYPE"] = "Insurance"
-        record["LEAD_MARKER"] = "IBG"
-
-    # --- 2. FINANCING_TYPE: PIA / unit-linked keyword override -----
-    has_unit_linked_evidence = any(kw in text_lower for kw in _UNIT_LINKED_KEYWORDS)
-    has_bonus_evidence = any(kw in text_lower for kw in _BONUS_KEYWORDS)
-    current_financing = str(record.get("FINANCING_TYPE", "") or "")
-    if has_unit_linked_evidence and "unit linked" not in current_financing.lower():
-        if has_bonus_evidence:
-            record["FINANCING_TYPE"] = "Hybrid (Bonus Based and Unit Linked)"
-        else:
-            record["FINANCING_TYPE"] = "Unit Linked"
-
-    # --- FIX-02: MAX_TERM_YEARS > 75 → likely attained age ----------
-    max_term = record.get("MAX_TERM_YEARS", DEFAULT_VALUE)
-    if max_term not in (DEFAULT_VALUE, None, ""):
-        try:
-            if int(max_term) > 75:
-                print(
-                    f"  FIX-02: MAX_TERM_YEARS={max_term} is > 75, which is almost "
-                    f"certainly an attained-age limit, not a plan term. "
-                    f"Resetting to N/A. Verify manually."
-                )
-                record["MAX_TERM_YEARS"] = DEFAULT_VALUE
-        except (ValueError, TypeError):
-            pass
-
-    # --- FIX-01 (reinforced): Reject payment frequency in TENURE_OPTIONS ---
-    tenure_opts = record.get("TENURE_OPTIONS", DEFAULT_VALUE)
-    if tenure_opts and tenure_opts != DEFAULT_VALUE:
-        if _is_payment_frequency(str(tenure_opts)):
-            record["TENURE_OPTIONS"] = DEFAULT_VALUE
-
-    return record
 
 
 # ============================================================================
@@ -1372,14 +930,15 @@ def apply_deterministic_overrides(record: dict, source_text: str) -> dict:
 # ============================================================================
 
 def build_prompt(entry, chunk, tokenizer, chunk_idx=1, chunk_total=1):
-    """Build the extraction prompt for ONE chunk of the document."""
+    """
+    Build the extraction prompt for ONE chunk of the document.
+    `chunk` is already cut to size by chunk_text() — do not slice it again.
+    """
     if chunk_total > 1:
         chunk_note = (
             f"\nNOTE: This is PART {chunk_idx} of {chunk_total} of a single, longer "
-            f"product document. Extract whatever fields you can find in THIS part only. "
-            f"Set missing fields to \"N/A\". Remember: TENURE_OPTIONS must be plan "
-            f"DURATION choices only (e.g. '10, 15, 20 years'), NEVER payment "
-            f"frequencies (Annual/Semi-Annual/Quarterly → go in PREMIUM_PAYMENT_FREQUENCY).\n"
+            f"product document (split only because of length). Extract whatever fields "
+            f"you can find in THIS part only. Set missing fields to \"N/A\".\n"
         )
     else:
         chunk_note = ""
@@ -1421,7 +980,13 @@ def build_prompt(entry, chunk, tokenizer, chunk_idx=1, chunk_total=1):
 
 
 def build_repair_prompt(entry, raw_text):
-    """Compact repair prompt for malformed JSON output."""
+    """
+    Compact repair prompt for malformed JSON output.
+
+    Intentionally does NOT include the full SYSTEM_PROMPT to avoid exceeding
+    Qwen2.5-3B's context limit when the broken output is also long. The essential
+    rules are inlined here instead.
+    """
     repair_instructions = f"""You are repairing broken JSON from a data extraction task.
 Product: {entry['title']}
 Source file: {get_source_filename(entry)}
@@ -1432,91 +997,131 @@ BROKEN OUTPUT TO REPAIR:
 REPAIR RULES — apply all of these:
 - Return exactly ONE valid JSON object with 56 fields, nothing else
 - Use "N/A" for every missing or unparseable field (never null/None/NaN/"")
-- PRODUCT_NAME: Title Case (never ALL CAPS). Acronyms (IGI, WTO, SLIC) stay uppercase.
+- PRODUCT_NAME: Title Case (never ALL CAPS)
 - LEAD_MARKER: exactly "IBG" or "BNK"
-- PLAN_TYPE: one word from Insurance|Protection|Health|Savings|Deposit|Loan|Card|Investment|Service|Loyalty.
-  Insurer/takaful-underwritten products → ALWAYS "Insurance".
+- PLAN_TYPE: one word from Insurance|Protection|Health|Savings|Deposit|Loan|Card|Investment|Service|Loyalty
 - CUSTOMER_TYPE: exactly one of Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A
 - GENDER: exactly one of Male|Female|All|N/A
 - FINANCING_TYPE: one of Conventional|Islamic|Takaful|Mudarabah|Unit Linked|Hybrid (Bonus Based and Unit Linked)|N/A
-- TENURE_OPTIONS: ONLY plan duration choices (e.g. "10, 15, 20 years").
-  "Annual, Semi-Annual, Quarterly" and similar payment frequencies → N/A here, put in PREMIUM_PAYMENT_FREQUENCY
-- MAX_TERM_YEARS: plan term in years only. Attained age is NOT a plan term. If only attained age stated → N/A
-- KEY_EXCLUSIONS: policy exclusions only (conditions where benefit not paid). NOT claim documentation.
-- REQUIRED_DOCUMENTS: enrollment documents only. NOT claims settlement documents.
-- PRICING_RATE: premium/contribution table only. NOT unit-allocation % table.
-- Numeric fields: integers only, no units, no .0, no quotes
-  Numeric: MIN_AGE, MAX_AGE, MIN_BALANCE, MIN_INCOME, MIN_INCOME_USD,
+- Numeric fields (MIN_AGE, MAX_AGE, MIN_BALANCE, MIN_INCOME, MIN_INCOME_USD,
   MIN_INVESTMENT, MIN_CONTRIBUTION, MIN_TERM_YEARS, MAX_TERM_YEARS,
-  FREE_LOOK_PERIOD_DAYS, IS_BANK_OFFERED
-- TENURE: compact format "X-Y years" or "1 Year (renewable)", not verbose "Minimum Term: X"
+  FREE_LOOK_PERIOD_DAYS, IS_BANK_OFFERED): integers only, no units, no .0
+- TENURE_OPTIONS: plan duration choices only, NOT payment frequency
+- PREMIUM_PAYMENT_FREQUENCY: how customer pays (Annual/Quarterly/etc.) or "N/A"
+- OPTIONAL_RIDERS: comma-separated, not semicolons
+- SPECIAL_CONDITIONS: max 200 chars
 - SOURCE_FILE_PRODUCT: filename only, no path
 - No markdown fences, no explanations outside the JSON
 
 Return the repaired JSON object now."""
 
-    messages = [{"role": "user", "content": repair_instructions}]
+    messages = [
+        {"role": "user", "content": repair_instructions},
+    ]
+
+    # Use chat template if available (no system prompt to save tokens)
+    if hasattr(entry.get("_tokenizer_ref"), "apply_chat_template"):
+        pass  # no tokenizer ref stored in entry; fall through
+
     return repair_instructions
 
 
 def build_validation_prompt(entry, extracted_json):
     """
-    Validation and correction prompt.
-
-    MEMORY FIX: The previous version prepended the full SYSTEM_PROMPT (~2600
-    tokens) before the validation instructions, effectively doubling the KV
-    cache requirement for every product. This new version uses a compact
-    self-contained header (~200 tokens) instead. The 18 validation rules below
-    are complete on their own — they do not need the full system prompt.
-
-    This saves ~2400 tokens per validation call, which is the primary fix for
-    CUDA OOM errors on Colab T4/L4 running 7B models in 4-bit quantization.
+    Validation and correction prompt using the full system context.
+    Checks the 56-field output against the corrected extraction rules.
     """
-    # Compact standalone context (~200 tokens) — no SYSTEM_PROMPT embed.
-    header = (
-        "You are a JSON quality-checker for bank/insurance product extraction. "
-        "Fix every rule violation in the JSON below. "
-        "Return ONLY the corrected JSON object. No markdown, no explanation."
-    )
+    validation_instructions = f"""You extracted this JSON. Validate and fix any issues:
 
-    rules = """RULES TO CHECK AND FIX:
-1. PRODUCT_NAME: Title Case. ALL-CAPS → convert. Acronyms (IGI,WTO,SLIC,ATM) stay uppercase.
-2. PLAN_TYPE: ONE word. Any insurer/takaful underwriter → "Insurance".
-3. CUSTOMER_TYPE: one of Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A
-4. GENDER: Male|Female|All|N/A only. "N/A" unless explicitly stated.
-5. FINANCING_TYPE: PIA/unit-allocation present → "Unit Linked". Bonus+PIA → "Hybrid (Bonus Based and Unit Linked)".
-6. TENURE_OPTIONS: plan DURATION choices ONLY (e.g. "10, 15, 20 years").
-   "Annual/Semi-Annual/Quarterly/Monthly" = payment frequency → N/A here, put in PREMIUM_PAYMENT_FREQUENCY.
-7. MAX_AGE: entry age limit ONLY. Renewal/attained age is NOT entry limit. "18-59 renewable to 75" → MAX_AGE=59.
-8. MAX_TERM_YEARS: plan term ONLY, not attained age. "10 till age 85" → N/A. Value > 75 → likely wrong, set N/A.
-9. KEY_EXCLUSIONS: policy exclusions only. NOT claim docs (Claim Form, FIR, Post Mortem). Claims docs → N/A.
-10. REQUIRED_DOCUMENTS: enrollment docs only. NOT claims docs (Death Certificate, Discharge Letter). Claims docs → N/A.
-11. PRICING_RATE: contribution/premium amounts. NOT unit-allocation % (Year 1:60%...). % only table → N/A.
-12. OPTIONAL_RIDERS: add-on riders only. NOT built-in benefits (Top-Up, Surplus Sharing).
-13. DEPOSIT_PROFIT_TYPE / DEPOSIT_PROFIT_FREQUENCY: unit-linked and health/protection plans → both N/A.
-14. PREMIUM_PAYMENT_FREQUENCY: how customer pays (Annual, Semi-Annual, Quarterly). Else N/A.
-15. TENURE: compact "X-Y years" format. NOT "Minimum Term: X years; Maximum Term: Y years".
-16. Numerics (MIN_AGE,MAX_AGE,MIN_BALANCE,MIN_INCOME,MIN_INCOME_USD,MIN_INVESTMENT,
-    MIN_CONTRIBUTION,MIN_TERM_YEARS,MAX_TERM_YEARS,FREE_LOOK_PERIOD_DAYS,IS_BANK_OFFERED):
-    integers only — no PKR, no commas, no .0, no quotes around numbers.
-17. FREE_LOOK_PERIOD_DAYS: only if THIS product explicitly states it. NOT 14 by default.
-18. All 56 fields must be present. null/None/NaN/"" → "N/A"."""
+EXTRACTED JSON:
+{json.dumps(extracted_json, indent=2)}
 
-    prompt = (
-        f"{header}\n\n"
-        f"PRODUCT: {entry['title']}\n\n"
-        f"JSON TO VALIDATE:\n{json.dumps(extracted_json, indent=2)}\n\n"
-        f"{rules}\n\n"
-        "Return the corrected JSON now."
-    )
-    return prompt
+VALIDATION RULES — check each and FIX if violated:
+
+1. PRODUCT_NAME: Is it Title Case? Not ALL CAPS?
+   WRONG: "JUBILEE KAMIL TAKAFUL SAVINGS PLAN"
+   CORRECT: "Jubilee Kamil Takaful Savings Plan"
+
+2. PLAN_TYPE: Is it ONE word from Insurance|Protection|Health|Savings|Deposit|Loan|Card|Investment|Service|Loyalty?
+   Protection plans (accident/theft only) → "Protection"
+   Hospitalization plans → "Health"
+   Unit-linked savings/endowment → "Savings"
+
+3. CUSTOMER_TYPE: Is it exactly ONE value (no commas)?
+   Allowed: Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A
+
+4. GENDER: Is it exactly one of Male|Female|All|N/A?
+   "N/A" if gender is not mentioned. "All" ONLY if explicitly stated in document.
+   Do NOT use "All" merely because an eligibility section exists.
+
+5. FINANCING_TYPE: For unit-linked plans (PIA, fund allocation) → "Unit Linked"
+   Hybrid (bonus + unit-linked) → "Hybrid (Bonus Based and Unit Linked)"
+   NOT "N/A" for plans that explicitly mention unit-linked structure.
+
+6. DEPOSIT_PROFIT_TYPE / DEPOSIT_PROFIT_FREQUENCY: Unit-linked plans → both "N/A"
+   Health/protection plans (no savings) → both "N/A"
+   Do NOT set "At Maturity" for unit-linked plans.
+
+7. TENURE_OPTIONS: Is it ONLY plan duration choices (e.g. "10, 15, 20 years")?
+   Payment frequencies ("Annual, Quarterly") belong in PREMIUM_PAYMENT_FREQUENCY.
+   If no distinct plan duration menu → "N/A"
+
+8. PREMIUM_PAYMENT_FREQUENCY: Is it the payment frequency (Annual/Semi-Annual/Quarterly/Monthly)?
+   Example: "Annual, Semi-Annual, Quarterly" or "N/A"
+
+9. OPTIONAL_RIDERS: Are they comma-separated (not semicolons)?
+   WRONG: "Accidental Death; Income Benefit"
+   CORRECT: "Accidental Death, Income Benefit"
+
+10. Numeric fields: Do they contain ONLY integers (no PKR, no commas, no .0)?
+    Fields: MIN_AGE, MAX_AGE, MIN_BALANCE, AVG_BALANCE_REQUIREMENT, MIN_INCOME,
+    MIN_INCOME_USD, MIN_INVESTMENT, MIN_CONTRIBUTION, MIN_TERM_YEARS,
+    MAX_TERM_YEARS, FREE_LOOK_PERIOD_DAYS, IS_BANK_OFFERED
+    WRONG: "18.0", "PKR 250,000"  CORRECT: "18", "250000"
+
+11. FREE_LOOK_PERIOD_DAYS: Is it set ONLY because this product explicitly mentions it?
+    If not explicitly stated → "N/A". Do NOT default to 14.
+
+12. SEGMENT_TIER / SERVICE_TYPE / CUSTOMER_SEGMENT / TARGET_SEGMENT:
+    "N/A" unless explicitly stated in the document. Do NOT derive from other fields.
+
+13. SOURCE_FILE_PRODUCT: Filename only (no folder path).
+
+14. All 56 fields present? No null/None/NaN/empty string → "N/A"
+    Columns: PRODUCT_NAME, LEAD_MARKER, SOURCE_FILE_PRODUCT, PLAN_TYPE, TARGET_GOAL,
+    CUSTOMER_TYPE, EMPLOYMENT_TYPE, CUSTOMER_SEGMENT, TARGET_SEGMENT, SEGMENT_TIER,
+    MIN_AGE, MAX_AGE, GENDER, IS_BANK_OFFERED, ACCOUNT_TYPE, CARD_TYPE, CHANNEL,
+    ELIGIBILITY_TYPE, SERVICE_TYPE, REWARD_TYPE, CURRENCY, CURRENCY_TYPE,
+    MIN_BALANCE, AVG_BALANCE_REQUIREMENT, MIN_INCOME, MIN_INCOME_USD,
+    MIN_INVESTMENT, MIN_CONTRIBUTION, LOAN_AMOUNT_RANGE, COVERAGE_AMOUNT,
+    FINANCING_TYPE, DEPOSIT_PROFIT_TYPE, DEPOSIT_PROFIT_FREQUENCY,
+    TENURE, TENURE_OPTIONS, MIN_TERM_YEARS, MAX_TERM_YEARS, BUSINESS_TENURE,
+    COLLATERAL_TYPE, EQUITY_REQUIREMENT, DBR_LIMIT, TRANSACTION_LIMIT,
+    SPECIAL_CONDITIONS, PRODUCT_DESCRIPTION, PROVIDER_NAME, PRODUCT_VARIANT_TIER,
+    PRICING_RATE, FEES_AND_CHARGES, KEY_BENEFITS, OPTIONAL_RIDERS,
+    FREE_LOOK_PERIOD_DAYS, REQUIRED_DOCUMENTS, CLAIMS_SERVICE_CONTACT,
+    KEY_EXCLUSIONS, TAX_ZAKAT_TREATMENT, PREMIUM_PAYMENT_FREQUENCY
+
+Refer to the system prompt above for full field definitions and all rules.
+
+If ANY rule is violated, return CORRECTED JSON. Otherwise return JSON unchanged.
+Fix ONLY the violations, preserve everything else.
+Return ONLY valid JSON, no explanations."""
+
+    return f"{SYSTEM_PROMPT}\n\n{validation_instructions}"
 
 
 # ============================================================================
-# Model inference (unchanged from v1)
+# Model inference
 # ============================================================================
 
 def free_gpu_memory():
+    """
+    Release cached/fragmented CUDA memory between generate() calls.
+    empty_cache() returns RESERVED-but-UNUSED memory to the CUDA driver.
+    It cannot free the model's weights (live tensors). Use GPU_RESERVE_GIB
+    to limit how much of the GPU the loader fills with weights.
+    """
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -1554,17 +1159,29 @@ def get_raw_generation(model, tokenizer, prompt):
 
     hit_token_limit = generated_ids.shape[-1] >= MAX_NEW_TOKENS
     if hit_token_limit:
+        # The model ran out of budget before emitting EOS on its own, which
+        # means the JSON is almost certainly truncated mid-field rather than
+        # genuinely malformed. Surface this distinctly from a real parse
+        # error so it's obvious in the logs which one you're dealing with.
         print(
             f"    note: generation hit MAX_NEW_TOKENS={MAX_NEW_TOKENS} "
-            f"(output likely truncated) — attempting auto-close recovery"
+            f"(output likely truncated, not malformed) — attempting auto-close recovery"
         )
 
+    # Explicitly drop tensor references to free GPU memory before next call.
     del inputs, output_ids, generated_ids
     free_gpu_memory()
+
     return text
 
 
 def extract_one_chunk(model, tokenizer, entry, chunk, chunk_idx, chunk_total):
+    """
+    Run extraction on a SINGLE chunk of the document (initial attempt +
+    one compact repair retry if output is not parseable JSON).
+    Validation is done once on the final merged record, not per chunk.
+    Returns a normalized record dict, or None if both attempts failed.
+    """
     prompt = build_prompt(entry, chunk, tokenizer, chunk_idx, chunk_total)
     raw = get_raw_generation(model, tokenizer, prompt)
 
@@ -1572,6 +1189,7 @@ def extract_one_chunk(model, tokenizer, entry, chunk, chunk_idx, chunk_total):
         parsed = parse_json_blob(raw)
         return normalize_record(parsed, entry)
     except Exception:
+        # Compact repair prompt (no full SYSTEM_PROMPT) to stay within context
         repair_prompt = build_repair_prompt(entry, raw)
         repaired_raw = get_raw_generation(model, tokenizer, repair_prompt)
         try:
@@ -1587,24 +1205,20 @@ def extract_one_chunk(model, tokenizer, entry, chunk, chunk_idx, chunk_total):
 
 def extract_one_product(model, tokenizer, entry, text):
     """
-    FIX-08 (NEW): Before chunking, attempt to isolate this product's section
-    from a multi-product document. If isolation succeeds (section > 200 chars),
-    only the isolated section is chunked and sent to the model. This prevents
-    fields from adjacent product sections bleeding into this product's record.
-    """
-    # FIX-08: Try to isolate product section
-    isolated_text = extract_product_section(text, entry["title"])
-    if isolated_text != text:
-        print(
-            f"  FIX-08: Isolated product section "
-            f"({len(isolated_text)} / {len(text)} chars)"
-        )
-    working_text = isolated_text
+    Chunked extraction + field-level merge + single validation pass.
 
+    The document is split into TEXT_CHUNK_SIZE-char pieces. Each piece is
+    sent to the model separately. Results are merged field-by-field
+    (first real value found for a field across chunks wins). A single
+    validation pass runs on the final merged record.
+
+    If ENABLE_CHUNKING=False, the whole document is sent in one call
+    (risks OOM on long documents + large system prompt).
+    """
     if ENABLE_CHUNKING:
-        chunks = chunk_text(working_text, TEXT_CHUNK_SIZE, TEXT_CHUNK_OVERLAP)
+        chunks = chunk_text(text, TEXT_CHUNK_SIZE, TEXT_CHUNK_OVERLAP)
     else:
-        chunks = [working_text.strip()]
+        chunks = [text.strip()]
     chunk_total = len(chunks)
 
     accumulated = blank_record(entry)
@@ -1618,49 +1232,27 @@ def extract_one_product(model, tokenizer, entry, text):
         free_gpu_memory()
 
     if not any_chunk_succeeded:
-        raise ExtractionFailedError(
-            f"All {chunk_total} chunk(s) failed to produce parseable JSON "
-            f"for '{entry['title']}' ({get_source_filename(entry)})."
-        )
+        return blank_record(entry)
 
     # Single validation/correction pass on the merged record.
-    # Skipped when ENABLE_VALIDATION=false or LOW_VRAM_MODE=true.
-    # normalize_record() + apply_deterministic_overrides() still run either way,
-    # so the deterministic fixes (PLAN_TYPE, FINANCING_TYPE, TENURE_OPTIONS, etc.)
-    # are always applied regardless of this flag.
-    if ENABLE_VALIDATION:
-        validation_prompt = build_validation_prompt(entry, accumulated)
-        validation_raw = get_raw_generation(model, tokenizer, validation_prompt)
-        try:
-            validated_parsed = parse_json_blob(validation_raw)
-            final_record = normalize_record(validated_parsed, entry)
-        except Exception:
-            final_record = accumulated
-        free_gpu_memory()  # explicit free after validation call
-    else:
-        final_record = accumulated
-
-    # Deterministic safety-net overrides (expanded in v2).
-    # Use the ISOLATED text so keyword searches hit this product only.
-    final_record = apply_deterministic_overrides(final_record, working_text)
-
-    similarity = _name_filename_similarity(final_record.get("PRODUCT_NAME", ""), entry["title"])
-    if similarity < 0.2:
-        print(
-            f"  WARNING: PRODUCT_NAME '{final_record.get('PRODUCT_NAME')}' shares "
-            f"little overlap with source file '{get_source_filename(entry)}' "
-            f"(similarity={similarity:.2f}) — verify for cross-document content bleed."
-        )
-
-    return final_record
+    validation_prompt = build_validation_prompt(entry, accumulated)
+    validation_raw = get_raw_generation(model, tokenizer, validation_prompt)
+    try:
+        validated_parsed = parse_json_blob(validation_raw)
+        return normalize_record(validated_parsed, entry)
+    except Exception:
+        # If the validation call itself fails to parse, the merged record
+        # (already normalized field-by-field) is still a valid result.
+        return accumulated
 
 
 def extract_one(model, tokenizer, entry, text):
+    """Main extraction entry point: chunked extraction + merge + validation."""
     return extract_one_product(model, tokenizer, entry, text)
 
 
 # ============================================================================
-# Model loader (unchanged from v1)
+# Model loader
 # ============================================================================
 
 def make_generator():
@@ -1675,14 +1267,16 @@ def make_generator():
         except PackageNotFoundError as exc:
             raise SystemExit(
                 "4-bit/8-bit loading needs bitsandbytes.\n"
-                "Install: pip install -U 'bitsandbytes>=0.46.1'"
+                "Run this in Colab, then restart runtime:\n"
+                "pip install -U 'bitsandbytes>=0.46.1'"
             ) from exc
         match = re.match(r"^(\d+)\.(\d+)\.(\d+)", bnb_version)
         major, minor, patch = (int(part) for part in match.groups()) if match else (0, 0, 0)
         if (major, minor, patch) < (0, 46, 1):
             raise SystemExit(
-                f"bitsandbytes {bnb_version} is too old. "
-                "Install: pip install -U 'bitsandbytes>=0.46.1'"
+                f"bitsandbytes {bnb_version} is too old for 4-bit loading.\n"
+                "Run this in Colab, then restart runtime:\n"
+                "pip install -U 'bitsandbytes>=0.46.1'"
             )
 
     try:
@@ -1692,7 +1286,13 @@ def make_generator():
             trust_remote_code=TRUST_REMOTE_CODE,
         )
     except RepositoryNotFoundError as exc:
-        raise SystemExit(f"Model not found: {MODEL_NAME}") from exc
+        raise SystemExit(
+            f"Model not found on Hugging Face: {MODEL_NAME}\n"
+            "This usually means the repo id is wrong.\n"
+            "Use the exact Hugging Face model id from the model card, or set HF_MODEL_NAME_OR_PATH\n"
+            "to a local folder path.\n"
+            "If the repo is private or gated, authenticate in Colab first."
+        ) from exc
 
     model_kwargs: dict = {
         "local_files_only": LOCAL_FILES_ONLY,
@@ -1701,6 +1301,9 @@ def make_generator():
 
     if DEVICE_MAP.lower() != "none":
         model_kwargs["device_map"] = DEVICE_MAP
+
+        # Cap how much GPU memory Accelerate fills with weights, leaving
+        # GPU_RESERVE_GIB free for the KV-cache that generate() needs.
         if torch.cuda.is_available() and DEVICE_MAP.lower() == "auto":
             max_memory = {}
             for i in range(torch.cuda.device_count()):
@@ -1731,6 +1334,10 @@ def make_generator():
 
     print(f"Loading model: {MODEL_NAME}")
     print(f"Model class:   {MODEL_CLASS}")
+    print(f"Device map:    {DEVICE_MAP}")
+    print(f"Torch dtype:   {TORCH_DTYPE}")
+    print(f"4-bit quant:   {LOAD_IN_4BIT}")
+    print(f"8-bit quant:   {LOAD_IN_8BIT}")
 
     if MODEL_CLASS == "seq2seq":
         model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME, **model_kwargs)
@@ -1779,9 +1386,13 @@ def main():
         model, tokenizer = make_generator()
     except torch.cuda.OutOfMemoryError as exc:
         raise SystemExit(
-            "CUDA OOM while loading model. Try:\n"
-            "HF_LOAD_IN_4BIT=true\nHF_DEVICE_MAP=auto\n"
-            "HF_TORCH_DTYPE=float16\nHF_GPU_RESERVE_GIB=3.0"
+            "CUDA ran out of memory while loading the model.\n"
+            "For Colab T4/L4 GPUs, use these .env settings:\n"
+            "HF_LOAD_IN_4BIT=true\n"
+            "HF_DEVICE_MAP=auto\n"
+            "HF_TORCH_DTYPE=float16\n"
+            "HF_GPU_RESERVE_GIB=3.0\n"
+            "You can also use a smaller model like Qwen/Qwen2.5-3B-Instruct."
         ) from exc
 
     done = load_done_ids()
@@ -1822,10 +1433,12 @@ def main():
                     )
                     break
                 except torch.cuda.OutOfMemoryError as e:
+                    # Clear fragmented allocator state before retrying —
+                    # each retry must start from a clean memory state.
                     free_gpu_memory()
                     print(
                         f"[{entry['product_no']:03d}/{len(index)}] "
-                        f"CUDA OOM on attempt {attempt + 1}, retrying: {e}"
+                        f"CUDA OOM on attempt {attempt + 1}, cleared cache and retrying: {e}"
                     )
                     time.sleep(5)
                 except Exception as e:
@@ -1835,13 +1448,9 @@ def main():
                     )
                     time.sleep(3)
             else:
-                print(f"[{entry['product_no']:03d}/{len(index)}] FAILED after retries — writing placeholder")
-                placeholder = blank_record(entry)
-                placeholder["SPECIAL_CONDITIONS"] = "EXTRACTION_FAILED_MANUAL_REVIEW_REQUIRED"
-                rec = {"product_no": entry["product_no"], **placeholder}
-                out.write(json.dumps(rec, ensure_ascii=False) + "\n")
-                out.flush()
+                print(f"[{entry['product_no']:03d}/{len(index)}] FAILED after retries")
 
+            # Clean up after every product to prevent slow memory accumulation.
             free_gpu_memory()
 
     print("Done. Output:", OUT_JSONL)
