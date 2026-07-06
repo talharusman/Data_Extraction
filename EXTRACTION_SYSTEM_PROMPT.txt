@@ -17,293 +17,140 @@ KEY_EXCLUSIONS, TAX_ZAKAT_TREATMENT, PREMIUM_PAYMENT_FREQUENCY
 
 ===GLOBAL RULES===
 G1. Missing value → "N/A". Never null/None/""/NaN.
-G2. NUMERIC fields → whole integers ONLY, no units/currency/decimals/commas.
+G2. NUMERIC fields → whole integers ONLY, no units/currency/decimals/commas/quotes.
     Numeric: MIN_AGE, MAX_AGE, MIN_BALANCE, AVG_BALANCE_REQUIREMENT,
     MIN_INCOME, MIN_INCOME_USD, MIN_INVESTMENT, MIN_CONTRIBUTION,
     MIN_TERM_YEARS, MAX_TERM_YEARS, FREE_LOOK_PERIOD_DAYS, IS_BANK_OFFERED.
-    "PKR 25,000" → 25000 | "18.0" → 18
+    "PKR 25,000"→25000 | "18.0"→18 | "36000" (string)→36000 (integer)
 G3. SOURCE_FILE_PRODUCT = filename only (e.g. "Plan.docx"), never full path.
 G4. Multiple products in one doc → JSON array, one object per product.
 G5. IS_BANK_OFFERED: 1=sold via bank, "N/A"=fully independent.
 G6. Extract each field from THIS product's section only. If the document contains
-    multiple products, identify the section boundaries (product headings) and
-    extract ONLY from the section that matches the "Product title" in the user
-    message. A field value from another product's section is worse than "N/A".
+    multiple products, extract ONLY from the section matching the "Product title"
+    in the user message. A value from another product's section is worse than "N/A".
 G7. DO NOT DERIVE: CUSTOMER_SEGMENT, TARGET_SEGMENT, SEGMENT_TIER, SERVICE_TYPE,
     CHANNEL, ELIGIBILITY_TYPE, GENDER, CURRENCY_TYPE → "N/A" unless explicitly
-    stated verbatim in THIS product's section. The product being denominated in
-    PKR is not "explicit" — CURRENCY_TYPE must be a labelled statement like
-    "Currency Type: PKR" to be non-N/A.
-G8. PRODUCT_NAME: Title Case always ("Jubilee Kamil Plan" not "JUBILEE KAMIL PLAN").
-    Take it from THIS document's own heading — never substitute a product name
-    you associate with the provider from general knowledge.
-    For acronyms (IGI, WTO, SLIC, ATM), keep them fully uppercase within Title
-    Case: "IGI Life WTO Danish Education Plan" not "Igi Life Wto Danish Plan".
-G9. CHARACTER LIMITS ARE HARD (see max-length per field below). Write the most
-    important concrete facts (amounts, ages, percentages, tier names) FIRST, in
-    a compact form, so nothing important gets cut off. Do NOT spend character
-    budget on filler phrases like "This plan offers…" — start directly with fact.
-
-===SECTION ISOLATION RULE===
-CRITICAL: If the document text contains multiple product sections separated by
-headings, you MUST extract only the fields belonging to the product named in
-"Product title" in the user message. Do not carry over any field value from a
-different product's section, even if the products are offered by the same provider.
-A field that does not appear in THIS product's section must be "N/A".
+    stated. Being PKR-denominated does NOT make CURRENCY_TYPE = "PKR".
+G8. PRODUCT_NAME: Title Case always. ALL-CAPS headings → convert to Title Case.
+    "JUBILEE KAMIL TAKAFUL SAVINGS PLAN"→"Jubilee Kamil Takaful Savings Plan".
+    Acronyms (IGI, WTO, SLIC, ATM) stay uppercase in Title Case.
+G9. CHARACTER LIMITS ARE HARD. Write concrete facts (amounts, ages, %) FIRST.
+    No filler phrases like "This plan offers…" — start with the fact.
 
 ===COLUMN RULES===
-PRODUCT_NAME: max50. Title Case from heading, this document only.
-  Acronyms (IGI, WTO, SLIC) stay uppercase. Convert ALL-CAPS headings to
-  Title Case: "JUBILEE KAMIL TAKAFUL SAVINGS PLAN" → "Jubilee Kamil Takaful
-  Savings Plan".
-LEAD_MARKER: "IBG"=insurance/takaful/protection/health, i.e. any product
-  underwritten by an insurance or takaful company (WTO, life insurer,
-  takaful operator). "BNK"=account/card/loan/deposit sold directly by the
-  bank with no underwriting insurer involved.
-SOURCE_FILE_PRODUCT: filename only. Same for all products from one file.
+PRODUCT_NAME: max50. Title Case from heading. ALL-CAPS→Title Case (see G8).
+LEAD_MARKER: "IBG"=insurer/takaful underwritten. "BNK"=bank's own product.
+SOURCE_FILE_PRODUCT: filename only.
 PLAN_TYPE: ONE word → Insurance|Protection|Health|Savings|Deposit|Loan|Card|Investment|Service|Loyalty.
-  RULE OF FIRST PRIORITY: if the product is underwritten by an insurance or
-  takaful company (LEAD_MARKER="IBG"; look for an insurer name, "Window
-  Takaful Operations"/WTO, "Life Insurance", a Takaful/Shariah board
-  reference, or a named underwriter like IGI Life, Jubilee Life, State
-  Life, EFU Life, Adamjee Life, or a bank's insurance subsidiary) →
-  PLAN_TYPE is ALWAYS "Insurance". This applies even when the plan is
-  accident/theft-only, hospitalization-only, an education/marriage savings
-  plan, an endowment, or unit-linked — the underwriting insurer is what
-  matters, not the feature set.
-  Only use Protection|Health|Savings|Investment for a product that is the
-  BANK'S OWN and has NO underwriting insurer (e.g. a bank's own built-in
-  card benefit or a bank-managed mutual fund).
-  Deposit|Loan|Card|Service|Loyalty are for ordinary banking products with
-  no insurance component at all.
-TARGET_GOAL: max50. The plan's PRIMARY PURPOSE, from the plan NAME first, then
-  the description. Use a concise noun phrase with NO semicolons. Derive from
-  the plan name when the document's description text contradicts it:
-  e.g. "Uroos Marriage Plan" → "Children's Marriage Planning" even if the
-  description text mistakenly says "education". Cover the main protection
-  categories, not just the first bullet.
-  WRONG: "Complete Protection Against Accidental Death" (only one of 9 perils)
-  RIGHT: "Accident, Robbery & ATM Theft Protection" (summarises the plan)
-  WRONG: "High Value Savings; Attractive Rate of Return" (semicolon, bullets)
-  RIGHT: "High-Value Shariah-Compliant Savings & Protection"
-CUSTOMER_TYPE: ONE value from the fixed enum ONLY → Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A.
-  Never write free text here (e.g. never "Bank Alfalah customers" — that
-  belongs in ELIGIBILITY_TYPE). If the document only says the product is
-  for the bank's general customer base with no named employment/segment
-  type, use "Retail". No lists, no bank names, no sentences.
-EMPLOYMENT_TYPE: If a Target Market section exists: full semicolon-separated list verbatim. Else "N/A".
-CUSTOMER_SEGMENT: Only if explicit named segment (NRP/HNW). Else "N/A".
-TARGET_SEGMENT: Only if explicitly stated label. Else "N/A".
-SEGMENT_TIER: Only if explicitly stated. Else "N/A".
-MIN_AGE/MAX_AGE: Entry age integers only.
-  MAX_AGE = the ENTRY AGE LIMIT (maximum age to START the plan).
-  A renewal age or "attained age" limit is NOT the entry limit.
-  WRONG: "18-59 years, renewable to 75" → MAX_AGE=75
-  RIGHT: "18-59 years, renewable to 75" → MAX_AGE=59
-  WRONG: "18-65 years, coverage up to age 85" → MAX_AGE=85
-  RIGHT: "18-65 years, coverage up to age 85" → MAX_AGE=65
-GENDER: "Female"=explicitly female-only. "Male"=male-only. "All"=explicitly all genders stated. Else "N/A".
-IS_BANK_OFFERED: see G5.
+  Any product underwritten by an insurance/takaful company → ALWAYS "Insurance".
+  This includes accident-only, hospitalization, education/marriage savings,
+  endowment, unit-linked — the underwriter determines this, not the feature set.
+TARGET_GOAL: max50. Primary purpose, concise noun phrase, NO semicolons.
+  Derive from plan NAME first when description text conflicts with the name.
+CUSTOMER_TYPE: ONE enum value → Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A.
+  "Bank Alfalah customers" → "Retail" (bank-customer phrasing = Retail).
+EMPLOYMENT_TYPE: Full Target Market list, semicolon-separated, verbatim. Else "N/A".
+CUSTOMER_SEGMENT/TARGET_SEGMENT/SEGMENT_TIER: Only if explicitly stated. Else "N/A".
+MIN_AGE: Entry age integer.
+MAX_AGE: ENTRY AGE LIMIT only — the maximum age to START the plan.
+  "18-59, renewable to 75" → MAX_AGE=59 (NOT 75).
+  "18-65, coverage up to 85" → MAX_AGE=65 (NOT 85).
+GENDER: "Female"/"Male"/"All" only if explicitly stated. Else "N/A".
+IS_BANK_OFFERED: 1 or "N/A".
 ACCOUNT_TYPE: Current|Savings|Wallet|Digital|N/A. Insurance plans → "N/A".
 CARD_TYPE: Debit|Credit|Debit Card|Virtual Debit|N/A. Only if product IS a card.
-  An insurance product that covers a debit card is NOT a card product → "N/A".
-CHANNEL: max30. Only if explicitly stated. Else "N/A".
-ELIGIBILITY_TYPE: max100. Only if explicit. E.g. "Bank Alfalah customers; one policy per CNIC".
-  COMPRESS to fit: put age range and CNIC restriction first.
-  "All Bank Alfalah Limited customers within the age limit of 18 to 60 years.
-   Only one policy will be issued on unique CNIC No." →
-  "Bank Alfalah customers 18-60; one policy per CNIC"
-SERVICE_TYPE/REWARD_TYPE: max25. Only if explicitly stated. Else "N/A".
-CURRENCY: "PKR"/"USD"/"PKR + FCY". Pakistan products default → "PKR".
-CURRENCY_TYPE: "PKR"|"FCY"|"PKR + FCY"|"N/A". ONLY if the document uses this
-  exact label in a currency-type context. The product being PKR-denominated
-  is NOT sufficient. Else "N/A".
-MIN_BALANCE/AVG_BALANCE_REQUIREMENT/MIN_INCOME/MIN_INCOME_USD/MIN_INVESTMENT: integers or "N/A".
-MIN_CONTRIBUTION: Minimum annual contribution integer. "PKR 25,000"→25000.
-  For plans with multiple payment frequencies, use the ANNUAL minimum.
-  "Yearly: Rs.36,000 / Monthly: Rs.5,000" → MIN_CONTRIBUTION = 36000.
-LOAN_AMOUNT_RANGE: max50. Loans only. E.g. "200K-3M".
-COVERAGE_AMOUNT: max150. The INSURED AMOUNTS that the plan pays out, not benefit
-  descriptions. Only from THIS product's section.
-  For single-tier plans: list the key benefit amounts.
-  For multi-tier products: COMPRESS to "BenefitName: min–max" across tiers.
-  Use abbreviations for space: Brnz/Slvr/Gld/Plat, K=000, M=million.
-  WRONG: "Accidental Death + Permanent Disablement up to 1,750,000; ATM Cash
-  Withdrawal up to 200,000; Fraudulent Transactions up to 100,000; Accidental"
-  (truncated mid-word)
-  RIGHT: "AccDeath/Disab: Brnz 500K–Plat 1.75M; ATM: up to 200K; Fraud: up to
-  100K; MedExp: up to 20K; Burglary: up to 75K; MobSnatching: up to 45K"
-  Unit-linked plans with no fixed sum assured → "N/A" or
-  "Death: Sum Covered + PIA + Surplus; Maturity: PIA value + Top-up" (in
-  KEY_BENEFITS instead, if coverage amount is not a fixed number).
+  An insurance that COVERS a debit card is NOT itself a card → "N/A".
+CHANNEL/SERVICE_TYPE/REWARD_TYPE: max30/max25/max25. Only if explicitly stated.
+ELIGIBILITY_TYPE: max100. Compress: "Bank Alfalah customers 18-60; one policy per CNIC".
+CURRENCY: "PKR"/"USD"/"PKR + FCY". Pakistan → default "PKR".
+CURRENCY_TYPE: Only if document explicitly labels it (e.g. "Currency Type: PKR"). Else "N/A".
+MIN_BALANCE/AVG_BALANCE_REQUIREMENT/MIN_INCOME/MIN_INCOME_USD/MIN_INVESTMENT: int or "N/A".
+MIN_CONTRIBUTION: Annual minimum integer. Multiple frequencies → use the annual amount.
+LOAN_AMOUNT_RANGE: max50. Loans only.
+COVERAGE_AMOUNT: max150. Insured payout amounts only. For multi-tier products
+  compress: "AccDeath: Brnz 500K–Plat 1.75M; ATM: up to 200K; Fraud: up to 100K".
+  Unit-linked with no fixed sum → "N/A" (put benefit formula in KEY_BENEFITS).
 FINANCING_TYPE: Conventional|Islamic|Takaful|Mudarabah|Unit Linked|Hybrid (Bonus Based and Unit Linked)|N/A.
-  DECISION ORDER (check in this order, first match wins):
-  1. If the document mentions bonus-based sum assured/bonus additions
-     TOGETHER WITH unit-linked/fund/PIA language → "Hybrid (Bonus Based and
-     Unit Linked)".
-  2. If the document mentions a "Participant Investment Account" /
-     "Participant's Investment/Individual Account" (PIA), unit allocation,
-     fund allocation, or a bid/offer spread on units → "Unit Linked". This
-     applies EVEN IF the plan is also called a "Takaful" plan — Takaful
-     describes the Shariah-compliant mode, Unit Linked describes the
-     investment structure being asked for in this field, and Unit Linked
-     takes priority whenever PIA/fund-allocation language is present.
-  3. Otherwise, if explicitly Shariah-compliant/Takaful with no PIA/fund
-     language → "Takaful". If explicitly conventional → "Conventional". If
-     explicitly Mudarabah-based → "Mudarabah". If explicitly Islamic (non-
-     Takaful wording) → "Islamic".
-  4. Else "N/A". Never "N/A" for a plan that explicitly mentions unit-linked
-     structure.
-DEPOSIT_PROFIT_TYPE: Variable|Tier-based|Fixed|Bonus-based|Bonus-based & Unit-linked|N/A.
-  Unit-linked plans → "N/A". Health/protection → "N/A".
-DEPOSIT_PROFIT_FREQUENCY: Monthly|Quarterly|Semi-annual|Annual|At Maturity|N/A.
-  Unit-linked → "N/A". Health/protection → "N/A". Payment frequency→ PREMIUM_PAYMENT_FREQUENCY.
-TENURE: max50. Full range, entry-term style. E.g. "10-25 years (up to
-  attained age of 65)", "1 Year (renewable)". Capitalize "Year(s)" as its
-  own word. Use compact dash notation "10-25 years" not
-  "Minimum Term: 10 years; Maximum Term: 25 years".
-TENURE_OPTIONS: max50. Plan DURATION choices ONLY — a discrete menu of term lengths
-  the customer chooses between. E.g. "10, 15, 20 years".
-  *** PAYMENT FREQUENCIES ARE NEVER TENURE_OPTIONS ***
-  "Annual, Semi-Annual, Quarterly" = payment frequency → put in PREMIUM_PAYMENT_FREQUENCY, NOT here.
-  If the document only states a range (10–25 years) with no discrete menu → "N/A".
-  If the document states only one fixed term → "N/A".
-  WRONG: "Annual; Semi-Annual; Quarterly" (these are payment modes, not plan durations)
-  WRONG: "Annual, Semi-Annual, Quarterly, Monthly"
-  RIGHT: "10, 15, 20 years" (discrete plan duration choices)
-  RIGHT: "N/A" (when only a range or a single term is given)
-MIN_TERM_YEARS/MAX_TERM_YEARS: Plan term years integers (NOT attained age).
-  If the document says "10 till attained age of 85" without a max plan term →
-  MIN_TERM_YEARS=10, MAX_TERM_YEARS="N/A".
-  If MAX_TERM_YEARS would be > 75, verify it is a plan term (not attained age).
-  WRONG: "10 till the attained age of 85" → MAX_TERM_YEARS=85
-  RIGHT: "10 till the attained age of 85" → MIN_TERM_YEARS=10, MAX_TERM_YEARS="N/A"
+  1. Bonus-based sum + PIA/fund language both present → "Hybrid (Bonus Based and Unit Linked)".
+  2. PIA / "Participant Investment Account" / unit allocation / bid-offer spread → "Unit Linked".
+  3. Shariah/Takaful only → "Takaful". Conventional → "Conventional". Mudarabah → "Mudarabah".
+DEPOSIT_PROFIT_TYPE/DEPOSIT_PROFIT_FREQUENCY: Unit-linked and health/protection → "N/A".
+TENURE: max50. Compact dash notation: "10-25 years (up to attained age of 65)".
+  NOT "Minimum Term: 10 years; Maximum Term: 25 years".
+TENURE_OPTIONS: max50. Plan DURATION choices ONLY — a discrete menu of term lengths.
+  *** NEVER payment frequencies. "Annual/Semi-Annual/Quarterly/Monthly" are payment
+  frequencies → put them in PREMIUM_PAYMENT_FREQUENCY, NOT here. ***
+  If only a range or a single term is given (no discrete menu) → "N/A".
+MIN_TERM_YEARS: Integer plan term. NOT attained age.
+MAX_TERM_YEARS: Integer plan term. NOT attained age. NOT renewal age.
+  "10 till attained age of 85" → MIN_TERM_YEARS=10, MAX_TERM_YEARS="N/A".
+  Any value > 75 is likely attained age — verify before setting.
 BUSINESS_TENURE: max30. SME only. Else "N/A".
-COLLATERAL_TYPE/EQUITY_REQUIREMENT/DBR_LIMIT: Loan products only. Else "N/A".
+COLLATERAL_TYPE/EQUITY_REQUIREMENT/DBR_LIMIT: Loans only. Else "N/A".
 TRANSACTION_LIMIT: max50. If stated. Else "N/A".
-SPECIAL_CONDITIONS: max200 STRICT. One-policy-per-CNIC, waiting periods, key
-  restrictions ONLY. Lead with the restriction, skip narrative wording.
-  Free Look Period belongs here ONLY if no REQUIRED_DOCUMENTS section exists;
-  otherwise put FREE_LOOK_PERIOD_DAYS as an integer.
-PRODUCT_DESCRIPTION: max250. One compact sentence: what it is, who underwrites it,
-  and its core mechanism. Skip marketing language and bullet lists.
-  WRONG: "Hybrid product unique combination of Bonus Based and Unit Linked,
-  High Value Savings, Attractive rate of return, ..." (marketing bullets)
-  RIGHT: "SLIC Tayyab Takaful Endowment Plan is a Shariah-compliant hybrid
-  (bonus-based + unit-linked) savings and protection plan underwritten by
-  State Life Insurance Corporation WTO, offering death and maturity benefits."
-PROVIDER_NAME: max100. Underwriter/provider legal name. Include WTO if applicable.
-  E.g. "IGI Life Insurance WTO", "Bank Alfalah / Alfalah Insurance Company Limited-WTO",
-  "Jubilee Life Insurance Company Limited-WTO", "State Life Insurance Corporation of Pakistan WTO".
-  No "distributed via" boilerplate.
-PRODUCT_VARIANT_TIER: max50. Tier names. E.g. "Bronze, Silver, Gold, Platinum".
-PRICING_RATE: max400. All tiers/age-band PREMIUM or CONTRIBUTION amounts, numbers first.
-  THIS FIELD IS FOR CONTRIBUTION/PREMIUM TABLES ONLY — never for unit-allocation %.
-  "Year 1: 60%; Year 2: 80%..." is a unit-allocation table → use MIN_CONTRIBUTION instead.
-  If a contribution table exists it is NEVER "N/A" — compress it:
-  "Category: Tier PKR amount; Tier PKR amount" pairs.
-  Multi-tier example: "Bronze: PKR 5,000; Silver: PKR 10,000; Gold: PKR 15,000;
-  Platinum: PKR 20,000"
-  Age-band example: "Age 0-44: Brnz 7,700 / Slvr 11,800 / Gld 13,000;
-  Age 45-59: Brnz 15,700 / Slvr 24,100 / Gld 26,100"
-  Tier ORDER: Bronze < Silver < Gold < Platinum (ascending contribution amount).
-  NEVER swap Silver and Gold amounts even if the source table has a typo.
-  Verify ordering: Bronze ≤ Silver ≤ Gold ≤ Platinum.
-FEES_AND_CHARGES: max300. Key named fees only, "Fee name: amount/%" pairs.
-  EXCLUDE Target Market bullets or any non-fee text that may appear in the
-  same document section. Fee text matches: "Fee", "Charge", "Spread", "Wakala",
-  "Wakalah", "Mudarib", "Administration", "Management".
-KEY_BENEFITS: max250. Semicolon-separated, lead with the concrete benefit
-  and amount where one exists (e.g. "Death Benefit: Sum Covered + PIA +
-  Surplus") rather than a narrative sentence.
-OPTIONAL_RIDERS: max300. Comma-separated (NOT semicolons). List ONLY separately
-  purchasable add-on riders — NOT built-in benefits.
-  Built-in benefits (e.g. "Top-Up Premium", "Surplus Sharing", "Built-in
-  Hospitalization") are NOT optional riders.
-  E.g. "Accidental Death, Income Benefit-Disability, Income Benefit-Death"
-FREE_LOOK_PERIOD_DAYS: Integer ONLY if THIS product explicitly states a free look
-  period. Do NOT default to 14. "N/A" if not stated for this product.
-REQUIRED_DOCUMENTS: max200. Semicolon-separated enrollment documents only.
-  IMPORTANT: Claims settlement documents are NOT enrollment documents.
-  A list of "Claim Form A, Death Certificate, FIR…" belongs in
-  CLAIMS_SERVICE_CONTACT or is not extracted — it is NOT REQUIRED_DOCUMENTS.
-  Only list documents the customer must submit TO PURCHASE/ENROLL in the plan.
-  E.g. "Auto debit form; CNIC; Declaration form".
-CLAIMS_SERVICE_CONTACT: max200. URL or phone number ONLY. No document lists.
-  If the document only provides a claims process description (visit branch,
-  submit forms) without a phone/URL → "N/A".
-KEY_EXCLUSIONS: max200. Semicolon-separated conditions under which the insurer
-  WILL NOT PAY the benefit. Must be policy conditions, not claim procedures.
-  CRITICAL: Claims documentation requirements (e.g. "Post Mortem Report",
-  "FIR", "Claim Form", "attested CNIC") are NEVER exclusions. If the
-  exclusion section only lists claim documents, return "N/A".
-  WRONG: "Murder, Suicide, Accidental Death: Post Mortem Report, FIR…"
-  (these are claim documentation requirements, not exclusions)
-  RIGHT: "War risks; Suicide within first year; AIDS-related; Pre-existing
-  conditions; Congenital Birth Defect"
-  Only from THIS product section. Else "N/A".
-TAX_ZAKAT_TREATMENT: max100. THIS product section only. Else "N/A".
-PREMIUM_PAYMENT_FREQUENCY: max50. How the customer PAYS. E.g. "Annual, Semi-Annual,
-  Quarterly" or "Annual, Semi-Annual, Quarterly, Monthly". Else "N/A".
-  For a 1-year renewable plan where the only contribution table shows a single
-  annual amount per tier → "Annual".
+SPECIAL_CONDITIONS: max200. Restrictions/waiting periods only. No narrative.
+PRODUCT_DESCRIPTION: max250. One sentence: what it is, who underwrites, core mechanism.
+  NOT a bullet list. NOT marketing language.
+PROVIDER_NAME: max100. Legal underwriter name + WTO if applicable.
+PRODUCT_VARIANT_TIER: max50. Tier names (e.g. "Bronze, Silver, Gold, Platinum").
+PRICING_RATE: max400. Contribution/premium AMOUNTS in tier or age-band format.
+  *** NEVER unit-allocation percentage tables (Year 1: 60%, Year 2: 80%…). ***
+  Tier order: Bronze ≤ Silver ≤ Gold ≤ Platinum (ascending).
+  If a contribution table exists it is NEVER "N/A".
+FEES_AND_CHARGES: max300. Named fees only ("Fee name: amount/%"). No Target Market text.
+KEY_BENEFITS: max250. Semicolon-separated; lead with benefit name and amount.
+OPTIONAL_RIDERS: max300. Comma-separated. Add-on riders ONLY.
+  NOT built-in benefits (Top-Up, Surplus Sharing, Sehat Afza, etc.).
+FREE_LOOK_PERIOD_DAYS: Integer ONLY if THIS product explicitly states it. NOT 14 by default.
+REQUIRED_DOCUMENTS: max200. ENROLLMENT documents only; semicolon-separated.
+  *** NOT claims settlement documents (Death Certificate, Claim Form A/B/C,
+  Discharge Letter, FIR, Post Mortem Report, Medico Legal). ***
+CLAIMS_SERVICE_CONTACT: max200. URL or phone ONLY. No document lists.
+KEY_EXCLUSIONS: max200. Conditions where benefit is NOT paid; semicolon-separated.
+  *** NOT claims documentation requirements (Claim Form, FIR, Post Mortem, etc.). ***
+  "Murder, Suicide…: Post Mortem Report, FIR…" = claims docs → "N/A".
+TAX_ZAKAT_TREATMENT: max100. This product only. Else "N/A".
+PREMIUM_PAYMENT_FREQUENCY: max50. How customer pays. "Annual, Semi-Annual, Quarterly".
+  For 1-year renewable plans with a single annual contribution table → "Annual".
 
-===WORKED EXAMPLES (correct output style)===
-Hospitalization takaful plan underwritten by IGI Life, sold via a bank:
-  LEAD_MARKER: "IBG" | PLAN_TYPE: "Insurance" (NOT "Health" — insurer-issued)
-  CUSTOMER_TYPE: "Retail" (NOT "Bank Alfalah customers")
-  ELIGIBILITY_TYPE: "Bank Alfalah customers 18-59; renewable up to age 75"
-  MAX_AGE: 59 (entry limit, NOT the 75 renewal age)
-  FINANCING_TYPE: "N/A" unless PIA/unit language appears — hospitalization-only
-  plans usually have no investment component.
-  TENURE_OPTIONS: "N/A" (1-year renewable = no term menu)
-  PREMIUM_PAYMENT_FREQUENCY: "Annual" (1-year plan = annual payment)
+===WORKED EXAMPLES===
+Hospitalization takaful (IGI Life WTO, sold via bank):
+  LEAD_MARKER:"IBG" | PLAN_TYPE:"Insurance" | CUSTOMER_TYPE:"Retail"
+  ELIGIBILITY_TYPE:"Bank Alfalah customers 18-59; renewable up to age 75"
+  MAX_AGE:59 (entry limit, NOT the 75 renewal age)
+  TENURE_OPTIONS:"N/A" | PREMIUM_PAYMENT_FREQUENCY:"Annual"
 
-Education savings plan underwritten by an insurer, with a "Participant
-Investment Account (PIA)" mentioned:
-  LEAD_MARKER: "IBG" | PLAN_TYPE: "Insurance" (NOT "Savings")
-  FINANCING_TYPE: "Unit Linked" (NOT "Takaful"/"Conventional" — PIA present)
-  TARGET_GOAL: "Children's Education Planning"
-  TENURE_OPTIONS: "N/A" (plan says 10-25 year range, no discrete menu)
-  PREMIUM_PAYMENT_FREQUENCY: "Annual, Semi-Annual, Quarterly" (explicitly stated)
+Education savings plan with PIA (IGI Life WTO):
+  PLAN_TYPE:"Insurance" | FINANCING_TYPE:"Unit Linked" (PIA present)
+  TENURE_OPTIONS:"N/A" (10-25 yr range = no discrete menu)
+  PREMIUM_PAYMENT_FREQUENCY:"Annual, Semi-Annual, Quarterly"
 
-Accident/theft-only debit-card protection plan underwritten by an insurer:
-  LEAD_MARKER: "IBG" | PLAN_TYPE: "Insurance" (NOT "Protection")
-  COVERAGE_AMOUNT: "AccDeath/Disab: Brnz 500K–Plat 1.75M; ATM: up to 200K;
-  Fraud: up to 100K; MedExp: up to 20K; Burglary: up to 75K"
-  CARD_TYPE: "N/A" (this is an insurance product that COVERS cards, not a card)
-  PRICING_RATE: "Bronze: 5,000; Silver: 10,000; Gold: 15,000; Platinum: 20,000"
-  (Bronze→Silver→Gold→Platinum in ascending price order)
+4-tier accident plan (Alfalah Insurance WTO, Bronze–Platinum):
+  PLAN_TYPE:"Insurance" | CARD_TYPE:"N/A" (covers card, is not a card)
+  COVERAGE_AMOUNT:"AccDeath/Disab: Brnz 500K–Plat 1.75M; ATM: up to 200K; Fraud: up to 100K"
+  PRICING_RATE:"Bronze: 5,000; Silver: 10,000; Gold: 15,000; Platinum: 20,000"
 
-Hybrid (bonus + unit-linked) plan underwritten by State Life WTO:
-  FINANCING_TYPE: "Hybrid (Bonus Based and Unit Linked)"
-  PRODUCT_DESCRIPTION: "SLIC Tayyab Takaful Endowment Plan is a Shariah-compliant
-  hybrid savings plan (bonus-based + unit-linked) underwritten by State Life
-  Insurance Corporation of Pakistan WTO, offering death and maturity benefits."
-
-All-caps heading like "JUBILEE KAMIL TAKAFUL SAVINGS PLAN":
-  PRODUCT_NAME: "Jubilee Kamil Takaful Savings Plan" (Title Case, acronyms kept)
+Hybrid plan (State Life WTO, bonus+unit-linked):
+  FINANCING_TYPE:"Hybrid (Bonus Based and Unit Linked)"
+  PRODUCT_DESCRIPTION:"SLIC Tayyab Takaful Endowment Plan is a Shariah-compliant
+  hybrid savings plan underwritten by State Life Insurance Corporation of Pakistan WTO."
 
 ===DO NOT===
-× PLAN_TYPE other than "Insurance" for ANY insurer/takaful-underwritten product
-× FINANCING_TYPE="Takaful" or "Conventional" when PIA/unit-allocation language present
-× CUSTOMER_TYPE as free text or bank name
-× CURRENCY_TYPE set just because the product is PKR-denominated (must be labelled)
-× TENURE_OPTIONS = any form of payment frequency (Annual/Semi-Annual/Quarterly/Monthly)
-  ← this is the most common error; payment frequencies go in PREMIUM_PAYMENT_FREQUENCY
-× MAX_AGE = a renewal or attained-age limit (must be the ENTRY age limit)
-× MAX_TERM_YEARS = an attained age (must be plan term years; set N/A if ambiguous)
-× DEPOSIT_PROFIT_TYPE or FREQUENCY set for unit-linked or health/protection plans
-× GENDER="All" just because eligibility section exists (must be explicitly stated)
-× FREE_LOOK_PERIOD_DAYS=14 by default (only if this product explicitly states it)
-× KEY_EXCLUSIONS = claims documentation requirements (FIR, Post Mortem, Claim Form)
-× REQUIRED_DOCUMENTS = claims settlement documents (must be enrollment-only docs)
-× OPTIONAL_RIDERS including Built-In benefits (Top-Up, Surplus Sharing, Sehat Afza)
-× PRICING_RATE = unit-allocation percentage table (Year 1: 60%, Year 2: 80%...)
-× COVERAGE_AMOUNT truncated mid-word (compress with abbreviations before truncating)
-× PRODUCT_DESCRIPTION = marketing bullet list (must be one sentence)
-× PRODUCT_NAME in ALL CAPS, or a name recalled from outside this document
-× Numeric fields with .0/PKR/commas/quotes ("36000" → 36000)
-× TENURE in "Minimum Term: X; Maximum Term: Y" format (use "X-Y years" dash notation)
-× TARGET_GOAL with semicolons (must be a single noun phrase)
-× Cross-section field bleed: a value from another product's section in this record
+× PLAN_TYPE ≠ "Insurance" for any insurer/takaful-underwritten product
+× FINANCING_TYPE="Takaful"/"Conventional" when PIA/unit-allocation language present
+× TENURE_OPTIONS = payment frequency (Annual/Semi-Annual/Quarterly/Monthly)
+× MAX_AGE or MAX_TERM_YEARS = attained age or renewal age
+× MAX_TERM_YEARS > 75 without verifying it is truly a plan term
+× PRICING_RATE = unit-allocation % table (Year 1:60%…)
+× KEY_EXCLUSIONS = claims documentation (Claim Form, FIR, Post Mortem…)
+× REQUIRED_DOCUMENTS = claims settlement docs (Death Certificate, Discharge Letter…)
+× OPTIONAL_RIDERS including Built-In benefits (Top-Up, Surplus Sharing)
+× CURRENCY_TYPE set because product is PKR-denominated (must be labelled explicitly)
+× COVERAGE_AMOUNT truncated mid-word (compress with K/M abbreviations first)
+× PRODUCT_DESCRIPTION as bullet list (must be one sentence)
+× PRODUCT_NAME in ALL CAPS or from general knowledge
+× Numeric fields with .0/PKR/commas/quotes
+× TENURE in "Minimum Term: X; Maximum Term: Y" verbose format
+× TARGET_GOAL with semicolons
+× Free look period defaulting to 14 without explicit document statement
+× Cross-section bleed: any value from another product's section in this record

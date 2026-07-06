@@ -121,17 +121,37 @@ MAX_NEW_TOKENS = env_int("HF_MAX_NEW_TOKENS", 2200)
 TEMPERATURE = env_float("HF_TEMPERATURE", 0.0)
 TOP_P = env_float("HF_TOP_P", 1.0)
 REPETITION_PENALTY = env_float("HF_REPETITION_PENALTY", 1.03)
-TEXT_CHUNK_SIZE = env_int("TEXT_CHUNK_SIZE", 6000)
-# FIX: Increased overlap from 300→600 to reduce the probability of a single
-# field value being split across two chunk boundaries (addresses missing
-# FREE_LOOK_PERIOD_DAYS and CLAIMS_SERVICE_CONTACT on Zindagi plan).
-TEXT_CHUNK_OVERLAP = env_int("TEXT_CHUNK_OVERLAP", 600)
+
+# LOW_VRAM_MODE: set to "true" in .env to activate conservative memory settings
+# suitable for Colab T4 (15 GB) running a 7B model in 4-bit, or any GPU with
+# less than ~8 GB VRAM headroom after loading the model.
+#   - Reduces TEXT_CHUNK_SIZE from 6000 → 3500 (smaller KV cache per call)
+#   - Disables the validation pass (saves one full generate() call per product)
+#   - Keeps all deterministic post-processing overrides active
+LOW_VRAM_MODE = env_bool("LOW_VRAM_MODE", False)
+
+# TEXT_CHUNK_SIZE: default 4500 chars (~1125 tokens) — a safe middle ground
+# between the old 6000 (too large for 7B on T4) and the audit-recommended 6000.
+# Override with TEXT_CHUNK_SIZE=3500 for strict VRAM budgets or
+# TEXT_CHUNK_SIZE=6000 if you have a large GPU and want fewer chunks.
+_chunk_default = 3500 if LOW_VRAM_MODE else 4500
+TEXT_CHUNK_SIZE = env_int("TEXT_CHUNK_SIZE", _chunk_default)
+# Overlap increased from 300 → 500 to reduce the probability of a single
+# field value being split across two chunk boundaries.
+TEXT_CHUNK_OVERLAP = env_int("TEXT_CHUNK_OVERLAP", 500)
+
 LOAD_IN_4BIT = env_bool("HF_LOAD_IN_4BIT", False)
 LOAD_IN_8BIT = env_bool("HF_LOAD_IN_8BIT", False)
 DEVICE_MAP = os.environ.get("HF_DEVICE_MAP", "auto").strip() or "auto"
 TORCH_DTYPE = os.environ.get("HF_TORCH_DTYPE", "auto").strip().lower()
 GPU_RESERVE_GIB = env_float("HF_GPU_RESERVE_GIB", 3.0)
 ENABLE_CHUNKING = env_bool("ENABLE_CHUNKING", True)
+
+# ENABLE_VALIDATION: set to "false" in .env to skip the post-merge validation
+# generate() call. Saves ~2200 tokens of KV cache per product. All deterministic
+# normalisation overrides (apply_deterministic_overrides, normalize_record) still
+# run — only the LLM-based correction pass is skipped.
+ENABLE_VALIDATION = env_bool("ENABLE_VALIDATION", not LOW_VRAM_MODE)
 DEFAULT_VALUE = "N/A"
 NUMERIC_COLUMNS = {
     "MIN_AGE",
@@ -159,15 +179,19 @@ class ExtractionFailedError(RuntimeError):
 # LOAD SYSTEM PROMPT
 # ============================================================================
 
-def load_system_prompt(prompt_file: str = "EXTRACTION_SYSTEM_PROMPT_v2.txt") -> str:
+def load_system_prompt(prompt_file: str = "EXTRACTION_SYSTEM_PROMPT_v2_compact.txt") -> str:
     """
     Load the system prompt. Searches in:
     1. Current directory
     2. Same directory as this script
     3. Parent directory
-    Also accepts the legacy filename for backward compatibility.
+    Falls back through v2 → v1 filenames for backward compatibility.
     """
-    candidates = [prompt_file, "EXTRACTION_SYSTEM_PROMPT.txt"]
+    candidates = [
+        prompt_file,
+        "EXTRACTION_SYSTEM_PROMPT_v2.txt",   # full v2 (larger; use only if VRAM allows)
+        "EXTRACTION_SYSTEM_PROMPT.txt",       # original v1 (legacy fallback)
+    ]
     for fname in candidates:
         for base in (Path("."), Path(__file__).parent, Path(__file__).parent.parent):
             p = base / fname
@@ -1436,83 +1460,56 @@ Return the repaired JSON object now."""
 
 
 def build_validation_prompt(entry, extracted_json):
-    """Validation and correction prompt — covers all audit-identified error patterns."""
-    validation_instructions = f"""You extracted this JSON. Validate and fix any issues:
+    """
+    Validation and correction prompt.
 
-EXTRACTED JSON:
-{json.dumps(extracted_json, indent=2)}
+    MEMORY FIX: The previous version prepended the full SYSTEM_PROMPT (~2600
+    tokens) before the validation instructions, effectively doubling the KV
+    cache requirement for every product. This new version uses a compact
+    self-contained header (~200 tokens) instead. The 18 validation rules below
+    are complete on their own — they do not need the full system prompt.
 
-VALIDATION RULES — check each and FIX if violated:
+    This saves ~2400 tokens per validation call, which is the primary fix for
+    CUDA OOM errors on Colab T4/L4 running 7B models in 4-bit quantization.
+    """
+    # Compact standalone context (~200 tokens) — no SYSTEM_PROMPT embed.
+    header = (
+        "You are a JSON quality-checker for bank/insurance product extraction. "
+        "Fix every rule violation in the JSON below. "
+        "Return ONLY the corrected JSON object. No markdown, no explanation."
+    )
 
-1. PRODUCT_NAME: Title Case? Not ALL CAPS?
-   Acronyms (IGI, WTO, SLIC, ATM) stay uppercase even in Title Case.
-   WRONG: "JUBILEE KAMIL TAKAFUL SAVINGS PLAN"
-   RIGHT: "Jubilee Kamil Takaful Savings Plan"
+    rules = """RULES TO CHECK AND FIX:
+1. PRODUCT_NAME: Title Case. ALL-CAPS → convert. Acronyms (IGI,WTO,SLIC,ATM) stay uppercase.
+2. PLAN_TYPE: ONE word. Any insurer/takaful underwriter → "Insurance".
+3. CUSTOMER_TYPE: one of Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A
+4. GENDER: Male|Female|All|N/A only. "N/A" unless explicitly stated.
+5. FINANCING_TYPE: PIA/unit-allocation present → "Unit Linked". Bonus+PIA → "Hybrid (Bonus Based and Unit Linked)".
+6. TENURE_OPTIONS: plan DURATION choices ONLY (e.g. "10, 15, 20 years").
+   "Annual/Semi-Annual/Quarterly/Monthly" = payment frequency → N/A here, put in PREMIUM_PAYMENT_FREQUENCY.
+7. MAX_AGE: entry age limit ONLY. Renewal/attained age is NOT entry limit. "18-59 renewable to 75" → MAX_AGE=59.
+8. MAX_TERM_YEARS: plan term ONLY, not attained age. "10 till age 85" → N/A. Value > 75 → likely wrong, set N/A.
+9. KEY_EXCLUSIONS: policy exclusions only. NOT claim docs (Claim Form, FIR, Post Mortem). Claims docs → N/A.
+10. REQUIRED_DOCUMENTS: enrollment docs only. NOT claims docs (Death Certificate, Discharge Letter). Claims docs → N/A.
+11. PRICING_RATE: contribution/premium amounts. NOT unit-allocation % (Year 1:60%...). % only table → N/A.
+12. OPTIONAL_RIDERS: add-on riders only. NOT built-in benefits (Top-Up, Surplus Sharing).
+13. DEPOSIT_PROFIT_TYPE / DEPOSIT_PROFIT_FREQUENCY: unit-linked and health/protection plans → both N/A.
+14. PREMIUM_PAYMENT_FREQUENCY: how customer pays (Annual, Semi-Annual, Quarterly). Else N/A.
+15. TENURE: compact "X-Y years" format. NOT "Minimum Term: X years; Maximum Term: Y years".
+16. Numerics (MIN_AGE,MAX_AGE,MIN_BALANCE,MIN_INCOME,MIN_INCOME_USD,MIN_INVESTMENT,
+    MIN_CONTRIBUTION,MIN_TERM_YEARS,MAX_TERM_YEARS,FREE_LOOK_PERIOD_DAYS,IS_BANK_OFFERED):
+    integers only — no PKR, no commas, no .0, no quotes around numbers.
+17. FREE_LOOK_PERIOD_DAYS: only if THIS product explicitly states it. NOT 14 by default.
+18. All 56 fields must be present. null/None/NaN/"" → "N/A"."""
 
-2. PLAN_TYPE: ONE word from Insurance|Protection|Health|Savings|Deposit|Loan|Card|Investment|Service|Loyalty?
-   Insurer/takaful-underwritten → always "Insurance".
-
-3. CUSTOMER_TYPE: exactly ONE value. Allowed: Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A
-
-4. GENDER: exactly one of Male|Female|All|N/A.
-   "N/A" if gender is not mentioned. "All" only if explicitly stated.
-
-5. FINANCING_TYPE: Unit-linked plans (PIA, fund allocation) → "Unit Linked".
-   Hybrid (bonus + unit-linked) → "Hybrid (Bonus Based and Unit Linked)".
-
-6. TENURE_OPTIONS: Plan DURATION choices ONLY (e.g. "10, 15, 20 years").
-   *** "Annual", "Semi-Annual", "Quarterly", "Monthly" are PAYMENT FREQUENCIES ***
-   *** and MUST NOT appear in TENURE_OPTIONS — they belong in PREMIUM_PAYMENT_FREQUENCY ***
-   WRONG: "Annual; Semi-Annual; Quarterly"
-   WRONG: "Annual, Semi-Annual, Quarterly, Monthly"
-   RIGHT: "10, 15, 20 years" | RIGHT: "N/A"
-
-7. MAX_AGE: ENTRY age limit only (NOT renewal or attained age).
-   "18-59, renewable to 75" → MAX_AGE=59 (NOT 75).
-
-8. MAX_TERM_YEARS: Plan term in years (NOT attained age).
-   "10 till the attained age of 85" → MAX_TERM_YEARS=N/A (NOT 85).
-   Any MAX_TERM_YEARS > 75 is suspicious — verify it is a plan term.
-
-9. KEY_EXCLUSIONS: Policy conditions under which benefits are NOT paid.
-   NEVER claim documentation requirements (Claim Form, FIR, Post Mortem, etc.).
-   WRONG: "Murder, Suicide, Accidental Death: Post Mortem Report, FIR..."
-   RIGHT: "War risks; Suicide within first year; Pre-existing conditions; AIDS"
-
-10. REQUIRED_DOCUMENTS: Enrollment documents only.
-    NEVER death-claim settlement documents (Death Certificate, Claim Form A/B/C,
-    Discharge Letter, Medico Legal Report, Post Mortem Report).
-    RIGHT: "Auto debit form; CNIC; Declaration form"
-
-11. PRICING_RATE: Contribution/premium amounts ONLY.
-    NEVER unit-allocation percentages (Year 1: 60%; Year 2: 80%...).
-    If only % values → N/A.
-
-12. OPTIONAL_RIDERS: Separately purchasable add-ons ONLY.
-    NOT Built-In benefits (Top-Up Premium, Surplus Sharing, Sehat Afza).
-
-13. DEPOSIT_PROFIT_TYPE / DEPOSIT_PROFIT_FREQUENCY: Unit-linked and health/protection plans → both "N/A".
-
-14. PREMIUM_PAYMENT_FREQUENCY: How customer pays. E.g. "Annual, Semi-Annual, Quarterly". Else "N/A".
-
-15. TENURE: Compact "X-Y years" format, not "Minimum Term: X years; Maximum Term: Y years".
-
-16. Numeric fields: ONLY integers (no PKR, no commas, no .0, no quotes).
-    Fields: MIN_AGE, MAX_AGE, MIN_BALANCE, AVG_BALANCE_REQUIREMENT, MIN_INCOME,
-    MIN_INCOME_USD, MIN_INVESTMENT, MIN_CONTRIBUTION, MIN_TERM_YEARS,
-    MAX_TERM_YEARS, FREE_LOOK_PERIOD_DAYS, IS_BANK_OFFERED
-
-17. FREE_LOOK_PERIOD_DAYS: Set ONLY if this product explicitly states it. NOT 14 by default.
-
-18. All 56 fields present? No null/None/NaN/empty string → "N/A"
-
-Refer to the system prompt above for full field definitions and all rules.
-
-Return CORRECTED JSON if any rule is violated. Otherwise return JSON unchanged.
-Fix ONLY the violations, preserve everything else.
-Return ONLY valid JSON, no explanations."""
-
-    return f"{SYSTEM_PROMPT}\n\n{validation_instructions}"
+    prompt = (
+        f"{header}\n\n"
+        f"PRODUCT: {entry['title']}\n\n"
+        f"JSON TO VALIDATE:\n{json.dumps(extracted_json, indent=2)}\n\n"
+        f"{rules}\n\n"
+        "Return the corrected JSON now."
+    )
+    return prompt
 
 
 # ============================================================================
@@ -1627,12 +1624,20 @@ def extract_one_product(model, tokenizer, entry, text):
         )
 
     # Single validation/correction pass on the merged record.
-    validation_prompt = build_validation_prompt(entry, accumulated)
-    validation_raw = get_raw_generation(model, tokenizer, validation_prompt)
-    try:
-        validated_parsed = parse_json_blob(validation_raw)
-        final_record = normalize_record(validated_parsed, entry)
-    except Exception:
+    # Skipped when ENABLE_VALIDATION=false or LOW_VRAM_MODE=true.
+    # normalize_record() + apply_deterministic_overrides() still run either way,
+    # so the deterministic fixes (PLAN_TYPE, FINANCING_TYPE, TENURE_OPTIONS, etc.)
+    # are always applied regardless of this flag.
+    if ENABLE_VALIDATION:
+        validation_prompt = build_validation_prompt(entry, accumulated)
+        validation_raw = get_raw_generation(model, tokenizer, validation_prompt)
+        try:
+            validated_parsed = parse_json_blob(validation_raw)
+            final_record = normalize_record(validated_parsed, entry)
+        except Exception:
+            final_record = accumulated
+        free_gpu_memory()  # explicit free after validation call
+    else:
         final_record = accumulated
 
     # Deterministic safety-net overrides (expanded in v2).
