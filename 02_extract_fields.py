@@ -47,6 +47,8 @@ CHANGES IN THIS VERSION:
   FINANCING_TYPE, TENURE_OPTIONS vs PREMIUM_PAYMENT_FREQUENCY, etc.).
 - MAX_NEW_TOKENS default raised to 1500 to accommodate 56-field JSON with
   longer EMPLOYMENT_TYPE and PRICING_RATE values.
+- Enhanced normalization for TARGET_GOAL, segments, CHANNEL, ELIGIBILITY_TYPE,
+  tenure fields, COVERAGE_AMOUNT, PRICING_RATE to match corrected dataset.
 """
 from __future__ import annotations
 
@@ -710,7 +712,8 @@ def truncate_to_boundary(value: str, max_len: int) -> str:
 def _normalize_plan_type(value: str) -> str:
     """
     Normalize PLAN_TYPE to exactly one of the allowed values.
-    Now includes Protection and Health in addition to the original set.
+    Now includes Protection and Health in addition to the
+    original set.
     """
     # Expanded set includes Protection and Health added in corrected dataset.
     valid_types = {
@@ -776,6 +779,46 @@ def _normalize_financing_type(value: str) -> str:
     return stripped
 
 
+def _normalize_target_goal(value: str) -> str:
+    """Normalize TARGET_GOAL to corrected style."""
+    if not value or value == DEFAULT_VALUE:
+        return DEFAULT_VALUE
+    val_lower = value.lower()
+    mappings = {
+        "protection": "Protection",
+        "accidental": "Protection",
+        "savings": "Savings",
+        "education": "Education",
+        "health": "Health",
+        "hospitalization": "Health",
+        "marriage": "Marriage",
+        "multipurpose": "Multipurpose Savings",
+    }
+    for key, norm in mappings.items():
+        if key in val_lower:
+            return norm
+    return value.strip()[:50]
+
+
+def _normalize_channel(value: str) -> str:
+    """Standardize CHANNEL."""
+    if not value or value == DEFAULT_VALUE:
+        return DEFAULT_VALUE
+    val_lower = value.lower()
+    if "branch" in val_lower or "branches" in val_lower:
+        return "Bank Branch"
+    return value.strip()[:30]
+
+
+def _normalize_eligibility(value: str) -> str:
+    """Clean ELIGIBILITY_TYPE."""
+    if not value or value == DEFAULT_VALUE:
+        return DEFAULT_VALUE
+    # Keep concise
+    value = re.sub(r"Bank Alfalah Limited?", "Bank Alfalah", value, flags=re.I)
+    return truncate_to_boundary(value.strip(), 100)
+
+
 def normalize_record(record, entry):
     """
     Normalize an extracted record with corrections for all known model errors.
@@ -786,6 +829,7 @@ def normalize_record(record, entry):
     - FINANCING_TYPE: canonical Unit Linked / Hybrid mapping
     - GENDER: strict allowed-value enforcement
     - CUSTOMER_TYPE: single-value enforcement
+    - TARGET_GOAL, CHANNEL, ELIGIBILITY_TYPE, tenure fields enhanced
     - Numeric fields: strip units, commas, currency symbols
     - All text fields: truncated at word boundary to max length
     """
@@ -847,6 +891,24 @@ def normalize_record(record, entry):
                 value = _normalize_financing_type(value)
 
         # ----------------------------------------------------------------
+        # TARGET_GOAL normalization
+        # ----------------------------------------------------------------
+        if col == "TARGET_GOAL" and isinstance(value, str):
+            value = _normalize_target_goal(value)
+
+        # ----------------------------------------------------------------
+        # CHANNEL normalization
+        # ----------------------------------------------------------------
+        if col == "CHANNEL" and isinstance(value, str):
+            value = _normalize_channel(value)
+
+        # ----------------------------------------------------------------
+        # ELIGIBILITY_TYPE normalization
+        # ----------------------------------------------------------------
+        if col == "ELIGIBILITY_TYPE" and isinstance(value, str):
+            value = _normalize_eligibility(value)
+
+        # ----------------------------------------------------------------
         # GENDER: strict enforcement of allowed values
         # ----------------------------------------------------------------
         if col == "GENDER" and isinstance(value, str):
@@ -884,11 +946,6 @@ def normalize_record(record, entry):
             # keep them as-is so the validation pass can flag and fix them.
 
         # ----------------------------------------------------------------
-        # PLAN_TYPE length guard (single word expected)
-        # ----------------------------------------------------------------
-        # Already handled above by _normalize_plan_type.
-
-        # ----------------------------------------------------------------
         # OPTIONAL_RIDERS: ensure comma-separated (not semicolon-separated)
         # The corrected dataset uses commas for rider lists.
         # ----------------------------------------------------------------
@@ -900,6 +957,12 @@ def normalize_record(record, entry):
                 # it's a list — replace semicolons.
                 if "." not in value:
                     value = re.sub(r"\s*;\s*", ", ", value).strip().strip(",").strip()
+
+        # ----------------------------------------------------------------
+        # TENURE normalization - keep as-is but truncate
+        # ----------------------------------------------------------------
+        if col in ("TENURE", "TENURE_OPTIONS") and isinstance(value, str):
+            value = truncate_to_boundary(value.strip(), field_max_lengths.get(col, 50))
 
         # ----------------------------------------------------------------
         # Truncate verbose text fields to max length
@@ -1003,6 +1066,8 @@ REPAIR RULES — apply all of these:
 - CUSTOMER_TYPE: exactly one of Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A
 - GENDER: exactly one of Male|Female|All|N/A
 - FINANCING_TYPE: one of Conventional|Islamic|Takaful|Mudarabah|Unit Linked|Hybrid (Bonus Based and Unit Linked)|N/A
+- TARGET_GOAL: standardized short term like Protection, Savings, Education, Health, Marriage
+- CHANNEL: "Bank Branch" if applicable
 - Numeric fields (MIN_AGE, MAX_AGE, MIN_BALANCE, MIN_INCOME, MIN_INCOME_USD,
   MIN_INVESTMENT, MIN_CONTRIBUTION, MIN_TERM_YEARS, MAX_TERM_YEARS,
   FREE_LOOK_PERIOD_DAYS, IS_BANK_OFFERED): integers only, no units, no .0
@@ -1043,51 +1108,58 @@ VALIDATION RULES — check each and FIX if violated:
    CORRECT: "Jubilee Kamil Takaful Savings Plan"
 
 2. PLAN_TYPE: Is it ONE word from Insurance|Protection|Health|Savings|Deposit|Loan|Card|Investment|Service|Loyalty?
-   Protection plans (accident/theft only) → "Protection"
-   Hospitalization plans → "Health"
-   Unit-linked savings/endowment → "Savings"
+   Protection plans (accident/theft only) → "Protection" if no insurer, else "Insurance"
+   Hospitalization plans → "Health" or "Insurance"
 
-3. CUSTOMER_TYPE: Is it exactly ONE value (no commas)?
+3. TARGET_GOAL: Standardized short value like "Protection", "Savings", "Education", "Health", "Marriage"
+
+4. CUSTOMER_TYPE: Is it exactly ONE value (no commas)?
    Allowed: Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A
 
-4. GENDER: Is it exactly one of Male|Female|All|N/A?
+5. CUSTOMER_SEGMENT/TARGET_SEGMENT/SEGMENT_TIER: Clean values or N/A
+
+6. CHANNEL: "Bank Branch" if branches mentioned
+
+7. ELIGIBILITY_TYPE: Concise summary including age and CNIC rules
+
+8. GENDER: Is it exactly one of Male|Female|All|N/A?
    "N/A" if gender is not mentioned. "All" ONLY if explicitly stated in document.
    Do NOT use "All" merely because an eligibility section exists.
 
-5. FINANCING_TYPE: For unit-linked plans (PIA, fund allocation) → "Unit Linked"
+9. FINANCING_TYPE: For unit-linked plans (PIA, fund allocation) → "Unit Linked"
    Hybrid (bonus + unit-linked) → "Hybrid (Bonus Based and Unit Linked)"
    NOT "N/A" for plans that explicitly mention unit-linked structure.
 
-6. DEPOSIT_PROFIT_TYPE / DEPOSIT_PROFIT_FREQUENCY: Unit-linked plans → both "N/A"
-   Health/protection plans (no savings) → both "N/A"
-   Do NOT set "At Maturity" for unit-linked plans.
+10. DEPOSIT_PROFIT_TYPE / DEPOSIT_PROFIT_FREQUENCY: Unit-linked plans → both "N/A"
+    Health/protection plans (no savings) → both "N/A"
+    Do NOT set "At Maturity" for unit-linked plans.
 
-7. TENURE_OPTIONS: Is it ONLY plan duration choices (e.g. "10, 15, 20 years")?
-   Payment frequencies ("Annual, Quarterly") belong in PREMIUM_PAYMENT_FREQUENCY.
-   If no distinct plan duration menu → "N/A"
+11. TENURE_OPTIONS: Is it ONLY plan duration choices (e.g. "10, 15, 20 years")?
+    Payment frequencies ("Annual, Quarterly") belong in PREMIUM_PAYMENT_FREQUENCY.
+    If no distinct plan duration menu → "N/A"
 
-8. PREMIUM_PAYMENT_FREQUENCY: Is it the payment frequency (Annual/Semi-Annual/Quarterly/Monthly)?
-   Example: "Annual, Semi-Annual, Quarterly" or "N/A"
+12. PREMIUM_PAYMENT_FREQUENCY: Is it the payment frequency (Annual/Semi-Annual/Quarterly/Monthly)?
+    Example: "Annual, Semi-Annual, Quarterly" or "N/A"
 
-9. OPTIONAL_RIDERS: Are they comma-separated (not semicolons)?
-   WRONG: "Accidental Death; Income Benefit"
-   CORRECT: "Accidental Death, Income Benefit"
+13. OPTIONAL_RIDERS: Are they comma-separated (not semicolons)?
+    WRONG: "Accidental Death; Income Benefit"
+    CORRECT: "Accidental Death, Income Benefit"
 
-10. Numeric fields: Do they contain ONLY integers (no PKR, no commas, no .0)?
+14. Numeric fields: Do they contain ONLY integers (no PKR, no commas, no .0)?
     Fields: MIN_AGE, MAX_AGE, MIN_BALANCE, AVG_BALANCE_REQUIREMENT, MIN_INCOME,
     MIN_INCOME_USD, MIN_INVESTMENT, MIN_CONTRIBUTION, MIN_TERM_YEARS,
     MAX_TERM_YEARS, FREE_LOOK_PERIOD_DAYS, IS_BANK_OFFERED
     WRONG: "18.0", "PKR 250,000"  CORRECT: "18", "250000"
 
-11. FREE_LOOK_PERIOD_DAYS: Is it set ONLY because this product explicitly mentions it?
+15. FREE_LOOK_PERIOD_DAYS: Is it set ONLY because this product explicitly mentions it?
     If not explicitly stated → "N/A". Do NOT default to 14.
 
-12. SEGMENT_TIER / SERVICE_TYPE / CUSTOMER_SEGMENT / TARGET_SEGMENT:
+16. SEGMENT_TIER / SERVICE_TYPE / CUSTOMER_SEGMENT / TARGET_SEGMENT:
     "N/A" unless explicitly stated in the document. Do NOT derive from other fields.
 
-13. SOURCE_FILE_PRODUCT: Filename only (no folder path).
+17. SOURCE_FILE_PRODUCT: Filename only (no folder path).
 
-14. All 56 fields present? No null/None/NaN/empty string → "N/A"
+18. All 56 fields present? No null/None/NaN/empty string → "N/A"
     Columns: PRODUCT_NAME, LEAD_MARKER, SOURCE_FILE_PRODUCT, PLAN_TYPE, TARGET_GOAL,
     CUSTOMER_TYPE, EMPLOYMENT_TYPE, CUSTOMER_SEGMENT, TARGET_SEGMENT, SEGMENT_TIER,
     MIN_AGE, MAX_AGE, GENDER, IS_BANK_OFFERED, ACCOUNT_TYPE, CARD_TYPE, CHANNEL,
