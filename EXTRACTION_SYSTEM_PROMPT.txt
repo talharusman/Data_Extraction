@@ -185,4 +185,42 @@ Accident/theft-only debit-card protection plan underwritten by an insurer:
 × Numeric fields with .0/PKR/commas
 × Skipping last products in multi-product docs (count all sections first)
 × Filling a field's character budget with narrative filler instead of facts
-× Generic TARGET_GOAL — use standardized short terms
+× Generic TARGET_GOAL — use standardized short terms 
+===GLOBAL RULES===
+G1. Missing value → "N/A". Never null/None/""/NaN.
+G2. NUMERIC fields → whole integers ONLY, no units/currency/decimals/commas.
+G3. SOURCE_FILE_PRODUCT = filename only.
+G4. IS_BANK_OFFERED = 1 for ALL Bank Alfalah distributed products.
+G5. Extract every field possible. Do not be overly strict.
+G6. PRODUCT_NAME: Title Case from document.
+G7. For IBG products, prefer filling fields with available information rather than defaulting to N/A.
+
+===COLUMN RULES===
+PRODUCT_NAME: max50. Title Case.
+LEAD_MARKER: "IBG" for all takaful/insurance products.
+PLAN_TYPE: "Insurance" for underwritten products.
+TARGET_GOAL: Use "Protection", "Savings", "Education", "Health", "Marriage", "Multipurpose Savings".
+CUSTOMER_SEGMENT: "All Bank Alfalah Customers", "Female Customers and Spouse", "Mass Market", "Retail" etc.
+TARGET_SEGMENT: "Protection Planning", "Savings Planning", "Education Planning", "Healthcare Coverage" etc.
+SEGMENT_TIER: "Retail", "Mass Market", "Premium", "Niche" or value from document.
+GENDER: "All" for general products, "Female" if female-specific, else "N/A".
+IS_BANK_OFFERED: Always 1 for Bank Alfalah products.
+CARD_TYPE: "Debit" if debit card protection mentioned.
+SERVICE_TYPE: Extract if mentioned, else "N/A".
+FINANCING_TYPE: "Unit Linked" if PIA/unit allocation present, "Hybrid (Bonus Based and Unit Linked)", "Takaful".
+TENURE_OPTIONS: Duration choices e.g. "10, 15, 20 years".
+FEES_AND_CHARGES: Extract all mentioned fees and charges.
+KEY_EXCLUSIONS: Extract war risks, suicide, pre-existing conditions, etc. if mentioned.
+PREMIUM_PAYMENT_FREQUENCY: "Annual, Semi-Annual, Quarterly, Monthly" etc.
+COVERAGE_AMOUNT: Tiered summary e.g. "Bronze:150K-500K hospitalization".
+DEPOSIT_PROFIT_TYPE: Extract if present, else "N/A" for unit-linked plans.
+DEPOSIT_PROFIT_FREQUENCY: Extract if present.
+
+===IMPORTANT===
+- Fill fields whenever relevant information exists in the document.
+- Do not reset valid extractions to N/A during validation.
+- Prefer more complete values when merging chunks.
+
+===WORKED EXAMPLES===
+Alfalah Zaamin Takaful: SEGMENT_TIER = "Bronze, Silver, Gold, Platinum", GENDER="All", IS_BANK_OFFERED=1, FINANCING_TYPE="Takaful", KEY_EXCLUSIONS= war risks etc.
+IGI Shifa: COVERAGE_AMOUNT with tiered hospitalization amounts, PREMIUM_PAYMENT_FREQUENCY="Annual, Semi-Annual, Quarterly".

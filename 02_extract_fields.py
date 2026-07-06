@@ -1,16 +1,10 @@
 """
 Step 2: Extract the fixed 56-column schema as JSON from product files.
-ENHANCED with 3 advanced prompting techniques:
-  1. Few-shot examples showing correct vs incorrect extraction
-  2. Step-by-step extraction workflow
-  3. Self-validation with error correction
 
 SYSTEM PROMPT IS READ FROM: EXTRACTION_SYSTEM_PROMPT.txt
 
-Instead of reading a pre-built JSON index, the script now asks you at startup
-how you want to supply input:
-
-  1) Single file   – give one file path (any supported type)
+Input modes (prompted at startup):
+  1) Single file   – one file path (any supported type)
   2) Folder        – all supported files in one directory (non-recursive)
   3) Nested folder – all supported files under a directory tree (recursive)
 
@@ -18,37 +12,26 @@ Supported file types: .txt, .pdf, .docx, .doc, .csv, .json, .xlsx, .xls
 
 Required packages for non-txt formats:
   pip install pdfplumber python-docx openpyxl
-  # for .doc: sudo apt install antiword  (Linux) or install antiword on PATH
+  # for .doc: sudo apt install antiword  (Linux)
 
-Configure the model through .env:
-  HF_MODEL_NAME_OR_PATH=Qwen/Qwen2.5-3B-Instruct
+Configure via .env:
+  HF_MODEL_NAME_OR_PATH=Qwen/Qwen2.5-7B-Instruct
   HF_MODEL_CLASS=causal
   HF_LOCAL_FILES_ONLY=true
 
-Resumable: already-extracted products (present in OUT_JSONL) are skipped,
-so you can safely re-run after an interruption.
+Resumable: already-extracted products (present in OUT_JSONL) are skipped.
 
-CHANGES IN THIS VERSION:
-- Added PREMIUM_PAYMENT_FREQUENCY as the 56th column (injected if missing from
-  pipeline_config to maintain backward compatibility).
-- PLAN_TYPE normalization now accepts Protection and Health in addition to the
-  original set.
-- FINANCING_TYPE normalization added: maps "unit linked", "hybrid" patterns to
-  canonical values.
-- PRODUCT_NAME normalization: ALL-CAPS product names are converted to Title Case.
-- OPTIONAL_RIDERS normalization: ensures comma-separated output.
-- Updated field_max_lengths to match corrected-dataset ground-truth lengths
-  (PRICING_RATE 400, FEES_AND_CHARGES 300, KEY_BENEFITS 250, OPTIONAL_RIDERS 300,
-  TENURE 50, TARGET_GOAL 50, COVERAGE_AMOUNT 150, ELIGIBILITY_TYPE 100,
-  EMPLOYMENT_TYPE 500, FINANCING_TYPE 50, PREMIUM_PAYMENT_FREQUENCY 50).
-- Repair prompt is now a compact focused version (no full SYSTEM_PROMPT duplication)
-  to stay within Qwen2.5-3B's context limit during error recovery.
-- Validation prompt updated with corrected field rules (GENDER, DEPOSIT_PROFIT,
-  FINANCING_TYPE, TENURE_OPTIONS vs PREMIUM_PAYMENT_FREQUENCY, etc.).
-- MAX_NEW_TOKENS default raised to 1500 to accommodate 56-field JSON with
-  longer EMPLOYMENT_TYPE and PRICING_RATE values.
-- Enhanced normalization for TARGET_GOAL, segments, CHANNEL, ELIGIBILITY_TYPE,
-  tenure fields, COVERAGE_AMOUNT, PRICING_RATE to match corrected dataset.
+KEY FIXES IN THIS VERSION:
+- FINANCING_TYPE: Takaful/WTO products always → "Takaful" (not "Unit Linked")
+- DEPOSIT_PROFIT_TYPE/FREQUENCY: "Variable"/"At Maturity" for Takaful savings plans
+- OPTIONAL_RIDERS: now semicolon-separated (was comma-separated)
+- Added _normalize_channel(): "Bank Alfalah branches" → "Bank Branch"
+- Added _normalize_target_goal(): maps phrases to single controlled-vocab keyword
+- Added _normalize_tenure(): cleans "Minimum Term: X; Maximum Term: Y" format
+- normalize_record(): cross-field corrections for FINANCING_TYPE, IS_BANK_OFFERED,
+  GENDER, SEGMENT_TIER, MAX_TERM_YEARS (computed from attained age - MIN_AGE)
+- Validation and repair prompts updated with all corrected rules
+- MAX_NEW_TOKENS raised to 2400 for 56-field JSON output
 """
 from __future__ import annotations
 
@@ -62,8 +45,8 @@ import time
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-# FIX: Reduce CUDA memory fragmentation on small GPUs (Colab T4/L4 ~15GB).
-# Must be set before the CUDA context is created, so it goes before `import torch`.
+# Reduce CUDA memory fragmentation on small GPUs (Colab T4/L4).
+# Must be set before the CUDA context is created, so before `import torch`.
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import torch
@@ -88,8 +71,6 @@ load_local_env()
 
 # ---------------------------------------------------------------------------
 # Inject PREMIUM_PAYMENT_FREQUENCY if pipeline_config was not yet updated.
-# This keeps the script backward-compatible: older pipeline_config files that
-# only define 55 columns will still work; the 56th column is added here.
 # ---------------------------------------------------------------------------
 _NEW_COLUMNS = ["PREMIUM_PAYMENT_FREQUENCY"]
 for _col in _NEW_COLUMNS:
@@ -100,12 +81,8 @@ MODEL_NAME = os.environ.get("HF_MODEL_NAME_OR_PATH", "").strip()
 MODEL_CLASS = os.environ.get("HF_MODEL_CLASS", "causal").strip().lower()
 LOCAL_FILES_ONLY = env_bool("HF_LOCAL_FILES_ONLY", True)
 TRUST_REMOTE_CODE = env_bool("HF_TRUST_REMOTE_CODE", False)
-# Raised from 1500 to 2200: the 1500 budget was still getting hit on
-# products with long CUSTOMER_TYPE lists, EMPLOYMENT_TYPE target-market
-# text, and multi-tier PRICING_RATE tables, which truncated the JSON
-# mid-field (see _close_unterminated_json for the recovery path when this
-# still happens). Override via HF_MAX_NEW_TOKENS in .env if needed.
-MAX_NEW_TOKENS = env_int("HF_MAX_NEW_TOKENS", 2200)
+# 2400 tokens for 56-field JSON with long PRICING_RATE / EMPLOYMENT_TYPE values.
+MAX_NEW_TOKENS = env_int("HF_MAX_NEW_TOKENS", 2400)
 TEMPERATURE = env_float("HF_TEMPERATURE", 0.0)
 TOP_P = env_float("HF_TOP_P", 1.0)
 REPETITION_PENALTY = env_float("HF_REPETITION_PENALTY", 1.03)
@@ -118,6 +95,7 @@ TORCH_DTYPE = os.environ.get("HF_TORCH_DTYPE", "auto").strip().lower()
 GPU_RESERVE_GIB = env_float("HF_GPU_RESERVE_GIB", 3.0)
 ENABLE_CHUNKING = env_bool("ENABLE_CHUNKING", True)
 DEFAULT_VALUE = "N/A"
+
 NUMERIC_COLUMNS = {
     "MIN_AGE",
     "MAX_AGE",
@@ -140,27 +118,16 @@ SUPPORTED_EXTENSIONS = {".txt", ".pdf", ".docx", ".doc", ".csv", ".json", ".xlsx
 # ============================================================================
 
 def load_system_prompt(prompt_file: str = "EXTRACTION_SYSTEM_PROMPT.txt") -> str:
-    """
-    Load the system prompt from a separate file.
-
-    Looks for the prompt file in this order:
-    1. Current directory
-    2. Same directory as this script
-    3. Parent directory
-
-    If not found, raises an error.
-    """
+    """Load the system prompt from a separate file."""
     search_paths = [
         Path(prompt_file),
         Path(__file__).parent / prompt_file,
         Path(__file__).parent.parent / prompt_file,
     ]
-
     for prompt_path in search_paths:
         if prompt_path.exists() and prompt_path.is_file():
             print(f"✓ Loaded system prompt from: {prompt_path.resolve()}")
             return prompt_path.read_text(encoding="utf-8")
-
     raise FileNotFoundError(
         f"\n{'='*70}\n"
         f"ERROR: System prompt file not found!\n"
@@ -326,10 +293,7 @@ def select_input_files() -> list[Path]:
             if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS:
                 return [p]
             if p.is_file():
-                print(
-                    f"  Unsupported file type '{p.suffix}'. "
-                    f"Supported: {supported_str}\n"
-                )
+                print(f"  Unsupported file type '{p.suffix}'. Supported: {supported_str}\n")
             else:
                 print(f"  File not found: {raw}\n")
 
@@ -342,10 +306,7 @@ def select_input_files() -> list[Path]:
                 if files:
                     print(f"  Found {len(files)} supported file(s) directly in '{p}'.")
                     return files
-                print(
-                    f"  No supported files found directly in '{p}'.\n"
-                    f"  Supported formats: {supported_str}\n"
-                )
+                print(f"  No supported files found directly in '{p}'.\n  Supported formats: {supported_str}\n")
             else:
                 print(f"  Not a valid directory: {raw}\n")
 
@@ -356,15 +317,9 @@ def select_input_files() -> list[Path]:
             if p.is_dir():
                 files = _collect_files(p, recursive=True)
                 if files:
-                    print(
-                        f"  Found {len(files)} supported file(s) under '{p}' "
-                        f"(all sub-folders included)."
-                    )
+                    print(f"  Found {len(files)} supported file(s) under '{p}' (all sub-folders included).")
                     return files
-                print(
-                    f"  No supported files found anywhere under '{p}'.\n"
-                    f"  Supported formats: {supported_str}\n"
-                )
+                print(f"  No supported files found anywhere under '{p}'.\n  Supported formats: {supported_str}\n")
             else:
                 print(f"  Not a valid directory: {raw}\n")
 
@@ -387,18 +342,15 @@ def build_index_from_files(files: list[Path]) -> list[dict]:
 
 
 # ============================================================================
-# Document chunking (FIX for large-document OOM)
+# Document chunking
 # ============================================================================
 
 def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
     """
-    Split a long document into smaller pieces so each model call only has to
-    process chunk_size characters instead of the whole document at once.
-
-    Breaks are made on a paragraph/sentence boundary near chunk_size where
-    possible so a field's value isn't split mid-sentence across two chunks.
-    A small overlap is carried into the next chunk so context right at a
-    boundary isn't lost.
+    Split a long document into smaller pieces so each model call only
+    processes chunk_size characters. Breaks on paragraph/sentence
+    boundaries where possible. A small overlap is carried into the next
+    chunk so context at boundaries is not lost.
     """
     text = text.strip()
     if len(text) <= chunk_size:
@@ -432,10 +384,8 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
 
 def merge_records(accumulated: dict, new_record: dict, columns) -> dict:
     """
-    Merge a single chunk's extracted record into the running accumulated
-    record for the product. A field is filled in from this chunk only if it
-    hasn't already been found (still DEFAULT_VALUE/empty) in an earlier
-    chunk — first chunk to find a real value for a field wins.
+    Merge a chunk's extracted record into the running accumulated record.
+    First real value found for a field across chunks wins.
     """
     for col in columns:
         old = accumulated.get(col)
@@ -523,26 +473,11 @@ def _iter_json_candidates(text):
 
 def _close_unterminated_json(text: str):
     """
-    Best-effort recovery for JSON that was cut off mid-generation (i.e. the
-    model hit MAX_NEW_TOKENS before finishing the object) rather than being
-    genuinely malformed. All the existing candidate strategies in
-    _iter_json_candidates() require a BALANCED object ({...} fully closed);
-    a mid-field truncation never satisfies that, so they all fail together.
-
-    Strategy:
-      1. Walk the text tracking bracket/string nesting, remembering the last
-         position where we had a *structurally complete* token (end of a
-         closed string, a closed {}/[], or just before a trailing comma).
-      2. If we end while still inside an open string, we don't know how the
-         string was meant to end, so we rewind to that last safe position
-         instead of guessing at the missing content.
-      3. Recompute the open-bracket stack up to that safe cut point and
-         append the matching closers.
-
-    This sacrifices only the one field that was mid-generation when the
-    model was cut off (it will fall back to "N/A" via normalize_record);
-    every field completed before the cutoff is preserved. Returns the
-    repaired JSON text, or None if the input doesn't even start with '{'.
+    Best-effort recovery for JSON cut off mid-generation (model hit
+    MAX_NEW_TOKENS before finishing). Walks the text tracking bracket/
+    string nesting, rewinds to the last structurally complete position,
+    then appends the required closing brackets.
+    Returns the repaired JSON text, or None if input doesn't start with '{'.
     """
     start = text.find("{")
     if start == -1:
@@ -574,9 +509,6 @@ def _close_unterminated_json(text: str):
     stack, in_string = bracket_stack(text)
 
     if in_string:
-        # Rewind to the last point where we had a fully-closed string, a
-        # fully-closed nested object/array, or a trailing comma — i.e. the
-        # last spot we can safely cut without inventing content.
         in_str = False
         esc = False
         last_safe_end = 0
@@ -600,7 +532,6 @@ def _close_unterminated_json(text: str):
         stack, _ = bracket_stack(text)
 
     text = text.rstrip().rstrip(",").rstrip()
-
     closers = {"{": "}", "[": "]"}
     for opener in reversed(stack):
         text += closers[opener]
@@ -615,9 +546,7 @@ def parse_json_blob(raw):
         if parsed is not None:
             return parsed
 
-    # Last resort: the output may be a genuinely truncated (not malformed)
-    # JSON object — try to close it deterministically before giving up.
-    # This is cheap (no model call) and recovers most MAX_NEW_TOKENS cutoffs.
+    # Last resort: deterministic close for MAX_NEW_TOKENS truncations.
     closed = _close_unterminated_json(raw)
     if closed:
         parsed = _parse_candidate(closed)
@@ -644,48 +573,47 @@ def get_source_filename(entry) -> str:
         raw = entry.get(key)
         if raw:
             return Path(str(raw)).name
-
     abs_path = entry.get("_abs_path")
     if abs_path:
         return Path(str(abs_path)).name
-
     return entry.get("title", DEFAULT_VALUE)
 
 
-# Updated max lengths to match corrected-dataset ground-truth observations.
-# Fields absent from this dict are not truncated (e.g. EMPLOYMENT_TYPE can
-# be a long semicolon-separated Target Market list).
+# Field max lengths aligned to corrected-dataset ground-truth observations.
 field_max_lengths = {
     "PRODUCT_NAME": 50,
     "PRODUCT_DESCRIPTION": 250,
     "PROVIDER_NAME": 100,
     "PRODUCT_VARIANT_TIER": 50,
-    "PRICING_RATE": 400,           # age-band pricing tables can be ~370 chars
-    "FEES_AND_CHARGES": 300,       # detailed fee schedules up to ~256 chars
-    "KEY_BENEFITS": 250,           # benefits list up to ~212 chars
-    "OPTIONAL_RIDERS": 300,        # rider lists up to ~253 chars
+    "PRICING_RATE": 400,
+    "FEES_AND_CHARGES": 300,
+    "KEY_BENEFITS": 250,
+    "OPTIONAL_RIDERS": 300,
     "REQUIRED_DOCUMENTS": 200,
     "CLAIMS_SERVICE_CONTACT": 200,
     "KEY_EXCLUSIONS": 200,
     "TAX_ZAKAT_TREATMENT": 100,
     "PLAN_TYPE": 15,
-    "TARGET_GOAL": 50,             # "Children's Education Planning" style values
+    "TARGET_GOAL": 50,
     "CUSTOMER_TYPE": 25,
-    "EMPLOYMENT_TYPE": 500,        # full Target Market list ~334 chars
+    "CUSTOMER_SEGMENT": 50,
+    "TARGET_SEGMENT": 50,
+    "SEGMENT_TIER": 30,
+    "EMPLOYMENT_TYPE": 500,
     "ACCOUNT_TYPE": 20,
     "CARD_TYPE": 25,
     "CHANNEL": 30,
-    "ELIGIBILITY_TYPE": 100,       # brief eligibility summaries up to ~52 chars
+    "ELIGIBILITY_TYPE": 100,
     "SERVICE_TYPE": 25,
     "REWARD_TYPE": 25,
     "CURRENCY": 30,
     "CURRENCY_TYPE": 15,
     "LOAN_AMOUNT_RANGE": 50,
-    "COVERAGE_AMOUNT": 150,        # tier coverage descriptions up to ~94 chars
-    "FINANCING_TYPE": 50,          # "Hybrid (Bonus Based and Unit Linked)" = 36 chars
+    "COVERAGE_AMOUNT": 150,
+    "FINANCING_TYPE": 50,
     "DEPOSIT_PROFIT_TYPE": 30,
     "DEPOSIT_PROFIT_FREQUENCY": 20,
-    "TENURE": 50,                  # "10-67 years (up to attained age of 85)" = 38 chars
+    "TENURE": 50,
     "TENURE_OPTIONS": 50,
     "BUSINESS_TENURE": 30,
     "COLLATERAL_TYPE": 50,
@@ -701,7 +629,6 @@ def truncate_to_boundary(value: str, max_len: int) -> str:
     """Truncate text at a word or punctuation boundary when possible."""
     if len(value) <= max_len:
         return value
-
     cut = value[:max_len].rstrip()
     boundary = max(cut.rfind(" "), cut.rfind(","), cut.rfind(";"), cut.rfind(":"), cut.rfind("-"))
     if boundary > 0:
@@ -709,26 +636,22 @@ def truncate_to_boundary(value: str, max_len: int) -> str:
     return cut
 
 
+# ============================================================================
+# Per-field normalization functions
+# ============================================================================
+
 def _normalize_plan_type(value: str) -> str:
-    """
-    Normalize PLAN_TYPE to exactly one of the allowed values.
-    Now includes Protection and Health in addition to the
-    original set.
-    """
-    # Expanded set includes Protection and Health added in corrected dataset.
+    """Normalize PLAN_TYPE to exactly one of the allowed values."""
     valid_types = {
         "Loan", "Deposit", "Savings", "Card", "Investment",
         "Insurance", "Service", "Loyalty", "Protection", "Health",
     }
     stripped = value.strip()
-    # Exact match first (case-sensitive)
     if stripped in valid_types:
         return stripped
-    # Case-insensitive exact match
     for vt in valid_types:
         if stripped.lower() == vt.lower():
             return vt
-    # Find the first valid type word inside the value
     for word in re.split(r"[\s,;/]+", stripped):
         word_clean = word.strip(".,;:()")
         if word_clean in valid_types:
@@ -742,12 +665,21 @@ def _normalize_plan_type(value: str) -> str:
 def _normalize_financing_type(value: str) -> str:
     """
     Normalize FINANCING_TYPE to a canonical form.
-    Added Unit Linked and Hybrid (Bonus Based and Unit Linked) per corrected dataset.
+
+    CRITICAL FIX: "Takaful" is the highest priority — if the value
+    explicitly mentions takaful, it wins over Unit Linked or Hybrid.
+    The cross-field post-processing in normalize_record() further
+    enforces Takaful for all WTO/takaful-branded products regardless
+    of what the model outputs.
     """
     stripped = value.strip()
     lower = stripped.lower()
 
-    # Hybrid check first (most specific)
+    # Takaful first — highest priority (corrected-dataset rule)
+    if "takaful" in lower:
+        return "Takaful"
+
+    # Hybrid check (most specific non-Takaful form)
     if "hybrid" in lower or ("bonus" in lower and "unit" in lower):
         return "Hybrid (Bonus Based and Unit Linked)"
 
@@ -755,19 +687,17 @@ def _normalize_financing_type(value: str) -> str:
     if "unit linked" in lower or "unit-linked" in lower:
         return "Unit Linked"
 
-    # Known single-word canonicals
+    # Single-word canonicals
     canonical_map = {
         "conventional": "Conventional",
         "islamic": "Islamic",
-        "takaful": "Takaful",
-        "mudarabah": "Mudarabah",
         "mudarabah": "Mudarabah",
     }
     for key, canonical in canonical_map.items():
         if key in lower:
             return canonical
 
-    # Pass through if already in a known exact form
+    # Pass through if already an exact known form
     known_exact = {
         "Conventional", "Islamic", "Takaful", "Mudarabah",
         "Unit Linked", "Hybrid (Bonus Based and Unit Linked)", DEFAULT_VALUE,
@@ -775,63 +705,152 @@ def _normalize_financing_type(value: str) -> str:
     if stripped in known_exact:
         return stripped
 
-    # Unknown value — preserve as-is (don't silently discard it)
     return stripped
 
 
-def _normalize_target_goal(value: str) -> str:
-    """Normalize TARGET_GOAL to corrected style."""
-    if not value or value == DEFAULT_VALUE:
-        return DEFAULT_VALUE
-    val_lower = value.lower()
-    mappings = {
-        "protection": "Protection",
-        "accidental": "Protection",
-        "savings": "Savings",
-        "education": "Education",
-        "health": "Health",
-        "hospitalization": "Health",
-        "marriage": "Marriage",
-        "multipurpose": "Multipurpose Savings",
-    }
-    for key, norm in mappings.items():
-        if key in val_lower:
-            return norm
-    return value.strip()[:50]
-
-
 def _normalize_channel(value: str) -> str:
-    """Standardize CHANNEL."""
-    if not value or value == DEFAULT_VALUE:
+    """
+    Normalize CHANNEL to canonical values.
+    'Bank Alfalah branches / Bank Alfalah Limited branches / bank outlets'
+    → 'Bank Branch'
+    """
+    if value in (DEFAULT_VALUE, ""):
         return DEFAULT_VALUE
-    val_lower = value.lower()
-    if "branch" in val_lower or "branches" in val_lower:
+    lower = value.strip().lower()
+    # Any mention of bank + branch/outlet/limited → "Bank Branch"
+    if ("bank" in lower and
+            any(kw in lower for kw in ("branch", "branche", "outlet", "limited", "offices"))):
         return "Bank Branch"
-    return value.strip()[:30]
+    if "mobile app" in lower or "mobile application" in lower:
+        return "Mobile App"
+    if lower in ("online", "web", "internet"):
+        return "Online"
+    return value.strip()
 
 
-def _normalize_eligibility(value: str) -> str:
-    """Clean ELIGIBILITY_TYPE."""
-    if not value or value == DEFAULT_VALUE:
+# Mapping of phrase fragments → canonical TARGET_GOAL keyword.
+_TARGET_GOAL_PHRASE_MAP = [
+    # Health / hospitalization
+    ("hospitali", "Health"),
+    ("health cover", "Health"),
+    ("medical cover", "Health"),
+    ("shifa", "Health"),
+    # Education
+    ("education", "Education"),
+    ("danish", "Education"),
+    # Marriage
+    ("marriage", "Marriage"),
+    ("uroos", "Marriage"),
+    ("wedding", "Marriage"),
+    # Protection / accident
+    ("accident", "Protection"),
+    ("accidental death", "Protection"),
+    ("theft", "Protection"),
+    ("disability", "Protection"),
+    ("zaamin", "Protection"),
+    ("protect", "Protection"),
+    # Retirement / pension
+    ("retirement", "Retirement"),
+    ("pension", "Retirement"),
+    # Investment
+    ("investment", "Investment"),
+    # Housing
+    ("housing", "Housing"),
+    ("home financ", "Housing"),
+    ("property", "Housing"),
+    # Business
+    ("business", "Business"),
+    # Income
+    ("income", "Income"),
+    # Loyalty
+    ("loyalty", "Loyalty"),
+    # Savings (broad catch-all — keep last)
+    ("saving", "Savings"),
+    ("endowment", "Savings"),
+    ("multipurpose", "Savings"),
+    ("tadbeer", "Savings"),
+    ("zeenat", "Savings"),
+    ("saholat", "Savings"),
+    ("zindagi", "Savings"),
+    ("kamil", "Savings"),
+    ("tayyab", "Savings"),
+    ("banca", "Savings"),
+]
+
+_TARGET_GOAL_CANONICAL = {
+    "Protection", "Health", "Education", "Marriage", "Savings",
+    "Retirement", "Investment", "Housing", "Business", "Loyalty", "Income",
+}
+
+
+def _normalize_target_goal(value: str) -> str:
+    """Map TARGET_GOAL to the fixed single-keyword controlled vocabulary."""
+    stripped = value.strip()
+    if stripped in _TARGET_GOAL_CANONICAL:
+        return stripped
+    # Case-insensitive exact match
+    for kw in _TARGET_GOAL_CANONICAL:
+        if stripped.lower() == kw.lower():
+            return kw
+    lower = stripped.lower()
+    for phrase, canonical in _TARGET_GOAL_PHRASE_MAP:
+        if phrase in lower:
+            return canonical
+    # Unknown — keep as-is; validation pass may fix it
+    return stripped
+
+
+def _normalize_tenure(value: str) -> str:
+    """
+    Clean up TENURE format:
+    - 'Minimum Term: X years; Maximum Term: Y years' → 'X-Y years'
+    - '1 Year (renewable)' / '1 Year (Renewable)' → '1 year, yearly renewable'
+    """
+    if value in (DEFAULT_VALUE, ""):
         return DEFAULT_VALUE
-    # Keep concise
-    value = re.sub(r"Bank Alfalah Limited?", "Bank Alfalah", value, flags=re.I)
-    return truncate_to_boundary(value.strip(), 100)
+    stripped = value.strip()
 
+    # 'Minimum Term: X years; Maximum Term: Y years' pattern
+    m = re.match(
+        r"minimum\s+term:?\s*(\d+)\s*years?[;,\s]+maximum\s+term:?\s*(\d+)\s*years?",
+        stripped, re.IGNORECASE
+    )
+    if m:
+        return f"{m.group(1)}-{m.group(2)} years"
+
+    # '1 Year (renewable)' → '1 year, yearly renewable'
+    if re.match(r"1\s*[Yy]ear\s*\(?[Rr]enewable\)?", stripped):
+        return "1 year, yearly renewable"
+
+    return stripped
+
+
+# ============================================================================
+# Main normalization function
+# ============================================================================
 
 def normalize_record(record, entry):
     """
-    Normalize an extracted record with corrections for all known model errors.
+    Normalize an extracted record applying all field-level and cross-field
+    correction rules.
 
-    Key normalization rules applied here:
-    - PRODUCT_NAME: ALL-CAPS converted to Title Case
-    - PLAN_TYPE: expanded valid set (Protection, Health now accepted)
-    - FINANCING_TYPE: canonical Unit Linked / Hybrid mapping
+    Per-field normalizations:
+    - PRODUCT_NAME: ALL-CAPS → Title Case
+    - PLAN_TYPE: validated against allowed set
+    - FINANCING_TYPE: canonical mapping (Takaful priority)
     - GENDER: strict allowed-value enforcement
     - CUSTOMER_TYPE: single-value enforcement
-    - TARGET_GOAL, CHANNEL, ELIGIBILITY_TYPE, tenure fields enhanced
-    - Numeric fields: strip units, commas, currency symbols
-    - All text fields: truncated at word boundary to max length
+    - CHANNEL: canonical "Bank Branch" mapping
+    - TARGET_GOAL: controlled single-keyword vocabulary
+    - TENURE: compact format cleanup
+    - OPTIONAL_RIDERS: comma-separated → semicolon-separated
+    - Numeric fields: strip units/commas/currency symbols
+
+    Cross-field post-processing:
+    - FINANCING_TYPE: forced to "Takaful" when WTO/takaful indicator present
+    - IS_BANK_OFFERED: set to 1 when CHANNEL = "Bank Branch"
+    - SEGMENT_TIER: inferred from product name / gender / plan type when N/A
+    - MAX_TERM_YEARS: computed as attained_age - MIN_AGE when TENURE references attained age
     """
     if not isinstance(record, dict):
         return blank_record(entry)
@@ -845,7 +864,7 @@ def normalize_record(record, entry):
             value = DEFAULT_VALUE
 
         # ----------------------------------------------------------------
-        # Numeric columns: numbers ONLY
+        # Numeric columns: integers only
         # ----------------------------------------------------------------
         if col in NUMERIC_COLUMNS and isinstance(value, str):
             stripped = value.strip()
@@ -855,7 +874,6 @@ def normalize_record(record, entry):
                 match = re.match(r'^(\d+(?:\.\d+)?)', stripped.replace(",", ""))
                 if match:
                     num_str = match.group(1)
-                    # Strip trailing ".0"
                     if "." in num_str:
                         try:
                             value = str(int(float(num_str)))
@@ -867,7 +885,7 @@ def normalize_record(record, entry):
                     value = DEFAULT_VALUE
 
         # ----------------------------------------------------------------
-        # PRODUCT_NAME: normalize ALL-CAPS headings to Title Case
+        # PRODUCT_NAME: ALL-CAPS → Title Case
         # ----------------------------------------------------------------
         if col == "PRODUCT_NAME" and isinstance(value, str):
             stripped_name = value.strip()
@@ -878,51 +896,53 @@ def normalize_record(record, entry):
                 value = stripped_name.title()
 
         # ----------------------------------------------------------------
-        # PLAN_TYPE: expanded valid set
+        # PLAN_TYPE: validated set
         # ----------------------------------------------------------------
         if col == "PLAN_TYPE" and isinstance(value, str):
             value = _normalize_plan_type(value)
 
         # ----------------------------------------------------------------
-        # FINANCING_TYPE: canonical mapping
+        # FINANCING_TYPE: canonical mapping (Takaful priority built-in)
         # ----------------------------------------------------------------
         if col == "FINANCING_TYPE" and isinstance(value, str):
             if value not in (DEFAULT_VALUE, ""):
                 value = _normalize_financing_type(value)
 
         # ----------------------------------------------------------------
-        # TARGET_GOAL normalization
-        # ----------------------------------------------------------------
-        if col == "TARGET_GOAL" and isinstance(value, str):
-            value = _normalize_target_goal(value)
-
-        # ----------------------------------------------------------------
-        # CHANNEL normalization
+        # CHANNEL: canonical "Bank Branch" etc.
         # ----------------------------------------------------------------
         if col == "CHANNEL" and isinstance(value, str):
             value = _normalize_channel(value)
 
         # ----------------------------------------------------------------
-        # ELIGIBILITY_TYPE normalization
+        # TARGET_GOAL: controlled single-keyword vocabulary
         # ----------------------------------------------------------------
-        if col == "ELIGIBILITY_TYPE" and isinstance(value, str):
-            value = _normalize_eligibility(value)
+        if col == "TARGET_GOAL" and isinstance(value, str):
+            if value not in (DEFAULT_VALUE, ""):
+                value = _normalize_target_goal(value)
 
         # ----------------------------------------------------------------
-        # GENDER: strict enforcement of allowed values
+        # TENURE: compact format cleanup
+        # ----------------------------------------------------------------
+        if col == "TENURE" and isinstance(value, str):
+            value = _normalize_tenure(value)
+
+        # ----------------------------------------------------------------
+        # GENDER: strict allowed-value enforcement
         # ----------------------------------------------------------------
         if col == "GENDER" and isinstance(value, str):
             value_lower = value.strip().lower()
             if value_lower in ("male", "m"):
                 value = "Male"
-            elif value_lower in ("female", "f"):
+            elif value_lower in ("female", "f", "ladies", "women"):
                 value = "Female"
-            elif value_lower in ("all", "both", "all genders", "all customers"):
+            elif value_lower in ("all", "both", "all genders", "all customers",
+                                  "all bank customers", "male and female"):
                 value = "All"
             elif value_lower in ("n/a", "na", ""):
                 value = DEFAULT_VALUE
             else:
-                # Unrecognized value — do not silently accept
+                # Unrecognized — reset; cross-field step may infer "All"
                 value = DEFAULT_VALUE
 
         # ----------------------------------------------------------------
@@ -937,32 +957,22 @@ def normalize_record(record, entry):
             if stripped_ct in allowed:
                 pass  # already valid
             elif "," in stripped_ct:
-                # Multiple values — take first valid token
                 first = stripped_ct.split(",")[0].strip()
                 value = first if first in allowed else DEFAULT_VALUE
             elif stripped_ct.lower() == "n/a":
                 value = DEFAULT_VALUE
-            # Note: values like "Salaried Individuals" are not in the allowed set;
-            # keep them as-is so the validation pass can flag and fix them.
 
         # ----------------------------------------------------------------
-        # OPTIONAL_RIDERS: ensure comma-separated (not semicolon-separated)
-        # The corrected dataset uses commas for rider lists.
+        # OPTIONAL_RIDERS: ensure semicolon-separated (corrected-dataset standard)
+        # Previously this converted semicolons → commas (wrong). Now we do
+        # the reverse: convert commas → semicolons for flat list values.
         # ----------------------------------------------------------------
         if col == "OPTIONAL_RIDERS" and isinstance(value, str):
-            if value != DEFAULT_VALUE:
-                # Replace semicolons with commas if the field is a flat list
-                # (i.e. not a descriptive sentence containing semicolons for
-                #  different purposes). Heuristic: if no period in the value,
-                # it's a list — replace semicolons.
+            if value not in (DEFAULT_VALUE, ""):
+                # Only convert when the value looks like a flat list
+                # (no periods = not a descriptive sentence)
                 if "." not in value:
-                    value = re.sub(r"\s*;\s*", ", ", value).strip().strip(",").strip()
-
-        # ----------------------------------------------------------------
-        # TENURE normalization - keep as-is but truncate
-        # ----------------------------------------------------------------
-        if col in ("TENURE", "TENURE_OPTIONS") and isinstance(value, str):
-            value = truncate_to_boundary(value.strip(), field_max_lengths.get(col, 50))
+                    value = re.sub(r"\s*,\s*", "; ", value).strip().strip(";").strip()
 
         # ----------------------------------------------------------------
         # Truncate verbose text fields to max length
@@ -976,7 +986,6 @@ def normalize_record(record, entry):
 
     # Always preserve PRODUCT_NAME and SOURCE_FILE_PRODUCT
     raw_name = record.get("PRODUCT_NAME") or entry["title"]
-    # Apply title-case fix to the preserved name too
     if isinstance(raw_name, str):
         if (raw_name.strip()
                 and raw_name.strip() == raw_name.strip().upper()
@@ -984,6 +993,107 @@ def normalize_record(record, entry):
             raw_name = raw_name.strip().title()
     normalized["PRODUCT_NAME"] = raw_name
     normalized["SOURCE_FILE_PRODUCT"] = get_source_filename(entry)
+
+    # ====================================================================
+    # Cross-field post-processing corrections
+    # ====================================================================
+
+    financing = normalized.get("FINANCING_TYPE", DEFAULT_VALUE)
+    provider_lower = normalized.get("PROVIDER_NAME", "").lower()
+    product_name_lower = normalized.get("PRODUCT_NAME", "").lower()
+    lead_marker = normalized.get("LEAD_MARKER", "")
+
+    # ------------------------------------------------------------------
+    # 1. FINANCING_TYPE: force "Takaful" for WTO / takaful-branded products.
+    #    The prompt rule states: any product with WTO / Takaful operator
+    #    underwriting must have FINANCING_TYPE = "Takaful", even when PIA/
+    #    unit-linked language is present (those describe the investment
+    #    mechanism, not the financing structure).
+    # ------------------------------------------------------------------
+    wto_indicators = ("wto", "window takaful", "takaful operator")
+    takaful_in_provider = any(ind in provider_lower for ind in wto_indicators)
+    takaful_in_name = "takaful" in product_name_lower
+    is_ibg = (lead_marker == "IBG")
+
+    if financing in ("Unit Linked", "Hybrid (Bonus Based and Unit Linked)", DEFAULT_VALUE):
+        if takaful_in_provider or (is_ibg and (takaful_in_name or takaful_in_provider)):
+            normalized["FINANCING_TYPE"] = "Takaful"
+    elif financing == DEFAULT_VALUE and is_ibg and (takaful_in_name or takaful_in_provider):
+        normalized["FINANCING_TYPE"] = "Takaful"
+
+    # ------------------------------------------------------------------
+    # 2. IS_BANK_OFFERED: set to 1 when product is distributed via bank.
+    # ------------------------------------------------------------------
+    if normalized.get("IS_BANK_OFFERED", DEFAULT_VALUE) == DEFAULT_VALUE:
+        channel = normalized.get("CHANNEL", DEFAULT_VALUE)
+        if channel in ("Bank Branch", "Mobile App", "Online"):
+            normalized["IS_BANK_OFFERED"] = "1"
+        elif any(ind in provider_lower for ind in ("distributed via", "administered via", "in partnership with bank")):
+            normalized["IS_BANK_OFFERED"] = "1"
+
+    # ------------------------------------------------------------------
+    # 3. GENDER: infer "All" for products with no gender restriction when
+    #    the product is for general bank customers.
+    # ------------------------------------------------------------------
+    if normalized.get("GENDER", DEFAULT_VALUE) == DEFAULT_VALUE:
+        customer_seg = normalized.get("CUSTOMER_SEGMENT", "").lower()
+        eligibility = normalized.get("ELIGIBILITY_TYPE", "").lower()
+        product_lower = normalized.get("PRODUCT_NAME", "").lower()
+        # Female-specific products keep N/A (model should have set "Female")
+        is_female_product = any(
+            kw in product_lower for kw in ("zeenat", "ladies", "female", "women")
+        )
+        is_female_seg = "female" in customer_seg
+        if not is_female_product and not is_female_seg:
+            if ("all bank" in customer_seg or
+                    "all customers" in customer_seg or
+                    "bank alfalah customers" in eligibility or
+                    "bank alfalah" in eligibility):
+                normalized["GENDER"] = "All"
+
+    # ------------------------------------------------------------------
+    # 4. SEGMENT_TIER: infer when still N/A after extraction.
+    # ------------------------------------------------------------------
+    if normalized.get("SEGMENT_TIER", DEFAULT_VALUE) == DEFAULT_VALUE and is_ibg:
+        p_lower = normalized.get("PRODUCT_NAME", "").lower()
+        gender_val = normalized.get("GENDER", DEFAULT_VALUE)
+        target_goal = normalized.get("TARGET_GOAL", DEFAULT_VALUE)
+
+        if any(kw in p_lower for kw in ("premier", "premium", "elite", "vip")):
+            normalized["SEGMENT_TIER"] = "Premium"
+        elif gender_val == "Female" or "zeenat" in p_lower:
+            normalized["SEGMENT_TIER"] = "Niche"
+        elif target_goal == "Health" or "shifa" in p_lower:
+            normalized["SEGMENT_TIER"] = "Mass Market"
+        else:
+            normalized["SEGMENT_TIER"] = "Retail"
+
+    # ------------------------------------------------------------------
+    # 5. MAX_TERM_YEARS: compute from attained age when TENURE references
+    #    "attained age X" and MIN_AGE is known.
+    #    Corrected rule: MAX_TERM_YEARS = attained_age - MIN_AGE
+    #    (e.g. coverage to attained age 85, min entry age 18 → 67)
+    # ------------------------------------------------------------------
+    max_term = normalized.get("MAX_TERM_YEARS", DEFAULT_VALUE)
+    min_age_val = normalized.get("MIN_AGE", DEFAULT_VALUE)
+    tenure_val = normalized.get("TENURE", "")
+
+    if min_age_val != DEFAULT_VALUE and tenure_val:
+        attained_match = re.search(
+            r"attained\s+age\s+(?:of\s+)?(\d+)", tenure_val, re.IGNORECASE
+        )
+        if attained_match:
+            try:
+                attained = int(attained_match.group(1))
+                min_age = int(min_age_val)
+                computed = attained - min_age
+                if computed > 0:
+                    # Only override if current value looks like it IS the
+                    # attained age (i.e. same as the attained number) or is N/A
+                    if max_term == DEFAULT_VALUE or max_term == str(attained):
+                        normalized["MAX_TERM_YEARS"] = str(computed)
+            except (ValueError, TypeError):
+                pass
 
     return normalized
 
@@ -993,13 +1103,10 @@ def normalize_record(record, entry):
 # ============================================================================
 
 def build_prompt(entry, chunk, tokenizer, chunk_idx=1, chunk_total=1):
-    """
-    Build the extraction prompt for ONE chunk of the document.
-    `chunk` is already cut to size by chunk_text() — do not slice it again.
-    """
+    """Build the extraction prompt for ONE chunk of the document."""
     if chunk_total > 1:
         chunk_note = (
-            f"\nNOTE: This is PART {chunk_idx} of {chunk_total} of a single, longer "
+            f"\nNOTE: This is PART {chunk_idx} of {chunk_total} of a single longer "
             f"product document (split only because of length). Extract whatever fields "
             f"you can find in THIS part only. Set missing fields to \"N/A\".\n"
         )
@@ -1045,10 +1152,8 @@ def build_prompt(entry, chunk, tokenizer, chunk_idx=1, chunk_total=1):
 def build_repair_prompt(entry, raw_text):
     """
     Compact repair prompt for malformed JSON output.
-
-    Intentionally does NOT include the full SYSTEM_PROMPT to avoid exceeding
-    Qwen2.5-3B's context limit when the broken output is also long. The essential
-    rules are inlined here instead.
+    Does NOT include the full SYSTEM_PROMPT to stay within context limits.
+    All essential rules are inlined.
     """
     repair_instructions = f"""You are repairing broken JSON from a data extraction task.
 Product: {entry['title']}
@@ -1057,44 +1162,50 @@ Source file: {get_source_filename(entry)}
 BROKEN OUTPUT TO REPAIR:
 {raw_text[:3000]}
 
-REPAIR RULES — apply all of these:
+REPAIR RULES — apply ALL:
 - Return exactly ONE valid JSON object with 56 fields, nothing else
 - Use "N/A" for every missing or unparseable field (never null/None/NaN/"")
 - PRODUCT_NAME: Title Case (never ALL CAPS)
 - LEAD_MARKER: exactly "IBG" or "BNK"
 - PLAN_TYPE: one word from Insurance|Protection|Health|Savings|Deposit|Loan|Card|Investment|Service|Loyalty
+  Any insurer/takaful-underwritten product → "Insurance"
+- TARGET_GOAL: single keyword from Protection|Health|Education|Marriage|Savings|Retirement|Investment|Housing|Business|Loyalty|Income
 - CUSTOMER_TYPE: exactly one of Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A
 - GENDER: exactly one of Male|Female|All|N/A
+  Products for all general bank customers → "All"
 - FINANCING_TYPE: one of Conventional|Islamic|Takaful|Mudarabah|Unit Linked|Hybrid (Bonus Based and Unit Linked)|N/A
-- TARGET_GOAL: standardized short term like Protection, Savings, Education, Health, Marriage
-- CHANNEL: "Bank Branch" if applicable
+  Any WTO/Window Takaful Operations product → ALWAYS "Takaful" (even if PIA/unit-linked language present)
+- DEPOSIT_PROFIT_TYPE: Variable|Tier-based|Fixed|Bonus-based|Bonus-based & Unit-linked|N/A
+  Takaful savings plan with PIA/fund returns → "Variable"
+  Hybrid bonus+unit-linked plan → "Bonus-based & Unit-linked"
+  Pure health/protection plan → "N/A"
+- DEPOSIT_PROFIT_FREQUENCY: savings/endowment plans → "At Maturity"; pure protection → "N/A"
+- CHANNEL: "Bank Alfalah branches" / "bank outlets" → "Bank Branch"
+- IS_BANK_OFFERED: 1 if distributed via bank; "N/A" if fully independent
+- TENURE: compact format only: "X-Y years" or "1 year, yearly renewable" or "X years to attained age Y"
+  Never "Minimum Term: X; Maximum Term: Y"
+- TENURE_OPTIONS: savings plans → "Annual, Semi-Annual, Quarterly contributions"; annual plans → "1 year"
+- MAX_TERM_YEARS: plan term years (NOT attained age); if coverage to attained age X: MAX_TERM_YEARS = X - MIN_AGE
 - Numeric fields (MIN_AGE, MAX_AGE, MIN_BALANCE, MIN_INCOME, MIN_INCOME_USD,
   MIN_INVESTMENT, MIN_CONTRIBUTION, MIN_TERM_YEARS, MAX_TERM_YEARS,
   FREE_LOOK_PERIOD_DAYS, IS_BANK_OFFERED): integers only, no units, no .0
-- TENURE_OPTIONS: plan duration choices only, NOT payment frequency
-- PREMIUM_PAYMENT_FREQUENCY: how customer pays (Annual/Quarterly/etc.) or "N/A"
-- OPTIONAL_RIDERS: comma-separated, not semicolons
-- SPECIAL_CONDITIONS: max 200 chars
+- OPTIONAL_RIDERS: semicolon-separated (NOT commas)
+  Example: "Accidental Death Benefit; Income Benefit-Disability; Income Benefit-Death"
+- SPECIAL_CONDITIONS: include free look period, unit allocation schedule if stated
+- PRICING_RATE: contribution/premium amounts only; NO unit allocation % tables
+- PROVIDER_NAME: WTO products → "[Insurer] (WTO), distributed via [Bank]"
 - SOURCE_FILE_PRODUCT: filename only, no path
 - No markdown fences, no explanations outside the JSON
 
 Return the repaired JSON object now."""
-
-    messages = [
-        {"role": "user", "content": repair_instructions},
-    ]
-
-    # Use chat template if available (no system prompt to save tokens)
-    if hasattr(entry.get("_tokenizer_ref"), "apply_chat_template"):
-        pass  # no tokenizer ref stored in entry; fall through
 
     return repair_instructions
 
 
 def build_validation_prompt(entry, extracted_json):
     """
-    Validation and correction prompt using the full system context.
-    Checks the 56-field output against the corrected extraction rules.
+    Validation and correction prompt.
+    Checks the 56-field output against all corrected extraction rules.
     """
     validation_instructions = f"""You extracted this JSON. Validate and fix any issues:
 
@@ -1103,64 +1214,107 @@ EXTRACTED JSON:
 
 VALIDATION RULES — check each and FIX if violated:
 
-1. PRODUCT_NAME: Is it Title Case? Not ALL CAPS?
+1. PRODUCT_NAME: Title Case? Not ALL CAPS?
    WRONG: "JUBILEE KAMIL TAKAFUL SAVINGS PLAN"
    CORRECT: "Jubilee Kamil Takaful Savings Plan"
 
-2. PLAN_TYPE: Is it ONE word from Insurance|Protection|Health|Savings|Deposit|Loan|Card|Investment|Service|Loyalty?
-   Protection plans (accident/theft only) → "Protection" if no insurer, else "Insurance"
-   Hospitalization plans → "Health" or "Insurance"
+2. PLAN_TYPE: ONE word from Insurance|Protection|Health|Savings|Deposit|Loan|Card|Investment|Service|Loyalty?
+   Any insurer/takaful-underwritten product (LEAD_MARKER=IBG) → ALWAYS "Insurance".
 
-3. TARGET_GOAL: Standardized short value like "Protection", "Savings", "Education", "Health", "Marriage"
+3. TARGET_GOAL: Single keyword from Protection|Health|Education|Marriage|Savings|Retirement|Investment|Housing|Business|Loyalty|Income?
+   WRONG: "Savings and Protection", "Complete Protection Against Accidental Death", "Hospitalization Protection"
+   CORRECT: "Savings", "Protection", "Health"
 
-4. CUSTOMER_TYPE: Is it exactly ONE value (no commas)?
-   Allowed: Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A
+4. CUSTOMER_TYPE: exactly ONE value — Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A?
+   No bank names, no commas, no free text.
 
-5. CUSTOMER_SEGMENT/TARGET_SEGMENT/SEGMENT_TIER: Clean values or N/A
+5. GENDER: exactly one of Male|Female|All|N/A?
+   Products available to ALL general bank customers → "All".
+   Female-specific products → "Female".
+   "N/A" ONLY if genuinely undeterminable.
 
-6. CHANNEL: "Bank Branch" if branches mentioned
+6. CUSTOMER_SEGMENT: Is it set for products targeting general bank customers?
+   General bank customer products → "All Bank Alfalah Customers" (or relevant bank name).
+   Female-specific → "Female Customers and Spouse".
 
-7. ELIGIBILITY_TYPE: Concise summary including age and CNIC rules
+7. TARGET_SEGMENT: Is it derived from product purpose?
+   Education → "Education Planning"; Marriage → "Marriage Planning"; Health → "Healthcare Coverage";
+   Female savings → "Female Savings Planning"; Multipurpose savings → "Multipurpose Planning";
+   Premium/wellness savings → "Wellness Focused"; Standard savings → "Savings Planning";
+   Protection/accident → "Protection Planning".
 
-8. GENDER: Is it exactly one of Male|Female|All|N/A?
-   "N/A" if gender is not mentioned. "All" ONLY if explicitly stated in document.
-   Do NOT use "All" merely because an eligibility section exists.
+8. SEGMENT_TIER: Is it set?
+   "Premier"/"Premium" in product name → "Premium"; Female-specific → "Niche";
+   Health/hospitalization plan → "Mass Market"; Standard retail → "Retail".
 
-9. FINANCING_TYPE: For unit-linked plans (PIA, fund allocation) → "Unit Linked"
-   Hybrid (bonus + unit-linked) → "Hybrid (Bonus Based and Unit Linked)"
-   NOT "N/A" for plans that explicitly mention unit-linked structure.
+9. CHANNEL: "Bank Alfalah branches / Limited branches / outlets" → "Bank Branch"?
 
-10. DEPOSIT_PROFIT_TYPE / DEPOSIT_PROFIT_FREQUENCY: Unit-linked plans → both "N/A"
-    Health/protection plans (no savings) → both "N/A"
-    Do NOT set "At Maturity" for unit-linked plans.
+10. SERVICE_TYPE: Is it set based on product type?
+    Education → "Education Planning"; Health → "Healthcare"; Marriage → "Marriage Planning";
+    Savings/endowment → "Savings Planning"; Protection → "Protection Planning";
+    Premium wellness savings → "Wellness Savings".
 
-11. TENURE_OPTIONS: Is it ONLY plan duration choices (e.g. "10, 15, 20 years")?
-    Payment frequencies ("Annual, Quarterly") belong in PREMIUM_PAYMENT_FREQUENCY.
-    If no distinct plan duration menu → "N/A"
+11. FINANCING_TYPE: For WTO / Takaful operator products → "Takaful"?
+    WRONG: "Unit Linked" or "Hybrid (Bonus Based and Unit Linked)" for a WTO/takaful product
+    CORRECT: "Takaful" for ALL products underwritten by WTO or any takaful operator,
+    EVEN IF PIA / unit-linked / fund-allocation language appears in the document.
 
-12. PREMIUM_PAYMENT_FREQUENCY: Is it the payment frequency (Annual/Semi-Annual/Quarterly/Monthly)?
-    Example: "Annual, Semi-Annual, Quarterly" or "N/A"
+12. DEPOSIT_PROFIT_TYPE: Is it set for savings/investment plans?
+    Takaful savings plan with PIA/fund returns → "Variable"
+    Hybrid bonus-based + unit-linked plan → "Bonus-based & Unit-linked"
+    Pure protection/health/annual-term plan → "N/A"
+    WRONG: "N/A" for a unit-linked/PIA savings plan
 
-13. OPTIONAL_RIDERS: Are they comma-separated (not semicolons)?
-    WRONG: "Accidental Death; Income Benefit"
-    CORRECT: "Accidental Death, Income Benefit"
+13. DEPOSIT_PROFIT_FREQUENCY: Is it set for savings/investment plans?
+    Savings/endowment plans → "At Maturity"
+    Pure protection/health/annual-term plans → "N/A"
+    WRONG: "N/A" for a savings plan with returns at maturity
 
-14. Numeric fields: Do they contain ONLY integers (no PKR, no commas, no .0)?
+14. TENURE: Is it in compact format?
+    WRONG: "Minimum Term: 10 years; Maximum Term: 25 years"
+    CORRECT: "10-25 years"
+    WRONG: "1 Year (renewable)"
+    CORRECT: "1 year, yearly renewable"
+
+15. TENURE_OPTIONS: Is it contribution payment options for savings plans?
+    Savings plans → "Annual, Semi-Annual, Quarterly contributions"
+    Annual renewable → "1 year"
+    NOT payment frequencies as plan durations.
+
+16. MAX_TERM_YEARS: Is it the plan TERM (not attained age)?
+    If TENURE says "to attained age X": MAX_TERM_YEARS = X - MIN_AGE
+    WRONG: 85 when coverage ends at attained age 85 with MIN_AGE=18
+    CORRECT: 67 (= 85 - 18)
+
+17. IS_BANK_OFFERED: Set to 1 when CHANNEL = "Bank Branch" or distributed via bank?
+    Products sold through bank branches → 1
+
+18. OPTIONAL_RIDERS: Are they semicolon-separated (NOT commas)?
+    WRONG: "Accidental Death Benefit, Income Benefit-Disability"
+    CORRECT: "Accidental Death Benefit; Income Benefit-Disability"
+
+19. PRICING_RATE: Does it contain ONLY contribution/premium amounts?
+    Unit allocation % schedules belong in SPECIAL_CONDITIONS, not PRICING_RATE.
+    WRONG: "Year 1: 60%; Year 2: 80%; Year 3: 95%"
+    CORRECT: "Min contribution PKR 25,000/yr; Annual, Semi-Annual, Quarterly"
+
+20. PROVIDER_NAME: For WTO products → "[Insurer] (WTO), distributed via [Bank]"?
+    WRONG: "IGI Life Insurance WTO"
+    CORRECT: "IGI Life Insurance (WTO), distributed via Bank Alfalah Ltd"
+
+21. SPECIAL_CONDITIONS: Does it include free look period and unit allocation schedule if stated?
+    Include: "Free 14-day look period; unit allocation: Yr1 60%, Yr2 80%, Yr3 95%, Yr4+ 100%"
+
+22. Numeric fields: integers only (no PKR, no commas, no .0)?
     Fields: MIN_AGE, MAX_AGE, MIN_BALANCE, AVG_BALANCE_REQUIREMENT, MIN_INCOME,
     MIN_INCOME_USD, MIN_INVESTMENT, MIN_CONTRIBUTION, MIN_TERM_YEARS,
     MAX_TERM_YEARS, FREE_LOOK_PERIOD_DAYS, IS_BANK_OFFERED
     WRONG: "18.0", "PKR 250,000"  CORRECT: "18", "250000"
 
-15. FREE_LOOK_PERIOD_DAYS: Is it set ONLY because this product explicitly mentions it?
-    If not explicitly stated → "N/A". Do NOT default to 14.
+23. FREE_LOOK_PERIOD_DAYS: Set ONLY if THIS product explicitly states it. Do NOT default to 14.
 
-16. SEGMENT_TIER / SERVICE_TYPE / CUSTOMER_SEGMENT / TARGET_SEGMENT:
-    "N/A" unless explicitly stated in the document. Do NOT derive from other fields.
-
-17. SOURCE_FILE_PRODUCT: Filename only (no folder path).
-
-18. All 56 fields present? No null/None/NaN/empty string → "N/A"
-    Columns: PRODUCT_NAME, LEAD_MARKER, SOURCE_FILE_PRODUCT, PLAN_TYPE, TARGET_GOAL,
+24. All 56 fields present? No null/None/NaN/empty string → "N/A"
+    Fields: PRODUCT_NAME, LEAD_MARKER, SOURCE_FILE_PRODUCT, PLAN_TYPE, TARGET_GOAL,
     CUSTOMER_TYPE, EMPLOYMENT_TYPE, CUSTOMER_SEGMENT, TARGET_SEGMENT, SEGMENT_TIER,
     MIN_AGE, MAX_AGE, GENDER, IS_BANK_OFFERED, ACCOUNT_TYPE, CARD_TYPE, CHANNEL,
     ELIGIBILITY_TYPE, SERVICE_TYPE, REWARD_TYPE, CURRENCY, CURRENCY_TYPE,
@@ -1174,8 +1328,6 @@ VALIDATION RULES — check each and FIX if violated:
     FREE_LOOK_PERIOD_DAYS, REQUIRED_DOCUMENTS, CLAIMS_SERVICE_CONTACT,
     KEY_EXCLUSIONS, TAX_ZAKAT_TREATMENT, PREMIUM_PAYMENT_FREQUENCY
 
-Refer to the system prompt above for full field definitions and all rules.
-
 If ANY rule is violated, return CORRECTED JSON. Otherwise return JSON unchanged.
 Fix ONLY the violations, preserve everything else.
 Return ONLY valid JSON, no explanations."""
@@ -1188,12 +1340,7 @@ Return ONLY valid JSON, no explanations."""
 # ============================================================================
 
 def free_gpu_memory():
-    """
-    Release cached/fragmented CUDA memory between generate() calls.
-    empty_cache() returns RESERVED-but-UNUSED memory to the CUDA driver.
-    It cannot free the model's weights (live tensors). Use GPU_RESERVE_GIB
-    to limit how much of the GPU the loader fills with weights.
-    """
+    """Release cached/fragmented CUDA memory between generate() calls."""
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -1231,16 +1378,11 @@ def get_raw_generation(model, tokenizer, prompt):
 
     hit_token_limit = generated_ids.shape[-1] >= MAX_NEW_TOKENS
     if hit_token_limit:
-        # The model ran out of budget before emitting EOS on its own, which
-        # means the JSON is almost certainly truncated mid-field rather than
-        # genuinely malformed. Surface this distinctly from a real parse
-        # error so it's obvious in the logs which one you're dealing with.
         print(
             f"    note: generation hit MAX_NEW_TOKENS={MAX_NEW_TOKENS} "
-            f"(output likely truncated, not malformed) — attempting auto-close recovery"
+            f"(output likely truncated) — attempting auto-close recovery"
         )
 
-    # Explicitly drop tensor references to free GPU memory before next call.
     del inputs, output_ids, generated_ids
     free_gpu_memory()
 
@@ -1249,9 +1391,8 @@ def get_raw_generation(model, tokenizer, prompt):
 
 def extract_one_chunk(model, tokenizer, entry, chunk, chunk_idx, chunk_total):
     """
-    Run extraction on a SINGLE chunk of the document (initial attempt +
-    one compact repair retry if output is not parseable JSON).
-    Validation is done once on the final merged record, not per chunk.
+    Run extraction on a SINGLE chunk (initial attempt + compact repair retry).
+    Validation runs on the final merged record, not per chunk.
     Returns a normalized record dict, or None if both attempts failed.
     """
     prompt = build_prompt(entry, chunk, tokenizer, chunk_idx, chunk_total)
@@ -1285,7 +1426,7 @@ def extract_one_product(model, tokenizer, entry, text):
     validation pass runs on the final merged record.
 
     If ENABLE_CHUNKING=False, the whole document is sent in one call
-    (risks OOM on long documents + large system prompt).
+    (risks OOM on long documents).
     """
     if ENABLE_CHUNKING:
         chunks = chunk_text(text, TEXT_CHUNK_SIZE, TEXT_CHUNK_OVERLAP)
@@ -1313,8 +1454,8 @@ def extract_one_product(model, tokenizer, entry, text):
         validated_parsed = parse_json_blob(validation_raw)
         return normalize_record(validated_parsed, entry)
     except Exception:
-        # If the validation call itself fails to parse, the merged record
-        # (already normalized field-by-field) is still a valid result.
+        # If validation call fails to parse, the merged record (already
+        # normalized field-by-field) is still a valid result.
         return accumulated
 
 
@@ -1360,9 +1501,7 @@ def make_generator():
     except RepositoryNotFoundError as exc:
         raise SystemExit(
             f"Model not found on Hugging Face: {MODEL_NAME}\n"
-            "This usually means the repo id is wrong.\n"
-            "Use the exact Hugging Face model id from the model card, or set HF_MODEL_NAME_OR_PATH\n"
-            "to a local folder path.\n"
+            "Check the repo id or set HF_MODEL_NAME_OR_PATH to a local folder path.\n"
             "If the repo is private or gated, authenticate in Colab first."
         ) from exc
 
@@ -1374,8 +1513,7 @@ def make_generator():
     if DEVICE_MAP.lower() != "none":
         model_kwargs["device_map"] = DEVICE_MAP
 
-        # Cap how much GPU memory Accelerate fills with weights, leaving
-        # GPU_RESERVE_GIB free for the KV-cache that generate() needs.
+        # Reserve GPU_RESERVE_GIB for the KV-cache that generate() needs.
         if torch.cuda.is_available() and DEVICE_MAP.lower() == "auto":
             max_memory = {}
             for i in range(torch.cuda.device_count()):
@@ -1505,8 +1643,6 @@ def main():
                     )
                     break
                 except torch.cuda.OutOfMemoryError as e:
-                    # Clear fragmented allocator state before retrying —
-                    # each retry must start from a clean memory state.
                     free_gpu_memory()
                     print(
                         f"[{entry['product_no']:03d}/{len(index)}] "
