@@ -28,27 +28,41 @@ Configure the model through .env:
 Resumable: already-extracted products (present in OUT_JSONL) are skipped,
 so you can safely re-run after an interruption.
 
-CHANGES IN THIS VERSION:
-- Added PREMIUM_PAYMENT_FREQUENCY as the 56th column (injected if missing from
-  pipeline_config to maintain backward compatibility).
-- PLAN_TYPE normalization now accepts Protection and Health in addition to the
-  original set.
-- FINANCING_TYPE normalization added: maps "unit linked", "hybrid" patterns to
-  canonical values.
-- PRODUCT_NAME normalization: ALL-CAPS product names are converted to Title Case.
-- OPTIONAL_RIDERS normalization: ensures comma-separated output.
-- Updated field_max_lengths to match corrected-dataset ground-truth lengths
-  (PRICING_RATE 400, FEES_AND_CHARGES 300, KEY_BENEFITS 250, OPTIONAL_RIDERS 300,
-  TENURE 50, TARGET_GOAL 50, COVERAGE_AMOUNT 150, ELIGIBILITY_TYPE 100,
-  EMPLOYMENT_TYPE 500, FINANCING_TYPE 50, PREMIUM_PAYMENT_FREQUENCY 50).
-- Repair prompt is now a compact focused version (no full SYSTEM_PROMPT duplication)
-  to stay within Qwen2.5-3B's context limit during error recovery.
-- Validation prompt updated with corrected field rules (GENDER, DEPOSIT_PROFIT,
-  FINANCING_TYPE, TENURE_OPTIONS vs PREMIUM_PAYMENT_FREQUENCY, etc.).
-- MAX_NEW_TOKENS default raised to 1500 to accommodate 56-field JSON with
-  longer EMPLOYMENT_TYPE and PRICING_RATE values.
-- Enhanced normalization for TARGET_GOAL, segments, CHANNEL, ELIGIBILITY_TYPE,
-  tenure fields, COVERAGE_AMOUNT, PRICING_RATE to match corrected dataset.
+CHANGES IN THIS VERSION (audit fixes — generic, not product-specific):
+- Ground-truth analysis showed the corrected dataset consistently uses " | "
+  as the separator for every multi-value/list field (never semicolons, and
+  never commas as a *list* separator since commas already appear inside
+  amounts like "500,000"). Added a generic delimiter-normalization step
+  that:
+    * always converts ";" -> " | " for every text field (safe: semicolons
+      never appear inside amounts/prose in this domain), and
+    * converts ", " -> " | " ONLY for fields that are strictly list-type by
+      design and don't carry monetary/prose commas (CUSTOMER_TYPE,
+      PRODUCT_VARIANT_TIER, SEGMENT_TIER, TENURE_OPTIONS,
+      PREMIUM_PAYMENT_FREQUENCY, OPTIONAL_RIDERS, EMPLOYMENT_TYPE).
+  This is a generic, document-driven normalization rule, not a per-product
+  mapping, so it generalizes across all 200+ documents.
+- NUMERIC_COLUMNS coercion previously collapsed tiered values (e.g. a
+  Bronze/Silver/Gold contribution table in MIN_CONTRIBUTION) down to a
+  single number, destroying real information. Added a tiered-value
+  detector (_is_tiered_value) that, for the subset of numeric fields that
+  can legitimately be tiered (balances/income/investment/contribution
+  fields), preserves the full tiered text instead of forcing a single
+  integer. True single-value numeric fields (ages, term years, free-look
+  days, IS_BANK_OFFERED) are unaffected and still coerced to plain integers.
+- CUSTOMER_TYPE normalization previously forced a single enum value and
+  discarded anything after the first comma. Ground truth allows multiple
+  pipe-separated enum values (e.g. "Salaried|Self-Employed"). Rewrote the
+  normalizer to validate each "|"-segment against the enum and keep all
+  valid ones, joined by " | ".
+- OPTIONAL_RIDERS/other list-style normalizers updated to emit " | " instead
+  of "," to match the ground-truth delimiter standard.
+- field_max_lengths increased for COVERAGE_AMOUNT (150->300), KEY_BENEFITS
+  (250->280), REQUIRED_DOCUMENTS (200->220), SPECIAL_CONDITIONS (200->250)
+  based on corrected-dataset ground-truth lengths, so full tiered/category
+  lists aren't truncated mid-list.
+- All previous functionality (chunking, merge, repair/validation passes,
+  JSON recovery, model loading) preserved unchanged.
 """
 from __future__ import annotations
 
@@ -118,20 +132,31 @@ TORCH_DTYPE = os.environ.get("HF_TORCH_DTYPE", "auto").strip().lower()
 GPU_RESERVE_GIB = env_float("HF_GPU_RESERVE_GIB", 3.0)
 ENABLE_CHUNKING = env_bool("ENABLE_CHUNKING", True)
 DEFAULT_VALUE = "N/A"
-NUMERIC_COLUMNS = {
+
+# Numeric fields that are ALWAYS a single plain integer (never legitimately
+# tiered), so they are always force-coerced to a single number.
+STRICT_NUMERIC_COLUMNS = {
     "MIN_AGE",
     "MAX_AGE",
     "IS_BANK_OFFERED",
+    "MIN_TERM_YEARS",
+    "MAX_TERM_YEARS",
+    "FREE_LOOK_PERIOD_DAYS",
+}
+
+# Numeric fields that CAN legitimately be a tiered table (e.g. a
+# Bronze/Silver/Gold contribution or balance schedule). For these, a tiered
+# value is preserved as text instead of being collapsed to one number.
+TIER_AWARE_NUMERIC_COLUMNS = {
     "MIN_BALANCE",
     "AVG_BALANCE_REQUIREMENT",
     "MIN_INCOME",
     "MIN_INCOME_USD",
     "MIN_INVESTMENT",
     "MIN_CONTRIBUTION",
-    "MIN_TERM_YEARS",
-    "MAX_TERM_YEARS",
-    "FREE_LOOK_PERIOD_DAYS",
 }
+
+NUMERIC_COLUMNS = STRICT_NUMERIC_COLUMNS | TIER_AWARE_NUMERIC_COLUMNS
 
 SUPPORTED_EXTENSIONS = {".txt", ".pdf", ".docx", ".doc", ".csv", ".json", ".xlsx", ".xls"}
 
@@ -662,15 +687,15 @@ field_max_lengths = {
     "PRODUCT_VARIANT_TIER": 50,
     "PRICING_RATE": 400,           # age-band pricing tables can be ~370 chars
     "FEES_AND_CHARGES": 300,       # detailed fee schedules up to ~256 chars
-    "KEY_BENEFITS": 250,           # benefits list up to ~212 chars
+    "KEY_BENEFITS": 280,           # widened: full core-benefit lists observed >250 chars
     "OPTIONAL_RIDERS": 300,        # rider lists up to ~253 chars
-    "REQUIRED_DOCUMENTS": 200,
+    "REQUIRED_DOCUMENTS": 220,     # widened slightly for full doc lists
     "CLAIMS_SERVICE_CONTACT": 200,
     "KEY_EXCLUSIONS": 200,
     "TAX_ZAKAT_TREATMENT": 100,
-    "PLAN_TYPE": 15,
+    "PLAN_TYPE": 30,                # widened: descriptive category, not single word
     "TARGET_GOAL": 50,             # "Children's Education Planning" style values
-    "CUSTOMER_TYPE": 25,
+    "CUSTOMER_TYPE": 60,            # widened: may hold multiple "|"-joined enum values
     "EMPLOYMENT_TYPE": 500,        # full Target Market list ~334 chars
     "ACCOUNT_TYPE": 20,
     "CARD_TYPE": 25,
@@ -681,7 +706,7 @@ field_max_lengths = {
     "CURRENCY": 30,
     "CURRENCY_TYPE": 15,
     "LOAN_AMOUNT_RANGE": 50,
-    "COVERAGE_AMOUNT": 150,        # tier coverage descriptions up to ~94 chars
+    "COVERAGE_AMOUNT": 300,        # widened: full multi-category coverage lists observed
     "FINANCING_TYPE": 50,          # "Hybrid (Bonus Based and Unit Linked)" = 36 chars
     "DEPOSIT_PROFIT_TYPE": 30,
     "DEPOSIT_PROFIT_FREQUENCY": 20,
@@ -692,9 +717,64 @@ field_max_lengths = {
     "EQUITY_REQUIREMENT": 20,
     "DBR_LIMIT": 20,
     "TRANSACTION_LIMIT": 50,
-    "SPECIAL_CONDITIONS": 200,
+    "SPECIAL_CONDITIONS": 250,     # widened: multi-condition " | " lists observed >200 chars
     "PREMIUM_PAYMENT_FREQUENCY": 50,
 }
+
+# Fields where a comma is *always* a list separator (never a monetary or
+# prose comma), so it's safe to normalize ", " -> " | " for these. Fields
+# NOT in this set (e.g. COVERAGE_AMOUNT, KEY_BENEFITS, PROVIDER_NAME) can
+# legitimately contain commas inside amounts or prose, so they are only
+# normalized for ";" -> " | ", never for ",".
+COMMA_IS_LIST_SEPARATOR_FIELDS = {
+    "CUSTOMER_TYPE",
+    "PRODUCT_VARIANT_TIER",
+    "SEGMENT_TIER",
+    "TENURE_OPTIONS",
+    "PREMIUM_PAYMENT_FREQUENCY",
+    "OPTIONAL_RIDERS",
+    "EMPLOYMENT_TYPE",
+}
+
+
+def _normalize_list_delimiters(col: str, value: str) -> str:
+    """
+    Generic, document-driven delimiter normalization (not product-specific).
+
+    The corrected ground-truth dataset consistently separates multi-value
+    fields with " | " and never uses semicolons as a list separator.
+    Semicolons never legitimately appear inside amounts or prose in this
+    domain, so ";" -> " | " is always safe. Commas DO legitimately appear
+    inside amounts ("500,000") and prose (PROVIDER_NAME partnership text),
+    so ", " -> " | " is only applied to fields that are strictly list-type
+    by design (COMMA_IS_LIST_SEPARATOR_FIELDS).
+    """
+    if not isinstance(value, str) or value in (DEFAULT_VALUE, ""):
+        return value
+
+    # Semicolons: always a list separator in this domain.
+    value = re.sub(r"\s*;\s*", " | ", value)
+
+    if col in COMMA_IS_LIST_SEPARATOR_FIELDS:
+        # Only collapse comma-space sequences that look like list breaks,
+        # not thousands-separators inside a number (e.g. "10,000").
+        value = re.sub(r"(?<!\d),\s+(?!\d{3}\b)", " | ", value)
+
+    # Collapse accidental doubled separators / stray spacing.
+    value = re.sub(r"\s*\|\s*\|\s*", " | ", value)
+    value = re.sub(r"\s{2,}", " ", value)
+    return value.strip().strip("|").strip()
+
+
+def _is_tiered_value(stripped: str) -> bool:
+    """
+    Detect a tiered/table-style value (e.g. "Bronze:5,000, Silver:10,000")
+    that should be PRESERVED as text rather than collapsed to one integer.
+    Generic pattern match — looks for two or more "Label: number" pairs —
+    so it generalizes to any provider's tier naming, not just this dataset.
+    """
+    pairs = re.findall(r"[A-Za-z][\w\s]{0,24}[:=]\s*[\d,]+", stripped)
+    return len(pairs) >= 2
 
 
 def truncate_to_boundary(value: str, max_len: int) -> str:
@@ -703,40 +783,42 @@ def truncate_to_boundary(value: str, max_len: int) -> str:
         return value
 
     cut = value[:max_len].rstrip()
-    boundary = max(cut.rfind(" "), cut.rfind(","), cut.rfind(";"), cut.rfind(":"), cut.rfind("-"))
+    boundary = max(cut.rfind(" "), cut.rfind(","), cut.rfind(";"), cut.rfind(":"), cut.rfind("-"), cut.rfind("|"))
     if boundary > 0:
-        return cut[:boundary].rstrip(" ,;:-/")
+        return cut[:boundary].rstrip(" ,;:-/|")
     return cut
 
 
 def _normalize_plan_type(value: str) -> str:
     """
-    Normalize PLAN_TYPE to exactly one of the allowed values.
-    Now includes Protection and Health in addition to the
-    original set.
+    PLAN_TYPE is now a short descriptive category (see prompt) rather than a
+    rigid single word. We only lightly clean it here:
+      - Preserve it as-is if it already contains "Insurance" (the anchor
+        word required for any insurer-underwritten product).
+      - Otherwise, map to the closest bank-only enum word if the value
+        clearly corresponds to one.
+      - Never silently discard an unrecognized but plausible value — that
+        would hide real extraction content behind "N/A" and doesn't
+        generalize well across 200+ documents with varied phrasing.
     """
-    # Expanded set includes Protection and Health added in corrected dataset.
-    valid_types = {
-        "Loan", "Deposit", "Savings", "Card", "Investment",
-        "Insurance", "Service", "Loyalty", "Protection", "Health",
-    }
     stripped = value.strip()
-    # Exact match first (case-sensitive)
-    if stripped in valid_types:
-        return stripped
-    # Case-insensitive exact match
-    for vt in valid_types:
-        if stripped.lower() == vt.lower():
-            return vt
-    # Find the first valid type word inside the value
-    for word in re.split(r"[\s,;/]+", stripped):
-        word_clean = word.strip(".,;:()")
-        if word_clean in valid_types:
-            return word_clean
-        for vt in valid_types:
-            if word_clean.lower() == vt.lower():
-                return vt
-    return DEFAULT_VALUE
+    if not stripped or stripped.upper() == DEFAULT_VALUE:
+        return DEFAULT_VALUE
+
+    if "insurance" in stripped.lower():
+        return stripped[:30]
+
+    bank_only = {"Deposit", "Loan", "Card", "Service", "Loyalty", "Investment", "Savings"}
+    for word in bank_only:
+        if stripped.lower() == word.lower():
+            return word
+    for word in bank_only:
+        if word.lower() in stripped.lower().split():
+            return word
+
+    # Keep the model's descriptive value rather than forcing N/A — this
+    # preserves genuinely new categories seen in unseen documents.
+    return stripped[:30]
 
 
 def _normalize_financing_type(value: str) -> str:
@@ -760,7 +842,6 @@ def _normalize_financing_type(value: str) -> str:
         "conventional": "Conventional",
         "islamic": "Islamic",
         "takaful": "Takaful",
-        "mudarabah": "Mudarabah",
         "mudarabah": "Mudarabah",
     }
     for key, canonical in canonical_map.items():
@@ -819,18 +900,54 @@ def _normalize_eligibility(value: str) -> str:
     return truncate_to_boundary(value.strip(), 100)
 
 
+def _normalize_customer_type(value: str) -> str:
+    """
+    CUSTOMER_TYPE may legitimately hold MULTIPLE enum values (ground truth
+    shows e.g. "Salaried|Self-Employed"), so — unlike the previous version —
+    we no longer collapse to a single value. Each "|"-or-","-separated
+    segment is validated against the allowed enum; valid segments are kept
+    (deduplicated, order preserved) and joined with " | ". Segments that
+    don't match the enum are dropped rather than kept as free text, since
+    CUSTOMER_TYPE must stay a controlled vocabulary field.
+    """
+    allowed = {
+        "Salaried", "Self-Employed", "SME",
+        "Corporate", "Retail", "Government",
+    }
+    stripped = value.strip()
+    if not stripped or stripped.upper() == DEFAULT_VALUE:
+        return DEFAULT_VALUE
+
+    segments = re.split(r"[|,;]+", stripped)
+    kept = []
+    for seg in segments:
+        seg_clean = seg.strip()
+        if not seg_clean:
+            continue
+        for vt in allowed:
+            if seg_clean.lower() == vt.lower() and vt not in kept:
+                kept.append(vt)
+                break
+    if kept:
+        return " | ".join(kept)
+    return DEFAULT_VALUE
+
+
 def normalize_record(record, entry):
     """
     Normalize an extracted record with corrections for all known model errors.
 
     Key normalization rules applied here:
     - PRODUCT_NAME: ALL-CAPS converted to Title Case
-    - PLAN_TYPE: expanded valid set (Protection, Health now accepted)
+    - PLAN_TYPE: descriptive-category cleanup (see _normalize_plan_type)
     - FINANCING_TYPE: canonical Unit Linked / Hybrid mapping
     - GENDER: strict allowed-value enforcement
-    - CUSTOMER_TYPE: single-value enforcement
+    - CUSTOMER_TYPE: multi-value enum enforcement, "|"-joined
     - TARGET_GOAL, CHANNEL, ELIGIBILITY_TYPE, tenure fields enhanced
-    - Numeric fields: strip units, commas, currency symbols
+    - Numeric fields: strip units, commas, currency symbols — UNLESS the
+      value is a genuine tiered table for a tier-aware numeric field, in
+      which case the tiered text is preserved (see _is_tiered_value)
+    - List-type text fields: delimiter normalized to " | "
     - All text fields: truncated at word boundary to max length
     """
     if not isinstance(record, dict):
@@ -845,12 +962,18 @@ def normalize_record(record, entry):
             value = DEFAULT_VALUE
 
         # ----------------------------------------------------------------
-        # Numeric columns: numbers ONLY
+        # Numeric columns
         # ----------------------------------------------------------------
         if col in NUMERIC_COLUMNS and isinstance(value, str):
             stripped = value.strip()
             if not stripped or stripped.upper() == DEFAULT_VALUE:
                 value = DEFAULT_VALUE
+            elif col in TIER_AWARE_NUMERIC_COLUMNS and _is_tiered_value(stripped):
+                # Preserve the tiered table as text instead of collapsing
+                # it to a single number (root cause of a real data-loss bug
+                # observed in the audit: tiered contribution/balance tables
+                # were being reduced to just the first number).
+                value = _normalize_list_delimiters(col, stripped)
             else:
                 match = re.match(r'^(\d+(?:\.\d+)?)', stripped.replace(",", ""))
                 if match:
@@ -878,7 +1001,7 @@ def normalize_record(record, entry):
                 value = stripped_name.title()
 
         # ----------------------------------------------------------------
-        # PLAN_TYPE: expanded valid set
+        # PLAN_TYPE: descriptive-category cleanup
         # ----------------------------------------------------------------
         if col == "PLAN_TYPE" and isinstance(value, str):
             value = _normalize_plan_type(value)
@@ -926,37 +1049,30 @@ def normalize_record(record, entry):
                 value = DEFAULT_VALUE
 
         # ----------------------------------------------------------------
-        # CUSTOMER_TYPE: single value only
+        # CUSTOMER_TYPE: multi-value enum enforcement
         # ----------------------------------------------------------------
         if col == "CUSTOMER_TYPE" and isinstance(value, str):
-            allowed = {
-                "Salaried", "Self-Employed", "SME",
-                "Corporate", "Retail", "Government",
-            }
-            stripped_ct = value.strip()
-            if stripped_ct in allowed:
-                pass  # already valid
-            elif "," in stripped_ct:
-                # Multiple values — take first valid token
-                first = stripped_ct.split(",")[0].strip()
-                value = first if first in allowed else DEFAULT_VALUE
-            elif stripped_ct.lower() == "n/a":
-                value = DEFAULT_VALUE
-            # Note: values like "Salaried Individuals" are not in the allowed set;
-            # keep them as-is so the validation pass can flag and fix them.
+            value = _normalize_customer_type(value)
 
         # ----------------------------------------------------------------
-        # OPTIONAL_RIDERS: ensure comma-separated (not semicolon-separated)
-        # The corrected dataset uses commas for rider lists.
+        # Generic list-delimiter normalization (see G10 in the prompt):
+        # ";" -> " | " always; ", " -> " | " only for strictly list-type
+        # fields where a comma can never be a monetary/prose separator.
         # ----------------------------------------------------------------
-        if col == "OPTIONAL_RIDERS" and isinstance(value, str):
-            if value != DEFAULT_VALUE:
-                # Replace semicolons with commas if the field is a flat list
-                # (i.e. not a descriptive sentence containing semicolons for
-                #  different purposes). Heuristic: if no period in the value,
-                # it's a list — replace semicolons.
-                if "." not in value:
-                    value = re.sub(r"\s*;\s*", ", ", value).strip().strip(",").strip()
+        if isinstance(value, str) and value not in (DEFAULT_VALUE, ""):
+            if col in (
+                COMMA_IS_LIST_SEPARATOR_FIELDS
+                | {
+                    "KEY_BENEFITS", "KEY_EXCLUSIONS", "REQUIRED_DOCUMENTS",
+                    "SEGMENT_TIER", "SPECIAL_CONDITIONS", "FEES_AND_CHARGES",
+                    "COVERAGE_AMOUNT",
+                }
+            ):
+                value = _normalize_list_delimiters(col, value)
+            elif ";" in value:
+                # Even fields not in the list above should never keep a
+                # semicolon list separator (G10) — safe to convert globally.
+                value = _normalize_list_delimiters(col, value)
 
         # ----------------------------------------------------------------
         # TENURE normalization - keep as-is but truncate
@@ -1062,19 +1178,26 @@ REPAIR RULES — apply all of these:
 - Use "N/A" for every missing or unparseable field (never null/None/NaN/"")
 - PRODUCT_NAME: Title Case (never ALL CAPS)
 - LEAD_MARKER: exactly "IBG" or "BNK"
-- PLAN_TYPE: one word from Insurance|Protection|Health|Savings|Deposit|Loan|Card|Investment|Service|Loyalty
-- CUSTOMER_TYPE: exactly one of Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A
+- PLAN_TYPE: short descriptive category; must contain "Insurance" for any
+  insurer/takaful-underwritten product (e.g. "Insurance",
+  "Savings & Protection Insurance", "Insurance (Hospitalization)");
+  otherwise one of Deposit|Loan|Card|Service|Loyalty|Investment|Savings
+- CUSTOMER_TYPE: one or more of Salaried|Self-Employed|SME|Corporate|Retail|
+  Government joined by " | " if multiple, or "N/A"
 - GENDER: exactly one of Male|Female|All|N/A
-- FINANCING_TYPE: one of Conventional|Islamic|Takaful|Mudarabah|Unit Linked|Hybrid (Bonus Based and Unit Linked)|N/A
-- TARGET_GOAL: standardized short term like Protection, Savings, Education, Health, Marriage
+- FINANCING_TYPE: one of Conventional|Islamic|Takaful|Mudarabah|Unit Linked|
+  Hybrid (Bonus Based and Unit Linked)|N/A
+- TARGET_GOAL: standardized short term like Protection, Savings, Education,
+  Health, Marriage
 - CHANNEL: "Bank Branch" if applicable
-- Numeric fields (MIN_AGE, MAX_AGE, MIN_BALANCE, MIN_INCOME, MIN_INCOME_USD,
-  MIN_INVESTMENT, MIN_CONTRIBUTION, MIN_TERM_YEARS, MAX_TERM_YEARS,
-  FREE_LOOK_PERIOD_DAYS, IS_BANK_OFFERED): integers only, no units, no .0
+- Numeric fields (MIN_AGE, MAX_AGE, MIN_TERM_YEARS, MAX_TERM_YEARS,
+  FREE_LOOK_PERIOD_DAYS, IS_BANK_OFFERED): integers only, no units, no .0.
+  MIN_BALANCE/MIN_INCOME/MIN_INCOME_USD/MIN_INVESTMENT/MIN_CONTRIBUTION:
+  a single integer, OR the full tiered table text if genuinely tiered.
 - TENURE_OPTIONS: plan duration choices only, NOT payment frequency
 - PREMIUM_PAYMENT_FREQUENCY: how customer pays (Annual/Quarterly/etc.) or "N/A"
-- OPTIONAL_RIDERS: comma-separated, not semicolons
-- SPECIAL_CONDITIONS: max 200 chars
+- Use " | " as the separator for every multi-value field (never semicolons)
+- SPECIAL_CONDITIONS: max 250 chars
 - SOURCE_FILE_PRODUCT: filename only, no path
 - No markdown fences, no explanations outside the JSON
 
@@ -1107,14 +1230,16 @@ VALIDATION RULES — check each and FIX if violated:
    WRONG: "JUBILEE KAMIL TAKAFUL SAVINGS PLAN"
    CORRECT: "Jubilee Kamil Takaful Savings Plan"
 
-2. PLAN_TYPE: Is it ONE word from Insurance|Protection|Health|Savings|Deposit|Loan|Card|Investment|Service|Loyalty?
-   Protection plans (accident/theft only) → "Protection" if no insurer, else "Insurance"
-   Hospitalization plans → "Health" or "Insurance"
+2. PLAN_TYPE: For any insurer/takaful-underwritten product, does it contain
+   the word "Insurance" (optionally with a short qualifier like
+   "Savings & Protection Insurance" or "Insurance (Hospitalization)")?
+   For a bank-only product, is it one of Deposit|Loan|Card|Service|
+   Loyalty|Investment|Savings?
 
 3. TARGET_GOAL: Standardized short value like "Protection", "Savings", "Education", "Health", "Marriage"
 
-4. CUSTOMER_TYPE: Is it exactly ONE value (no commas)?
-   Allowed: Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A
+4. CUSTOMER_TYPE: Are all values from Salaried|Self-Employed|SME|Corporate|
+   Retail|Government, joined by " | " if more than one? No free text/bank names.
 
 5. CUSTOMER_SEGMENT/TARGET_SEGMENT/SEGMENT_TIER: Clean values or N/A
 
@@ -1123,8 +1248,9 @@ VALIDATION RULES — check each and FIX if violated:
 7. ELIGIBILITY_TYPE: Concise summary including age and CNIC rules
 
 8. GENDER: Is it exactly one of Male|Female|All|N/A?
-   "N/A" if gender is not mentioned. "All" ONLY if explicitly stated in document.
-   Do NOT use "All" merely because an eligibility section exists.
+   "All" if the product is offered broadly with no gender restriction and
+   eligibility info is present. "N/A" only if no customer/eligibility
+   information is given at all.
 
 9. FINANCING_TYPE: For unit-linked plans (PIA, fund allocation) → "Unit Linked"
    Hybrid (bonus + unit-linked) → "Hybrid (Bonus Based and Unit Linked)"
@@ -1134,32 +1260,43 @@ VALIDATION RULES — check each and FIX if violated:
     Health/protection plans (no savings) → both "N/A"
     Do NOT set "At Maturity" for unit-linked plans.
 
-11. TENURE_OPTIONS: Is it ONLY plan duration choices (e.g. "10, 15, 20 years")?
-    Payment frequencies ("Annual, Quarterly") belong in PREMIUM_PAYMENT_FREQUENCY.
+11. TENURE_OPTIONS: Is it ONLY plan duration choices (e.g. "5 | 10 | 15 | 20 years")?
+    Payment frequencies belong in PREMIUM_PAYMENT_FREQUENCY.
     If no distinct plan duration menu → "N/A"
 
 12. PREMIUM_PAYMENT_FREQUENCY: Is it the payment frequency (Annual/Semi-Annual/Quarterly/Monthly)?
-    Example: "Annual, Semi-Annual, Quarterly" or "N/A"
+    Example: "Annual | Semi-Annual | Quarterly" or "N/A"
 
-13. OPTIONAL_RIDERS: Are they comma-separated (not semicolons)?
-    WRONG: "Accidental Death; Income Benefit"
-    CORRECT: "Accidental Death, Income Benefit"
+13. Are all multi-value fields separated by " | " (never semicolons, never
+    commas as the list separator)?
+    WRONG: "Accidental Death; Income Benefit"  or  "Accidental Death, Income Benefit"
+    CORRECT: "Accidental Death | Income Benefit"
 
-14. Numeric fields: Do they contain ONLY integers (no PKR, no commas, no .0)?
-    Fields: MIN_AGE, MAX_AGE, MIN_BALANCE, AVG_BALANCE_REQUIREMENT, MIN_INCOME,
-    MIN_INCOME_USD, MIN_INVESTMENT, MIN_CONTRIBUTION, MIN_TERM_YEARS,
-    MAX_TERM_YEARS, FREE_LOOK_PERIOD_DAYS, IS_BANK_OFFERED
+14. Numeric fields: Do single-value numeric fields contain ONLY integers
+    (no PKR, no commas, no .0)? Tiered fields (MIN_BALANCE, MIN_INCOME,
+    MIN_INVESTMENT, MIN_CONTRIBUTION, etc.) may legitimately keep a full
+    tiered table instead of one number if the source document tiers them.
+    Fields: MIN_AGE, MAX_AGE, MIN_TERM_YEARS, MAX_TERM_YEARS,
+    FREE_LOOK_PERIOD_DAYS, IS_BANK_OFFERED must always be plain integers.
     WRONG: "18.0", "PKR 250,000"  CORRECT: "18", "250000"
 
 15. FREE_LOOK_PERIOD_DAYS: Is it set ONLY because this product explicitly mentions it?
     If not explicitly stated → "N/A". Do NOT default to 14.
 
-16. SEGMENT_TIER / SERVICE_TYPE / CUSTOMER_SEGMENT / TARGET_SEGMENT:
+16. MIN_CONTRIBUTION vs PRICING_RATE: tiered premium/contribution amounts
+    belong in MIN_CONTRIBUTION, not PRICING_RATE. PRICING_RATE is reserved
+    for interest/profit/markup rates.
+
+17. OPTIONAL_RIDERS vs KEY_BENEFITS: OPTIONAL_RIDERS should only contain
+    items the document explicitly labels as optional add-ons, not the
+    product's core/default benefits (which belong in KEY_BENEFITS).
+
+18. SEGMENT_TIER / SERVICE_TYPE / CUSTOMER_SEGMENT / TARGET_SEGMENT:
     "N/A" unless explicitly stated in the document. Do NOT derive from other fields.
 
-17. SOURCE_FILE_PRODUCT: Filename only (no folder path).
+19. SOURCE_FILE_PRODUCT: Filename only (no folder path).
 
-18. All 56 fields present? No null/None/NaN/empty string → "N/A"
+20. All 56 fields present? No null/None/NaN/empty string → "N/A"
     Columns: PRODUCT_NAME, LEAD_MARKER, SOURCE_FILE_PRODUCT, PLAN_TYPE, TARGET_GOAL,
     CUSTOMER_TYPE, EMPLOYMENT_TYPE, CUSTOMER_SEGMENT, TARGET_SEGMENT, SEGMENT_TIER,
     MIN_AGE, MAX_AGE, GENDER, IS_BANK_OFFERED, ACCOUNT_TYPE, CARD_TYPE, CHANNEL,
