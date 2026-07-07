@@ -144,7 +144,7 @@ LOAD_IN_4BIT = env_bool("HF_LOAD_IN_4BIT", False)
 LOAD_IN_8BIT = env_bool("HF_LOAD_IN_8BIT", False)
 DEVICE_MAP = os.environ.get("HF_DEVICE_MAP", "auto").strip() or "auto"
 TORCH_DTYPE = os.environ.get("HF_TORCH_DTYPE", "auto").strip().lower()
-GPU_RESERVE_GIB = env_float("HF_GPU_RESERVE_GIB", 3.0)
+GPU_RESERVE_GIB = env_float("HF_GPU_RESERVE_GIB", 5.0)
 ENABLE_CHUNKING = env_bool("ENABLE_CHUNKING", True)
 DEFAULT_VALUE = "N/A"
 
@@ -1355,14 +1355,16 @@ def free_gpu_memory():
         torch.cuda.synchronize()
 
 
-def get_raw_generation(model, tokenizer, prompt):
+def get_raw_generation(model, tokenizer, prompt, max_new_tokens=None):
+    effective_max_new_tokens = max_new_tokens or MAX_NEW_TOKENS
+
     inputs = tokenizer(prompt, return_tensors="pt")
     device = getattr(model, "device", None)
     if device is not None:
         inputs = {key: value.to(device) for key, value in inputs.items()}
 
     generation_kwargs = {
-        "max_new_tokens": MAX_NEW_TOKENS,
+        "max_new_tokens": effective_max_new_tokens,
         "do_sample": False,
         "repetition_penalty": REPETITION_PENALTY,
         "pad_token_id": tokenizer.pad_token_id or tokenizer.eos_token_id,
@@ -1384,14 +1386,14 @@ def get_raw_generation(model, tokenizer, prompt):
         clean_up_tokenization_spaces=False,
     )
 
-    hit_token_limit = generated_ids.shape[-1] >= MAX_NEW_TOKENS
+    hit_token_limit = generated_ids.shape[-1] >= effective_max_new_tokens
     if hit_token_limit:
         # The model ran out of budget before emitting EOS on its own, which
         # means the JSON is almost certainly truncated mid-field rather than
         # genuinely malformed. Surface this distinctly from a real parse
         # error so it's obvious in the logs which one you're dealing with.
         print(
-            f"    note: generation hit MAX_NEW_TOKENS={MAX_NEW_TOKENS} "
+            f"    note: generation hit max_new_tokens={effective_max_new_tokens} "
             f"(output likely truncated, not malformed) — attempting auto-close recovery"
         )
 
@@ -1402,7 +1404,7 @@ def get_raw_generation(model, tokenizer, prompt):
     return text
 
 
-def extract_one_chunk(model, tokenizer, entry, chunk, chunk_idx, chunk_total):
+def extract_one_chunk(model, tokenizer, entry, chunk, chunk_idx, chunk_total, max_new_tokens=None):
     """
     Run extraction on a SINGLE chunk of the document (initial attempt +
     one compact repair retry if output is not parseable JSON).
@@ -1410,7 +1412,7 @@ def extract_one_chunk(model, tokenizer, entry, chunk, chunk_idx, chunk_total):
     Returns a normalized record dict, or None if both attempts failed.
     """
     prompt = build_prompt(entry, chunk, tokenizer, chunk_idx, chunk_total)
-    raw = get_raw_generation(model, tokenizer, prompt)
+    raw = get_raw_generation(model, tokenizer, prompt, max_new_tokens=max_new_tokens)
 
     try:
         parsed = parse_json_blob(raw)
@@ -1418,7 +1420,7 @@ def extract_one_chunk(model, tokenizer, entry, chunk, chunk_idx, chunk_total):
     except Exception:
         # Compact repair prompt (no full SYSTEM_PROMPT) to stay within context
         repair_prompt = build_repair_prompt(entry, raw)
-        repaired_raw = get_raw_generation(model, tokenizer, repair_prompt)
+        repaired_raw = get_raw_generation(model, tokenizer, repair_prompt, max_new_tokens=max_new_tokens)
         try:
             repaired_parsed = parse_json_blob(repaired_raw)
             return normalize_record(repaired_parsed, entry)
@@ -1430,7 +1432,7 @@ def extract_one_chunk(model, tokenizer, entry, chunk, chunk_idx, chunk_total):
             return None
 
 
-def extract_one_product(model, tokenizer, entry, text):
+def extract_one_product(model, tokenizer, entry, text, max_new_tokens=None):
     """
     Chunked extraction + field-level merge + single validation pass.
 
@@ -1441,6 +1443,10 @@ def extract_one_product(model, tokenizer, entry, text):
 
     If ENABLE_CHUNKING=False, the whole document is sent in one call
     (risks OOM on long documents + large system prompt).
+
+    max_new_tokens: optional override (used by the OOM retry loop in main()
+    to shrink the generation budget — and therefore the KV-cache/activation
+    memory — on subsequent attempts instead of repeating an identical call).
     """
     if ENABLE_CHUNKING:
         chunks = chunk_text(text, TEXT_CHUNK_SIZE, TEXT_CHUNK_OVERLAP)
@@ -1452,7 +1458,9 @@ def extract_one_product(model, tokenizer, entry, text):
     any_chunk_succeeded = False
 
     for i, chunk in enumerate(chunks, start=1):
-        chunk_record = extract_one_chunk(model, tokenizer, entry, chunk, i, chunk_total)
+        chunk_record = extract_one_chunk(
+            model, tokenizer, entry, chunk, i, chunk_total, max_new_tokens=max_new_tokens
+        )
         if chunk_record is not None:
             any_chunk_succeeded = True
             accumulated = merge_records(accumulated, chunk_record, COLUMNS)
@@ -1463,7 +1471,7 @@ def extract_one_product(model, tokenizer, entry, text):
 
     # Single validation/correction pass on the merged record.
     validation_prompt = build_validation_prompt(entry, accumulated)
-    validation_raw = get_raw_generation(model, tokenizer, validation_prompt)
+    validation_raw = get_raw_generation(model, tokenizer, validation_prompt, max_new_tokens=max_new_tokens)
     try:
         validated_parsed = parse_json_blob(validation_raw)
         return normalize_record(validated_parsed, entry)
@@ -1473,9 +1481,9 @@ def extract_one_product(model, tokenizer, entry, text):
         return accumulated
 
 
-def extract_one(model, tokenizer, entry, text):
+def extract_one(model, tokenizer, entry, text, max_new_tokens=None):
     """Main extraction entry point: chunked extraction + merge + validation."""
-    return extract_one_product(model, tokenizer, entry, text)
+    return extract_one_product(model, tokenizer, entry, text, max_new_tokens=max_new_tokens)
 
 
 # ============================================================================
@@ -1541,16 +1549,18 @@ def make_generator():
             model_kwargs["max_memory"] = max_memory
             print(f"GPU headroom reserved: {GPU_RESERVE_GIB} GiB (max_memory={max_memory})")
 
-    if TORCH_DTYPE == "float16":
-        model_kwargs["torch_dtype"] = torch.float16
-    elif TORCH_DTYPE == "bfloat16":
-        model_kwargs["torch_dtype"] = torch.bfloat16
-    elif TORCH_DTYPE == "float32":
-        model_kwargs["torch_dtype"] = torch.float32
-    elif TORCH_DTYPE == "auto":
-        model_kwargs["torch_dtype"] = "auto"
+    # FIX: always stream weights directly into place instead of materializing
+    # a full-precision copy first — this alone can be several extra GiB on a
+    # 7B model.
+    model_kwargs["low_cpu_mem_usage"] = True
 
     if LOAD_IN_4BIT or LOAD_IN_8BIT:
+        # FIX: do NOT also set model_kwargs["torch_dtype"] here. Passing a
+        # top-level torch_dtype alongside quantization_config is what caused
+        # this process to hold ~14GiB right after loading (essentially the
+        # full fp16 model), instead of the ~4-5GiB a real 4-bit 7B model
+        # should take. bnb_4bit_compute_dtype below is the correct place to
+        # control dtype when quantizing.
         model_kwargs["quantization_config"] = BitsAndBytesConfig(
             load_in_4bit=LOAD_IN_4BIT,
             load_in_8bit=LOAD_IN_8BIT,
@@ -1558,6 +1568,14 @@ def make_generator():
             bnb_4bit_quant_type="nf4",
             bnb_4bit_use_double_quant=True,
         )
+    elif TORCH_DTYPE == "float16":
+        model_kwargs["torch_dtype"] = torch.float16
+    elif TORCH_DTYPE == "bfloat16":
+        model_kwargs["torch_dtype"] = torch.bfloat16
+    elif TORCH_DTYPE == "float32":
+        model_kwargs["torch_dtype"] = torch.float32
+    elif TORCH_DTYPE == "auto":
+        model_kwargs["torch_dtype"] = "auto"
 
     print(f"Loading model: {MODEL_NAME}")
     print(f"Model class:   {MODEL_CLASS}")
@@ -1578,6 +1596,16 @@ def make_generator():
             model.generation_config.pad_token_id = tokenizer.pad_token_id
         if tokenizer.eos_token_id is not None:
             model.generation_config.eos_token_id = tokenizer.eos_token_id
+
+    if torch.cuda.is_available():
+        allocated_gib = torch.cuda.memory_allocated() / (1024**3)
+        reserved_gib = torch.cuda.memory_reserved() / (1024**3)
+        print(
+            f"Post-load GPU memory: {allocated_gib:.2f} GiB allocated, "
+            f"{reserved_gib:.2f} GiB reserved "
+            f"(expect ~4-6 GiB for a 4-bit 7B model — if this is much higher, "
+            f"quantization isn't actually shrinking memory)."
+        )
 
     return model, tokenizer
 
@@ -1649,8 +1677,22 @@ def main():
                 continue
 
             for attempt in range(3):
+                # FIX: shrink the generation budget on each retry. Retrying
+                # with the exact same max_new_tokens after an OOM just fails
+                # the same way again — empty_cache() only frees already-
+                # reserved-but-unused memory, it can't create headroom that
+                # wasn't there. Cutting the token budget shrinks the
+                # KV-cache/activation memory generate() needs, giving later
+                # attempts an actual chance to succeed instead of a
+                # guaranteed repeat failure.
+                attempt_max_new_tokens = max(
+                    400, int(MAX_NEW_TOKENS * (0.6 ** attempt))
+                )
                 try:
-                    data = extract_one(model, tokenizer, entry, text)
+                    data = extract_one(
+                        model, tokenizer, entry, text,
+                        max_new_tokens=attempt_max_new_tokens,
+                    )
                     rec = {"product_no": entry["product_no"], **data}
                     out.write(json.dumps(rec, ensure_ascii=False) + "\n")
                     out.flush()
@@ -1665,7 +1707,9 @@ def main():
                     free_gpu_memory()
                     print(
                         f"[{entry['product_no']:03d}/{len(index)}] "
-                        f"CUDA OOM on attempt {attempt + 1}, cleared cache and retrying: {e}"
+                        f"CUDA OOM on attempt {attempt + 1} "
+                        f"(max_new_tokens={attempt_max_new_tokens}), "
+                        f"cleared cache and retrying: {e}"
                     )
                     time.sleep(5)
                 except Exception as e:
