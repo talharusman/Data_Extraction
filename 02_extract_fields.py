@@ -120,6 +120,21 @@ TRUST_REMOTE_CODE = env_bool("HF_TRUST_REMOTE_CODE", False)
 # mid-field (see _close_unterminated_json for the recovery path when this
 # still happens). Override via HF_MAX_NEW_TOKENS in .env if needed.
 MAX_NEW_TOKENS = env_int("HF_MAX_NEW_TOKENS", 2200)
+# FIX: Enforce a minimum safe budget for 56-field JSON generation.
+# If .env has HF_MAX_NEW_TOKENS set too low (e.g. 1000), the model will
+# truncate the JSON mid-field — the auto-close recovery cannot reliably
+# repair both the initial and repair-pass outputs when both hit the same
+# token ceiling. Override with a warning instead of silently producing
+# blank/partial records in the JSONL output.
+_MIN_SAFE_TOKENS = 2200
+if MAX_NEW_TOKENS < _MIN_SAFE_TOKENS:
+    print(
+        f"\nWARNING: HF_MAX_NEW_TOKENS={MAX_NEW_TOKENS} is too small to generate "
+        f"the complete 56-field JSON schema (needs ~{_MIN_SAFE_TOKENS} tokens).\n"
+        f"Auto-raising MAX_NEW_TOKENS to {_MIN_SAFE_TOKENS}. "
+        f"Update HF_MAX_NEW_TOKENS in your .env to suppress this warning.\n"
+    )
+    MAX_NEW_TOKENS = _MIN_SAFE_TOKENS
 TEMPERATURE = env_float("HF_TEMPERATURE", 0.0)
 TOP_P = env_float("HF_TOP_P", 1.0)
 REPETITION_PENALTY = env_float("HF_REPETITION_PENALTY", 1.03)
@@ -643,7 +658,10 @@ def parse_json_blob(raw):
     # Last resort: the output may be a genuinely truncated (not malformed)
     # JSON object — try to close it deterministically before giving up.
     # This is cheap (no model call) and recovers most MAX_NEW_TOKENS cutoffs.
-    closed = _close_unterminated_json(raw)
+    # FIX: strip ```json fences BEFORE passing to the bracket-tracker so the
+    # rewind logic operates on clean JSON text, not on the raw model output
+    # that still has the opening fence and possible preamble text.
+    closed = _close_unterminated_json(_strip_wrappers(raw))
     if closed:
         parsed = _parse_candidate(closed)
         if parsed is not None:
