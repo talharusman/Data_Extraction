@@ -1,0 +1,15 @@
+pymupdf
+transformers
+torch
+accelerate
+bitsandbytes>=0.46.1
+pandas
+openpyxl
+python-docx
+
+# --- Hybrid RAG upgrade (03_extract_fields_hybrid.py / hybrid_rag/) ---
+faiss-cpu
+rank_bm25
+scikit-learn
+sentence-transformers
+numpy
