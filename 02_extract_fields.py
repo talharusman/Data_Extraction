@@ -1,38 +1,99 @@
 """
 Step 2: Extract the fixed 56-column schema as JSON from product files.
-UPGRADED: Hybrid RAG Pipeline with Token-Based Chunking, FAISS, BM25,
-Static Field Groups, Group-Specific Prompts, Confidence Scoring,
-Evidence Tracking, and Improved Merge Strategy.
-
-Backward-compatible with the original pipeline. All external behavior
-(JSONL output, field schema, normalization) is preserved.
+ENHANCED with 3 advanced prompting techniques:
+  1. Few-shot examples showing correct vs incorrect extraction
+  2. Step-by-step extraction workflow
+  3. Self-validation with error correction
 
 SYSTEM PROMPT IS READ FROM: EXTRACTION_SYSTEM_PROMPT.txt
 
-Input modes (same as before):
-  1) Single file
-  2) Folder (non-recursive)
-  3) Nested folder (recursive)
+Instead of reading a pre-built JSON index, the script now asks you at startup
+how you want to supply input:
+
+  1) Single file   – give one file path (any supported type)
+  2) Folder        – all supported files in one directory (non-recursive)
+  3) Nested folder – all supported files under a directory tree (recursive)
 
 Supported file types: .txt, .pdf, .docx, .doc, .csv, .json, .xlsx, .xls
 
-Required packages (original):
+Required packages for non-txt formats:
   pip install pdfplumber python-docx openpyxl
-  # for .doc: sudo apt install antiword
-
-NEW required packages for Hybrid RAG:
-  pip install sentence-transformers faiss-cpu rank_bm25 tiktoken
+  # for .doc: sudo apt install antiword  (Linux) or install antiword on PATH
 
 Configure the model through .env:
   HF_MODEL_NAME_OR_PATH=Qwen/Qwen2.5-3B-Instruct
   HF_MODEL_CLASS=causal
   HF_LOCAL_FILES_ONLY=true
-  EMBED_MODEL_NAME=sentence-transformers/all-MiniLM-L6-v2
-  HYBRID_TOP_K=4
-  TOKEN_CHUNK_SIZE=850
-  TOKEN_CHUNK_OVERLAP=150
 
-Resumable: already-extracted products are skipped on re-run.
+Resumable: already-extracted products (present in OUT_JSONL) are skipped,
+so you can safely re-run after an interruption.
+
+CHANGES IN THIS VERSION (audit fixes — generic, not product-specific):
+- Ground-truth analysis showed the corrected dataset consistently uses " | "
+  as the separator for every multi-value/list field (never semicolons, and
+  never commas as a *list* separator since commas already appear inside
+  amounts like "500,000"). Added a generic delimiter-normalization step
+  that:
+    * always converts ";" -> " | " for every text field (safe: semicolons
+      never appear inside amounts/prose in this domain), and
+    * converts ", " -> " | " ONLY for fields that are strictly list-type by
+      design and don't carry monetary/prose commas (CUSTOMER_TYPE,
+      PRODUCT_VARIANT_TIER, SEGMENT_TIER, TENURE_OPTIONS,
+      PREMIUM_PAYMENT_FREQUENCY, OPTIONAL_RIDERS, EMPLOYMENT_TYPE).
+  This is a generic, document-driven normalization rule, not a per-product
+  mapping, so it generalizes across all 200+ documents.
+- NUMERIC_COLUMNS coercion previously collapsed tiered values (e.g. a
+  Bronze/Silver/Gold contribution table in MIN_CONTRIBUTION) down to a
+  single number, destroying real information. Added a tiered-value
+  detector (_is_tiered_value) that, for the subset of numeric fields that
+  can legitimately be tiered (balances/income/investment/contribution
+  fields), preserves the full tiered text instead of forcing a single
+  integer. True single-value numeric fields (ages, term years, free-look
+  days, IS_BANK_OFFERED) are unaffected and still coerced to plain integers.
+- CUSTOMER_TYPE normalization previously forced a single enum value and
+  discarded anything after the first comma. Ground truth allows multiple
+  pipe-separated enum values (e.g. "Salaried|Self-Employed"). Rewrote the
+  normalizer to validate each "|"-segment against the enum and keep all
+  valid ones, joined by " | ".
+- OPTIONAL_RIDERS/other list-style normalizers updated to emit " | " instead
+  of "," to match the ground-truth delimiter standard.
+- field_max_lengths increased for COVERAGE_AMOUNT (150->300), KEY_BENEFITS
+  (250->280), REQUIRED_DOCUMENTS (200->220), SPECIAL_CONDITIONS (200->250)
+  based on corrected-dataset ground-truth lengths, so full tiered/category
+  lists aren't truncated mid-list.
+- All previous functionality (chunking, merge, repair/validation passes,
+  JSON recovery, model loading) preserved unchanged.
+
+CHANGES IN THIS VERSION (audit fixes — generic, not product-specific):
+- CUSTOMER_SEGMENT / TARGET_SEGMENT / SEGMENT_TIER wiped by validation pass:
+  The validation prompt previously contained rule 18 ("N/A unless explicitly
+  stated in the document"), but the validation pass only sees the extracted
+  JSON — not the source document.  Qwen2.5-3B, being conservative, would
+  reset any non-N/A value for these fields to "N/A" because it could not
+  verify "explicitly stated."  Rule 18 has been replaced by rule 5 which
+  instructs the model to PRESERVE existing non-N/A values and only clears
+  fields that are already empty/null.  The extraction-time constraint (G7 in
+  the system prompt) is still in force where the model has access to the text.
+- MIN_CONTRIBUTION tiered value incorrectly collapsed: _is_tiered_value now
+  also accepts a dash ("-") as the label-to-amount separator, so models that
+  emit "Bronze - 5000" still trigger the tiered path.  Before calling the
+  general delimiter pass (which skips commas for TIER_AWARE_NUMERIC_COLUMNS),
+  a pre-pass converts inter-tier commas (", Letter") to " | " — thousands-
+  separators (",NNN") are never followed by a letter, so this is unambiguous.
+- MIN_CONTRIBUTION extracted into MIN_INVESTMENT: Added a cross-field post-
+  processing step in normalize_record: for IBG (insurer-underwritten) products,
+  if MIN_CONTRIBUTION is N/A and MIN_INVESTMENT is not, the value is moved to
+  MIN_CONTRIBUTION and MIN_INVESTMENT is cleared.  Generalises to any insurer/
+  takaful product across all documents.
+- TENURE_OPTIONS / PREMIUM_PAYMENT_FREQUENCY confusion: Added a cross-field
+  post-processing step that detects payment-frequency terms (Annual, Quarterly,
+  Monthly, Semi-Annual, Bi-Annual) placed in TENURE_OPTIONS and moves them to
+  PREMIUM_PAYMENT_FREQUENCY when that field is empty, leaving only genuine plan
+  duration items (those containing a digit) in TENURE_OPTIONS.
+- Validation prompt updated: added explicit ELIGIBILITY_TYPE vs TARGET_SEGMENT
+  contrast and MIN_CONTRIBUTION vs MIN_INVESTMENT rule (rule 16) so the
+  validation pass actively corrects both confusions when the initial pass missed
+  them.
 """
 from __future__ import annotations
 
@@ -45,8 +106,9 @@ import subprocess
 import time
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any
 
+# FIX: Reduce CUDA memory fragmentation on small GPUs (Colab T4/L4 ~15GB).
+# Must be set before the CUDA context is created, so it goes before `import torch`.
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import torch
@@ -71,148 +133,105 @@ load_local_env()
 
 # ---------------------------------------------------------------------------
 # Inject PREMIUM_PAYMENT_FREQUENCY if pipeline_config was not yet updated.
+# This keeps the script backward-compatible: older pipeline_config files that
+# only define 55 columns will still work; the 56th column is added here.
 # ---------------------------------------------------------------------------
 _NEW_COLUMNS = ["PREMIUM_PAYMENT_FREQUENCY"]
 for _col in _NEW_COLUMNS:
     if _col not in COLUMNS:
         COLUMNS = list(COLUMNS) + [_col]
 
-# ============================================================================
-# Configuration
-# ============================================================================
-
 MODEL_NAME = os.environ.get("HF_MODEL_NAME_OR_PATH", "").strip()
 MODEL_CLASS = os.environ.get("HF_MODEL_CLASS", "causal").strip().lower()
 LOCAL_FILES_ONLY = env_bool("HF_LOCAL_FILES_ONLY", True)
 TRUST_REMOTE_CODE = env_bool("HF_TRUST_REMOTE_CODE", False)
-MAX_NEW_TOKENS = env_int("HF_MAX_NEW_TOKENS", 1500)
+# Raised from 1500 to 2200: the 1500 budget was still getting hit on
+# products with long CUSTOMER_TYPE lists, EMPLOYMENT_TYPE target-market
+# text, and multi-tier PRICING_RATE tables, which truncated the JSON
+# mid-field (see _close_unterminated_json for the recovery path when this
+# still happens). Override via HF_MAX_NEW_TOKENS in .env if needed.
+MAX_NEW_TOKENS = env_int("HF_MAX_NEW_TOKENS", 2200)
+# FIX: Enforce a minimum safe budget for 56-field JSON generation.
+# If .env has HF_MAX_NEW_TOKENS set too low (e.g. 1000), the model will
+# truncate the JSON mid-field — the auto-close recovery cannot reliably
+# repair both the initial and repair-pass outputs when both hit the same
+# token ceiling. Override with a warning instead of silently producing
+# blank/partial records in the JSONL output.
+_MIN_SAFE_TOKENS = 2200
+if MAX_NEW_TOKENS < _MIN_SAFE_TOKENS:
+    print(
+        f"\nWARNING: HF_MAX_NEW_TOKENS={MAX_NEW_TOKENS} is too small to generate "
+        f"the complete 56-field JSON schema (needs ~{_MIN_SAFE_TOKENS} tokens).\n"
+        f"Auto-raising MAX_NEW_TOKENS to {_MIN_SAFE_TOKENS}. "
+        f"Update HF_MAX_NEW_TOKENS in your .env to suppress this warning.\n"
+    )
+    MAX_NEW_TOKENS = _MIN_SAFE_TOKENS
 TEMPERATURE = env_float("HF_TEMPERATURE", 0.0)
 TOP_P = env_float("HF_TOP_P", 1.0)
 REPETITION_PENALTY = env_float("HF_REPETITION_PENALTY", 1.03)
-
-# Legacy character chunking (kept for fallback / ENABLE_CHUNKING=False path)
 TEXT_CHUNK_SIZE = env_int("TEXT_CHUNK_SIZE", 6000)
 TEXT_CHUNK_OVERLAP = env_int("TEXT_CHUNK_OVERLAP", 300)
-
-# Hybrid RAG settings
-TOKEN_CHUNK_SIZE = env_int("TOKEN_CHUNK_SIZE", 850)
-TOKEN_CHUNK_OVERLAP = env_int("TOKEN_CHUNK_OVERLAP", 150)
-HYBRID_TOP_K = env_int("HYBRID_TOP_K", 4)
-EMBED_MODEL_NAME = os.environ.get(
-    "EMBED_MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2"
-).strip()
-ENABLE_HYBRID_RAG = env_bool("ENABLE_HYBRID_RAG", True)
-
 LOAD_IN_4BIT = env_bool("HF_LOAD_IN_4BIT", False)
 LOAD_IN_8BIT = env_bool("HF_LOAD_IN_8BIT", False)
 DEVICE_MAP = os.environ.get("HF_DEVICE_MAP", "auto").strip() or "auto"
 TORCH_DTYPE = os.environ.get("HF_TORCH_DTYPE", "auto").strip().lower()
-GPU_RESERVE_GIB = env_float("HF_GPU_RESERVE_GIB", 3.0)
+GPU_RESERVE_GIB = env_float("HF_GPU_RESERVE_GIB", 5.0)
 ENABLE_CHUNKING = env_bool("ENABLE_CHUNKING", True)
-
 DEFAULT_VALUE = "N/A"
-NUMERIC_COLUMNS = {
-    "MIN_AGE", "MAX_AGE", "IS_BANK_OFFERED", "MIN_BALANCE",
-    "AVG_BALANCE_REQUIREMENT", "MIN_INCOME", "MIN_INCOME_USD",
-    "MIN_INVESTMENT", "MIN_CONTRIBUTION", "MIN_TERM_YEARS",
-    "MAX_TERM_YEARS", "FREE_LOOK_PERIOD_DAYS",
+
+# Numeric fields that are ALWAYS a single plain integer (never legitimately
+# tiered), so they are always force-coerced to a single number.
+STRICT_NUMERIC_COLUMNS = {
+    "MIN_AGE",
+    "MAX_AGE",
+    "IS_BANK_OFFERED",
+    "MIN_TERM_YEARS",
+    "MAX_TERM_YEARS",
+    "FREE_LOOK_PERIOD_DAYS",
 }
+
+# Numeric fields that CAN legitimately be a tiered table (e.g. a
+# Bronze/Silver/Gold contribution or balance schedule). For these, a tiered
+# value is preserved as text instead of being collapsed to one number.
+TIER_AWARE_NUMERIC_COLUMNS = {
+    "MIN_BALANCE",
+    "AVG_BALANCE_REQUIREMENT",
+    "MIN_INCOME",
+    "MIN_INCOME_USD",
+    "MIN_INVESTMENT",
+    "MIN_CONTRIBUTION",
+}
+
+NUMERIC_COLUMNS = STRICT_NUMERIC_COLUMNS | TIER_AWARE_NUMERIC_COLUMNS
 
 SUPPORTED_EXTENSIONS = {".txt", ".pdf", ".docx", ".doc", ".csv", ".json", ".xlsx", ".xls"}
 
 # ============================================================================
-# STATIC FIELD GROUPS
-# Defined once at development time. Never generated at runtime by the LLM.
-# Grouped by semantic relatedness to maximize focused extraction accuracy.
-# ============================================================================
-
-FIELD_GROUPS: dict[str, list[str]] = {
-    "identity": [
-        "PRODUCT_NAME", "LEAD_MARKER", "SOURCE_FILE_PRODUCT",
-        "PLAN_TYPE", "TARGET_GOAL", "PRODUCT_DESCRIPTION",
-        "PROVIDER_NAME", "PRODUCT_VARIANT_TIER",
-    ],
-    "customer_profile": [
-        "CUSTOMER_TYPE", "EMPLOYMENT_TYPE", "CUSTOMER_SEGMENT",
-        "TARGET_SEGMENT", "SEGMENT_TIER", "MIN_AGE", "MAX_AGE",
-        "GENDER", "IS_BANK_OFFERED", "ELIGIBILITY_TYPE",
-        "ACCOUNT_TYPE", "CARD_TYPE", "CHANNEL",
-    ],
-    "financial_structure": [
-        "CURRENCY", "CURRENCY_TYPE", "MIN_BALANCE", "AVG_BALANCE_REQUIREMENT",
-        "MIN_INCOME", "MIN_INCOME_USD", "MIN_INVESTMENT", "MIN_CONTRIBUTION",
-        "LOAN_AMOUNT_RANGE", "FINANCING_TYPE", "DEPOSIT_PROFIT_TYPE",
-        "DEPOSIT_PROFIT_FREQUENCY", "PRICING_RATE", "FEES_AND_CHARGES",
-        "TRANSACTION_LIMIT",
-    ],
-    "coverage_and_tenure": [
-        "COVERAGE_AMOUNT", "TENURE", "TENURE_OPTIONS",
-        "MIN_TERM_YEARS", "MAX_TERM_YEARS", "BUSINESS_TENURE",
-        "COLLATERAL_TYPE", "EQUITY_REQUIREMENT", "DBR_LIMIT",
-        "PREMIUM_PAYMENT_FREQUENCY",
-    ],
-    "benefits_and_conditions": [
-        "SERVICE_TYPE", "REWARD_TYPE", "KEY_BENEFITS", "OPTIONAL_RIDERS",
-        "FREE_LOOK_PERIOD_DAYS", "REQUIRED_DOCUMENTS", "CLAIMS_SERVICE_CONTACT",
-        "KEY_EXCLUSIONS", "TAX_ZAKAT_TREATMENT", "SPECIAL_CONDITIONS",
-    ],
-}
-
-# Retrieval queries auto-derived from field names + descriptions.
-# Built once at module load; never generated at runtime by the LLM.
-FIELD_GROUP_QUERIES: dict[str, str] = {
-    "identity": (
-        "product name plan type description provider underwriter bank insurance takaful"
-    ),
-    "customer_profile": (
-        "customer eligibility age gender employment income segment "
-        "account card channel branch salaried retail corporate"
-    ),
-    "financial_structure": (
-        "currency balance income contribution premium investment "
-        "profit rate deposit financing conventional Islamic takaful fees charges"
-    ),
-    "coverage_and_tenure": (
-        "coverage amount term years tenure duration collateral DBR equity "
-        "loan premium payment frequency annual quarterly"
-    ),
-    "benefits_and_conditions": (
-        "benefits riders free look period documents claims exclusions tax zakat "
-        "special conditions restrictions reporting"
-    ),
-}
-
-# ============================================================================
-# BASE SYSTEM PROMPT (global extraction rules only, no field definitions)
-# ============================================================================
-
-BASE_SYSTEM_PROMPT = """You are a precision data extraction engine for banking and insurance product documents.
-
-GLOBAL RULES — always apply:
-- Extract ONLY information explicitly stated in the provided text.
-- Never infer, hallucinate, or use outside knowledge.
-- Ignore marketing language and promotional wording.
-- Ignore examples and worked scenarios.
-- Preserve original numeric values (do not estimate).
-- Use "N/A" for every missing field. Never use null/None/NaN/empty string.
-- Return ONLY valid JSON. No markdown fences. No explanations outside JSON.
-- Extract from the provided chunks ONLY. Do not fill from general knowledge."""
-
-
-# ============================================================================
-# LOAD SYSTEM PROMPT FROM FILE
+# LOAD SYSTEM PROMPT FROM SEPARATE FILE
 # ============================================================================
 
 def load_system_prompt(prompt_file: str = "EXTRACTION_SYSTEM_PROMPT.txt") -> str:
+    """
+    Load the system prompt from a separate file.
+
+    Looks for the prompt file in this order:
+    1. Current directory
+    2. Same directory as this script
+    3. Parent directory
+
+    If not found, raises an error.
+    """
     search_paths = [
         Path(prompt_file),
         Path(__file__).parent / prompt_file,
         Path(__file__).parent.parent / prompt_file,
     ]
+
     for prompt_path in search_paths:
         if prompt_path.exists() and prompt_path.is_file():
             print(f"✓ Loaded system prompt from: {prompt_path.resolve()}")
             return prompt_path.read_text(encoding="utf-8")
+
     raise FileNotFoundError(
         f"\n{'='*70}\n"
         f"ERROR: System prompt file not found!\n"
@@ -227,125 +246,12 @@ def load_system_prompt(prompt_file: str = "EXTRACTION_SYSTEM_PROMPT.txt") -> str
     )
 
 
-# Load the full system prompt at module level (reused as base for all group prompts)
+# Load the system prompt at module level
 SYSTEM_PROMPT = load_system_prompt()
 
 
 # ============================================================================
-# PROMPT BUILDER
-# Transforms the existing SYSTEM_PROMPT into a group-specific prompt.
-# Removes all field definitions not in the active group; preserves all rules.
-# ============================================================================
-
-def _extract_columns_section(prompt: str) -> tuple[str, str, str]:
-    """
-    Split the full system prompt into three parts:
-      (before_columns, columns_block, after_columns)
-    where columns_block contains the COLUMNS: ... list and rules.
-    """
-    # Find the COLUMNS: line
-    col_match = re.search(r"^(COLUMNS:.*?)$", prompt, re.MULTILINE)
-    if not col_match:
-        return prompt, "", ""
-
-    col_start = col_match.start()
-
-    # Find the ===GLOBAL RULES=== section that follows
-    rules_match = re.search(r"^===", prompt[col_start:], re.MULTILINE)
-    if rules_match:
-        col_end = col_start + rules_match.start()
-    else:
-        col_end = len(prompt)
-
-    before = prompt[:col_start]
-    columns_block = prompt[col_start:col_end]
-    after = prompt[col_end:]
-    return before, columns_block, after
-
-
-def _filter_column_rules(after_section: str, group_fields: list[str]) -> str:
-    """
-    From the ===COLUMN RULES=== section, keep only the rules for fields
-    that belong to the active group. All other field-specific rules are removed.
-    """
-    # Find ===COLUMN RULES=== block
-    col_rules_match = re.search(r"(===COLUMN RULES===.*?)(?====|\Z)", after_section, re.DOTALL)
-    if not col_rules_match:
-        return after_section
-
-    col_rules_text = col_rules_match.group(1)
-    rest = after_section[col_rules_match.end():]
-
-    # Split column rules by field entries (FIELDNAME: rule text)
-    field_set = set(group_fields)
-    kept_rules = ["===COLUMN RULES==="]
-
-    # Parse each field rule block
-    # Pattern: field name followed by colon at start of a line (or after newline)
-    entries = re.split(r"\n(?=[A-Z_]+:)", col_rules_text)
-    for entry in entries:
-        stripped = entry.strip()
-        if not stripped or stripped.startswith("===COLUMN RULES==="):
-            continue
-        # Extract field name
-        field_match = re.match(r"^([A-Z_/]+):", stripped)
-        if field_match:
-            field_name = field_match.group(1)
-            # Check if any group field matches (handle compound like MIN_AGE/MAX_AGE)
-            parts = re.split(r"[/]", field_name)
-            if any(p.strip() in field_set for p in parts):
-                kept_rules.append(stripped)
-        else:
-            # Non-field header lines (keep)
-            kept_rules.append(stripped)
-
-    return "\n".join(kept_rules) + "\n" + rest
-
-
-def build_group_prompt(group_name: str, group_fields: list[str], entry: dict) -> str:
-    """
-    Build a group-specific extraction prompt by:
-    1. Keeping all global rules from the original SYSTEM_PROMPT.
-    2. Replacing the full COLUMNS list with only this group's fields.
-    3. Filtering column rules to only this group's fields.
-    4. Appending a compact user message for the chunk (caller injects chunk text).
-
-    The LLM never sees all 56 fields unless in the final validation pass.
-    """
-    before, _columns_block, after = _extract_columns_section(SYSTEM_PROMPT)
-
-    # Build replacement columns block with only this group's fields
-    fields_str = ", ".join(group_fields)
-    new_columns_block = f"COLUMNS: {fields_str}\n\n"
-
-    # Filter column rules to this group only
-    filtered_after = _filter_column_rules(after, group_fields)
-
-    # Remove ===WORKED EXAMPLES=== and ===DO NOT=== sections to save tokens
-    # (they add ~800 tokens and are less critical for focused group extraction)
-    filtered_after = re.sub(
-        r"===WORKED EXAMPLES.*?(?====DO NOT===|$)", "", filtered_after, flags=re.DOTALL
-    )
-    filtered_after = re.sub(
-        r"===DO NOT===.*", "", filtered_after, flags=re.DOTALL
-    )
-
-    group_system_prompt = (
-        BASE_SYSTEM_PROMPT
-        + "\n\n"
-        + before.strip()
-        + "\n\n"
-        + new_columns_block
-        + filtered_after.strip()
-        + f"\n\nExtract ONLY these {len(group_fields)} fields: {fields_str}"
-        + f"\nReturn ONE valid JSON object with exactly these keys."
-    )
-
-    return group_system_prompt
-
-
-# ============================================================================
-# File reading functions (unchanged from original)
+# File reading functions
 # ============================================================================
 
 def read_file_text(path: Path) -> str:
@@ -443,10 +349,11 @@ def read_file_text(path: Path) -> str:
 
 
 # ============================================================================
-# Interactive input selection (unchanged from original)
+# Interactive input selection
 # ============================================================================
 
 def _prompt_choice(prompt: str, choices: list[str]) -> str:
+    """Ask the user to pick from a numbered list."""
     while True:
         print(prompt)
         for i, choice in enumerate(choices, 1):
@@ -458,6 +365,7 @@ def _prompt_choice(prompt: str, choices: list[str]) -> str:
 
 
 def _collect_files(path: Path, recursive: bool) -> list[Path]:
+    """Return all supported files under *path*."""
     if recursive:
         all_files = path.rglob("*")
     else:
@@ -469,7 +377,9 @@ def _collect_files(path: Path, recursive: bool) -> list[Path]:
 
 
 def select_input_files() -> list[Path]:
+    """Interactively ask user how to supply input files."""
     supported_str = ", ".join(sorted(SUPPORTED_EXTENSIONS))
+
     print("\n" + "=" * 60)
     print("  Product Text Extractor – Input Selection")
     print(f"  Supported formats: {supported_str}")
@@ -487,7 +397,10 @@ def select_input_files() -> list[Path]:
             if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS:
                 return [p]
             if p.is_file():
-                print(f"  Unsupported file type '{p.suffix}'. Supported: {supported_str}\n")
+                print(
+                    f"  Unsupported file type '{p.suffix}'. "
+                    f"Supported: {supported_str}\n"
+                )
             else:
                 print(f"  File not found: {raw}\n")
 
@@ -500,117 +413,63 @@ def select_input_files() -> list[Path]:
                 if files:
                     print(f"  Found {len(files)} supported file(s) directly in '{p}'.")
                     return files
-                print(f"  No supported files found directly in '{p}'.\n  Supported formats: {supported_str}\n")
+                print(
+                    f"  No supported files found directly in '{p}'.\n"
+                    f"  Supported formats: {supported_str}\n"
+                )
             else:
                 print(f"  Not a valid directory: {raw}\n")
 
-    else:
+    else:  # Nested folder (recursive)
         while True:
             raw = input("\nEnter the root folder path: ").strip()
             p = Path(raw)
             if p.is_dir():
                 files = _collect_files(p, recursive=True)
                 if files:
-                    print(f"  Found {len(files)} supported file(s) under '{p}' (all sub-folders included).")
+                    print(
+                        f"  Found {len(files)} supported file(s) under '{p}' "
+                        f"(all sub-folders included)."
+                    )
                     return files
-                print(f"  No supported files found anywhere under '{p}'.\n  Supported formats: {supported_str}\n")
+                print(
+                    f"  No supported files found anywhere under '{p}'.\n"
+                    f"  Supported formats: {supported_str}\n"
+                )
             else:
                 print(f"  Not a valid directory: {raw}\n")
 
 
 def build_index_from_files(files: list[Path]) -> list[dict]:
+    """Build index from file paths."""
     index = []
     for i, path in enumerate(files, start=1):
-        index.append({
-            "product_no": i,
-            "title": path.stem.replace("_", " ").replace("-", " "),
-            "file": str(path),
-            "filename": path.name,
-            "folder": path.parent.name,
-            "_abs_path": path.resolve(),
-        })
+        index.append(
+            {
+                "product_no": i,
+                "title": path.stem.replace("_", " ").replace("-", " "),
+                "file": str(path),
+                "filename": path.name,
+                "folder": path.parent.name,
+                "_abs_path": path.resolve(),
+            }
+        )
     return index
 
 
 # ============================================================================
-# TOKEN-BASED CHUNKING (replaces character chunking)
+# Document chunking (FIX for large-document OOM)
 # ============================================================================
-
-def _get_tiktoken_encoder():
-    """Lazy-load tiktoken cl100k_base encoder (compatible with most LLMs)."""
-    try:
-        import tiktoken
-        return tiktoken.get_encoding("cl100k_base")
-    except ImportError:
-        return None
-
-
-def chunk_text_tokens(
-    text: str,
-    chunk_size: int = TOKEN_CHUNK_SIZE,
-    overlap: int = TOKEN_CHUNK_OVERLAP,
-) -> list[dict]:
-    """
-    Split text into token-based chunks with overlap.
-    Returns list of dicts with: chunk_id, token_count, text.
-
-    Falls back to character chunking if tiktoken is unavailable.
-    """
-    enc = _get_tiktoken_encoder()
-
-    if enc is None:
-        # Fallback to character-based chunking
-        char_chunks = chunk_text(text, chunk_size * 4, overlap * 4)
-        return [
-            {"chunk_id": i, "token_count": len(c) // 4, "text": c}
-            for i, c in enumerate(char_chunks)
-        ]
-
-    tokens = enc.encode(text)
-    total_tokens = len(tokens)
-
-    if total_tokens <= chunk_size:
-        return [{"chunk_id": 0, "token_count": total_tokens, "text": text}]
-
-    chunks = []
-    start = 0
-    chunk_id = 0
-
-    while start < total_tokens:
-        end = min(start + chunk_size, total_tokens)
-        chunk_tokens = tokens[start:end]
-        chunk_text_str = enc.decode(chunk_tokens)
-
-        # Try to break at a paragraph/sentence boundary in the decoded text
-        if end < total_tokens:
-            nl_idx = chunk_text_str.rfind("\n", len(chunk_text_str) // 2)
-            period_idx = chunk_text_str.rfind(". ", len(chunk_text_str) // 2)
-            boundary = max(nl_idx, period_idx)
-            if boundary > len(chunk_text_str) // 2:
-                chunk_text_str = chunk_text_str[:boundary + 1]
-                # Re-encode to get actual token count after boundary trim
-                chunk_tokens = enc.encode(chunk_text_str)
-                end = start + len(chunk_tokens)
-
-        chunks.append({
-            "chunk_id": chunk_id,
-            "token_count": len(chunk_tokens),
-            "text": chunk_text_str.strip(),
-        })
-
-        if end >= total_tokens:
-            break
-
-        start = max(end - overlap, start + 1)
-        chunk_id += 1
-
-    return chunks
-
 
 def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
     """
-    Legacy character-based chunking (kept for ENABLE_CHUNKING=False path
-    and as fallback when tiktoken is not installed).
+    Split a long document into smaller pieces so each model call only has to
+    process chunk_size characters instead of the whole document at once.
+
+    Breaks are made on a paragraph/sentence boundary near chunk_size where
+    possible so a field's value isn't split mid-sentence across two chunks.
+    A small overlap is carried into the next chunk so context right at a
+    boundary isn't lost.
     """
     text = text.strip()
     if len(text) <= chunk_size:
@@ -642,214 +501,25 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
     return chunks
 
 
-# ============================================================================
-# EMBEDDINGS (generate once, cache for document lifetime)
-# ============================================================================
-
-_embed_model = None
-
-
-def _get_embed_model():
-    """Lazy-load the sentence-transformer embedding model."""
-    global _embed_model
-    if _embed_model is None:
-        try:
-            from sentence_transformers import SentenceTransformer
-            print(f"  Loading embedding model: {EMBED_MODEL_NAME}")
-            _embed_model = SentenceTransformer(EMBED_MODEL_NAME)
-        except ImportError:
-            print(
-                "  WARNING: sentence-transformers not installed. "
-                "Falling back to BM25-only retrieval.\n"
-                "  Install with: pip install sentence-transformers"
-            )
-    return _embed_model
-
-
-def generate_embeddings(chunks: list[dict]) -> "np.ndarray | None":
+def merge_records(accumulated: dict, new_record: dict, columns) -> dict:
     """
-    Generate embeddings for all chunks. Returns numpy array shape (N, dim)
-    or None if embedding model unavailable.
+    Merge a single chunk's extracted record into the running accumulated
+    record for the product. A field is filled in from this chunk only if it
+    hasn't already been found (still DEFAULT_VALUE/empty) in an earlier
+    chunk — first chunk to find a real value for a field wins.
     """
-    embed_model = _get_embed_model()
-    if embed_model is None:
-        return None
-
-    texts = [c["text"] for c in chunks]
-    embeddings = embed_model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
-    return embeddings
-
-
-# ============================================================================
-# FAISS INDEX (built per document, destroyed after)
-# ============================================================================
-
-def build_faiss_index(embeddings: "np.ndarray") -> "faiss.IndexFlatIP | None":
-    """Build a FAISS inner-product index from chunk embeddings."""
-    try:
-        import faiss
-        import numpy as np
-        dim = embeddings.shape[1]
-        # Normalize for cosine similarity via inner product
-        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-        norms = np.where(norms == 0, 1e-10, norms)
-        normed = (embeddings / norms).astype("float32")
-        index = faiss.IndexFlatIP(dim)
-        index.add(normed)
-        return index
-    except ImportError:
-        print(
-            "  WARNING: faiss-cpu not installed. Falling back to BM25-only retrieval.\n"
-            "  Install with: pip install faiss-cpu"
-        )
-        return None
-
-
-def faiss_search(
-    index: "faiss.IndexFlatIP",
-    query: str,
-    k: int = HYBRID_TOP_K,
-) -> list[tuple[int, float]]:
-    """Search FAISS index for query. Returns [(chunk_idx, score), ...]."""
-    import numpy as np
-    embed_model = _get_embed_model()
-    if embed_model is None or index is None:
-        return []
-
-    q_embed = embed_model.encode([query], convert_to_numpy=True).astype("float32")
-    norm = float(q_embed[0] @ q_embed[0]) ** 0.5
-    if norm > 0:
-        q_embed = q_embed / norm
-
-    scores, indices = index.search(q_embed, k)
-    return [(int(idx), float(score)) for idx, score in zip(indices[0], scores[0]) if idx >= 0]
+    for col in columns:
+        old = accumulated.get(col)
+        new = new_record.get(col)
+        old_is_empty = old is None or old == "" or old == DEFAULT_VALUE
+        new_is_real = new not in (None, "", DEFAULT_VALUE)
+        if old_is_empty and new_is_real:
+            accumulated[col] = new
+    return accumulated
 
 
 # ============================================================================
-# BM25 INDEX (built per document, destroyed after)
-# ============================================================================
-
-def build_bm25_index(chunks: list[dict]) -> "BM25Okapi | None":
-    """Build BM25 index from chunk texts."""
-    try:
-        from rank_bm25 import BM25Okapi
-        tokenized = [c["text"].lower().split() for c in chunks]
-        return BM25Okapi(tokenized)
-    except ImportError:
-        print(
-            "  WARNING: rank_bm25 not installed. Falling back to FAISS-only retrieval.\n"
-            "  Install with: pip install rank_bm25"
-        )
-        return None
-
-
-def bm25_search(
-    bm25_index: "BM25Okapi",
-    query: str,
-    k: int = HYBRID_TOP_K,
-) -> list[tuple[int, float]]:
-    """Search BM25 index. Returns [(chunk_idx, score), ...]."""
-    if bm25_index is None:
-        return []
-    import numpy as np
-    tokens = query.lower().split()
-    scores = bm25_index.get_scores(tokens)
-    top_k = int(min(k, len(scores)))
-    indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
-    return [(idx, float(scores[idx])) for idx in indices]
-
-
-# ============================================================================
-# HYBRID RETRIEVAL
-# ============================================================================
-
-def hybrid_retrieve(
-    query: str,
-    chunks: list[dict],
-    faiss_index,
-    bm25_index,
-    k: int = HYBRID_TOP_K,
-) -> list[dict]:
-    """
-    Retrieve top-K most relevant chunks using hybrid FAISS + BM25 scoring.
-    Normalises each score set to [0,1] and averages them.
-    Falls back gracefully if either index is unavailable.
-    """
-    faiss_results = faiss_search(faiss_index, query, k=k * 2) if faiss_index else []
-    bm25_results = bm25_search(bm25_index, query, k=k * 2) if bm25_index else []
-
-    scores: dict[int, float] = {}
-
-    # Normalise FAISS scores
-    if faiss_results:
-        max_f = max(s for _, s in faiss_results) or 1e-10
-        for idx, score in faiss_results:
-            scores[idx] = scores.get(idx, 0.0) + (score / max_f) * 0.5
-
-    # Normalise BM25 scores
-    if bm25_results:
-        max_b = max(s for _, s in bm25_results) or 1e-10
-        for idx, score in bm25_results:
-            scores[idx] = scores.get(idx, 0.0) + (score / max_b) * 0.5
-
-    if not scores:
-        # No retrieval available — return all chunks truncated to k
-        return chunks[:k]
-
-    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:k]
-    return [chunks[idx] for idx, _ in ranked if idx < len(chunks)]
-
-
-# ============================================================================
-# DOCUMENT-LEVEL INDEX (temporary, destroyed after each product)
-# ============================================================================
-
-class DocumentIndex:
-    """
-    Temporary per-document index: token chunks + embeddings + FAISS + BM25.
-    Must be explicitly destroyed after processing each product file.
-    """
-
-    def __init__(self, text: str):
-        self.chunks: list[dict] = chunk_text_tokens(text)
-        self.embeddings = None
-        self.faiss_index = None
-        self.bm25_index = None
-        self._built = False
-
-    def build(self):
-        if self._built:
-            return
-        print(f"    Building indexes for {len(self.chunks)} token chunks…")
-        self.embeddings = generate_embeddings(self.chunks)
-        if self.embeddings is not None:
-            self.faiss_index = build_faiss_index(self.embeddings)
-        self.bm25_index = build_bm25_index(self.chunks)
-        self._built = True
-
-    def retrieve(self, query: str, k: int = HYBRID_TOP_K) -> list[dict]:
-        return hybrid_retrieve(
-            query, self.chunks, self.faiss_index, self.bm25_index, k=k
-        )
-
-    def destroy(self):
-        """Release all memory. Must be called after processing each product."""
-        self.chunks = []
-        self.embeddings = None
-        if self.faiss_index is not None:
-            try:
-                # FAISS indices don't have a close() but freeing the ref is enough
-                del self.faiss_index
-            except Exception:
-                pass
-            self.faiss_index = None
-        self.bm25_index = None
-        self._built = False
-        gc.collect()
-
-
-# ============================================================================
-# JSON parsing helpers (unchanged from original)
+# JSON parsing helpers
 # ============================================================================
 
 def _strip_wrappers(text: str) -> str:
@@ -894,7 +564,7 @@ def _iter_json_candidates(text):
     first = text.find("{")
     last = text.rfind("}")
     if first != -1 and last != -1 and last > first:
-        yield from emit(text[first: last + 1])
+        yield from emit(text[first : last + 1])
 
     starts = [idx for idx, ch in enumerate(text) if ch == "{"]
     for brace_start in starts:
@@ -918,8 +588,95 @@ def _iter_json_candidates(text):
                 elif ch == "}":
                     depth -= 1
                     if depth == 0:
-                        yield from emit(text[brace_start: idx + 1])
+                        yield from emit(text[brace_start : idx + 1])
                         break
+
+
+def _close_unterminated_json(text: str):
+    """
+    Best-effort recovery for JSON that was cut off mid-generation (i.e. the
+    model hit MAX_NEW_TOKENS before finishing the object) rather than being
+    genuinely malformed. All the existing candidate strategies in
+    _iter_json_candidates() require a BALANCED object ({...} fully closed);
+    a mid-field truncation never satisfies that, so they all fail together.
+
+    Strategy:
+      1. Walk the text tracking bracket/string nesting, remembering the last
+         position where we had a *structurally complete* token (end of a
+         closed string, a closed {}/[], or just before a trailing comma).
+      2. If we end while still inside an open string, we don't know how the
+         string was meant to end, so we rewind to that last safe position
+         instead of guessing at the missing content.
+      3. Recompute the open-bracket stack up to that safe cut point and
+         append the matching closers.
+
+    This sacrifices only the one field that was mid-generation when the
+    model was cut off (it will fall back to "N/A" via normalize_record);
+    every field completed before the cutoff is preserved. Returns the
+    repaired JSON text, or None if the input doesn't even start with '{'.
+    """
+    start = text.find("{")
+    if start == -1:
+        return None
+    text = text[start:]
+
+    def bracket_stack(s: str):
+        stack = []
+        in_str = False
+        esc = False
+        for ch in s:
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            else:
+                if ch == '"':
+                    in_str = True
+                elif ch in "{[":
+                    stack.append(ch)
+                elif ch in "}]":
+                    if stack:
+                        stack.pop()
+        return stack, in_str
+
+    stack, in_string = bracket_stack(text)
+
+    if in_string:
+        # Rewind to the last point where we had a fully-closed string, a
+        # fully-closed nested object/array, or a trailing comma — i.e. the
+        # last spot we can safely cut without inventing content.
+        in_str = False
+        esc = False
+        last_safe_end = 0
+        for i, ch in enumerate(text):
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                    last_safe_end = i + 1
+            else:
+                if ch == '"':
+                    in_str = True
+                elif ch in "}]":
+                    last_safe_end = i + 1
+                elif ch == ",":
+                    last_safe_end = i
+        text = text[:last_safe_end]
+        stack, _ = bracket_stack(text)
+
+    text = text.rstrip().rstrip(",").rstrip()
+
+    closers = {"{": "}", "[": "]"}
+    for opener in reversed(stack):
+        text += closers[opener]
+
+    return text
 
 
 def parse_json_blob(raw):
@@ -928,11 +685,24 @@ def parse_json_blob(raw):
         parsed = _parse_candidate(cleaned)
         if parsed is not None:
             return parsed
+
+    # Last resort: the output may be a genuinely truncated (not malformed)
+    # JSON object — try to close it deterministically before giving up.
+    # This is cheap (no model call) and recovers most MAX_NEW_TOKENS cutoffs.
+    # FIX: strip ```json fences BEFORE passing to the bracket-tracker so the
+    # rewind logic operates on clean JSON text, not on the raw model output
+    # that still has the opening fence and possible preamble text.
+    closed = _close_unterminated_json(_strip_wrappers(raw))
+    if closed:
+        parsed = _parse_candidate(closed)
+        if parsed is not None:
+            return parsed
+
     raise ValueError(f"Could not parse JSON from model output: {raw[:500]}")
 
 
 # ============================================================================
-# Record helpers with normalization (unchanged from original)
+# Record helpers with normalization
 # ============================================================================
 
 def blank_record(entry):
@@ -943,98 +713,184 @@ def blank_record(entry):
 
 
 def get_source_filename(entry) -> str:
+    """Return the source filename for prompt/output fields."""
     for key in ("filename", "file"):
         raw = entry.get(key)
         if raw:
             return Path(str(raw)).name
+
     abs_path = entry.get("_abs_path")
     if abs_path:
         return Path(str(abs_path)).name
+
     return entry.get("title", DEFAULT_VALUE)
 
 
+# Updated max lengths to match corrected-dataset ground-truth observations.
+# Fields absent from this dict are not truncated (e.g. EMPLOYMENT_TYPE can
+# be a long semicolon-separated Target Market list).
 field_max_lengths = {
     "PRODUCT_NAME": 50,
     "PRODUCT_DESCRIPTION": 250,
     "PROVIDER_NAME": 100,
     "PRODUCT_VARIANT_TIER": 50,
-    "PRICING_RATE": 400,
-    "FEES_AND_CHARGES": 300,
-    "KEY_BENEFITS": 280,
-    "OPTIONAL_RIDERS": 300,
-    "REQUIRED_DOCUMENTS": 220,
+    "PRICING_RATE": 400,           # age-band pricing tables can be ~370 chars
+    "FEES_AND_CHARGES": 300,       # detailed fee schedules up to ~256 chars
+    "KEY_BENEFITS": 280,           # widened: full core-benefit lists observed >250 chars
+    "OPTIONAL_RIDERS": 300,        # rider lists up to ~253 chars
+    "REQUIRED_DOCUMENTS": 220,     # widened slightly for full doc lists
     "CLAIMS_SERVICE_CONTACT": 200,
     "KEY_EXCLUSIONS": 200,
     "TAX_ZAKAT_TREATMENT": 100,
-    "PLAN_TYPE": 30,
-    "TARGET_GOAL": 50,
-    "CUSTOMER_TYPE": 25,
-    "EMPLOYMENT_TYPE": 500,
+    "PLAN_TYPE": 30,                # widened: descriptive category, not single word
+    "TARGET_GOAL": 50,             # "Children's Education Planning" style values
+    "CUSTOMER_TYPE": 60,            # widened: may hold multiple "|"-joined enum values
+    "EMPLOYMENT_TYPE": 500,        # full Target Market list ~334 chars
     "ACCOUNT_TYPE": 20,
     "CARD_TYPE": 25,
     "CHANNEL": 30,
-    "ELIGIBILITY_TYPE": 100,
+    "ELIGIBILITY_TYPE": 100,       # brief eligibility summaries up to ~52 chars
     "SERVICE_TYPE": 25,
     "REWARD_TYPE": 25,
     "CURRENCY": 30,
     "CURRENCY_TYPE": 15,
     "LOAN_AMOUNT_RANGE": 50,
-    "COVERAGE_AMOUNT": 300,
-    "FINANCING_TYPE": 50,
+    "COVERAGE_AMOUNT": 300,        # widened: full multi-category coverage lists observed
+    "FINANCING_TYPE": 50,          # "Hybrid (Bonus Based and Unit Linked)" = 36 chars
     "DEPOSIT_PROFIT_TYPE": 30,
     "DEPOSIT_PROFIT_FREQUENCY": 20,
-    "TENURE": 50,
+    "TENURE": 50,                  # "10-67 years (up to attained age of 85)" = 38 chars
     "TENURE_OPTIONS": 50,
     "BUSINESS_TENURE": 30,
     "COLLATERAL_TYPE": 50,
     "EQUITY_REQUIREMENT": 20,
     "DBR_LIMIT": 20,
     "TRANSACTION_LIMIT": 50,
-    "SPECIAL_CONDITIONS": 250,
+    "SPECIAL_CONDITIONS": 250,     # widened: multi-condition " | " lists observed >200 chars
     "PREMIUM_PAYMENT_FREQUENCY": 50,
 }
 
+# Fields where a comma is *always* a list separator (never a monetary or
+# prose comma), so it's safe to normalize ", " -> " | " for these. Fields
+# NOT in this set (e.g. COVERAGE_AMOUNT, KEY_BENEFITS, PROVIDER_NAME) can
+# legitimately contain commas inside amounts or prose, so they are only
+# normalized for ";" -> " | ", never for ",".
+COMMA_IS_LIST_SEPARATOR_FIELDS = {
+    "CUSTOMER_TYPE",
+    "PRODUCT_VARIANT_TIER",
+    "SEGMENT_TIER",
+    "TENURE_OPTIONS",
+    "PREMIUM_PAYMENT_FREQUENCY",
+    "OPTIONAL_RIDERS",
+    "EMPLOYMENT_TYPE",
+}
+
+
+def _normalize_list_delimiters(col: str, value: str) -> str:
+    """
+    Generic, document-driven delimiter normalization (not product-specific).
+
+    The corrected ground-truth dataset consistently separates multi-value
+    fields with " | " and never uses semicolons as a list separator.
+    Semicolons never legitimately appear inside amounts or prose in this
+    domain, so ";" -> " | " is always safe. Commas DO legitimately appear
+    inside amounts ("500,000") and prose (PROVIDER_NAME partnership text),
+    so ", " -> " | " is only applied to fields that are strictly list-type
+    by design (COMMA_IS_LIST_SEPARATOR_FIELDS).
+    """
+    if not isinstance(value, str) or value in (DEFAULT_VALUE, ""):
+        return value
+
+    # Semicolons: always a list separator in this domain.
+    value = re.sub(r"\s*;\s*", " | ", value)
+
+    if col in COMMA_IS_LIST_SEPARATOR_FIELDS:
+        # Only collapse comma-space sequences that look like list breaks,
+        # not thousands-separators inside a number (e.g. "10,000").
+        value = re.sub(r"(?<!\d),\s+(?!\d{3}\b)", " | ", value)
+
+    # Collapse accidental doubled separators / stray spacing.
+    value = re.sub(r"\s*\|\s*\|\s*", " | ", value)
+    value = re.sub(r"\s{2,}", " ", value)
+    return value.strip().strip("|").strip()
+
+
+def _is_tiered_value(stripped: str) -> bool:
+    """
+    Detect a tiered/table-style value (e.g. "Bronze:5,000, Silver:10,000")
+    that should be PRESERVED as text rather than collapsed to one integer.
+
+    Accepts colon, equals, or dash as the label-to-amount separator so the
+    detector fires regardless of which punctuation the model chose.
+    Generalizes to any provider's tier naming (Bronze/Silver/Gold/Platinum
+    or any other word-based tier label), not just this dataset.
+    """
+    # Pattern: "Word(s) <sep> number" where sep is ':', '=', or '-'
+    pairs = re.findall(r"[A-Za-z][\w\s]{0,24}[:=\-]\s*[\d,]+", stripped)
+    return len(pairs) >= 2
+
 
 def truncate_to_boundary(value: str, max_len: int) -> str:
+    """Truncate text at a word or punctuation boundary when possible."""
     if len(value) <= max_len:
         return value
+
     cut = value[:max_len].rstrip()
-    boundary = max(cut.rfind(" "), cut.rfind(","), cut.rfind(";"), cut.rfind(":"), cut.rfind("-"))
+    boundary = max(cut.rfind(" "), cut.rfind(","), cut.rfind(";"), cut.rfind(":"), cut.rfind("-"), cut.rfind("|"))
     if boundary > 0:
-        return cut[:boundary].rstrip(" ,;:-/")
+        return cut[:boundary].rstrip(" ,;:-/|")
     return cut
 
 
 def _normalize_plan_type(value: str) -> str:
-    valid_types = {
-        "Loan", "Deposit", "Savings", "Card", "Investment",
-        "Insurance", "Service", "Loyalty", "Protection", "Health",
-        "Savings & Protection Insurance",
-        "Insurance (Hospitalization)",
-    }
+    """
+    PLAN_TYPE is now a short descriptive category (see prompt) rather than a
+    rigid single word. We only lightly clean it here:
+      - Preserve it as-is if it already contains "Insurance" (the anchor
+        word required for any insurer-underwritten product).
+      - Otherwise, map to the closest bank-only enum word if the value
+        clearly corresponds to one.
+      - Never silently discard an unrecognized but plausible value — that
+        would hide real extraction content behind "N/A" and doesn't
+        generalize well across 200+ documents with varied phrasing.
+    """
     stripped = value.strip()
-    if stripped in valid_types:
-        return stripped
-    for vt in valid_types:
-        if stripped.lower() == vt.lower():
-            return vt
-    for word in re.split(r"[\s,;/]+", stripped):
-        word_clean = word.strip(".,;:()")
-        if word_clean in valid_types:
-            return word_clean
-        for vt in valid_types:
-            if word_clean.lower() == vt.lower():
-                return vt
-    return DEFAULT_VALUE
+    if not stripped or stripped.upper() == DEFAULT_VALUE:
+        return DEFAULT_VALUE
+
+    if "insurance" in stripped.lower():
+        return stripped[:30]
+
+    bank_only = {"Deposit", "Loan", "Card", "Service", "Loyalty", "Investment", "Savings"}
+    for word in bank_only:
+        if stripped.lower() == word.lower():
+            return word
+    for word in bank_only:
+        if word.lower() in stripped.lower().split():
+            return word
+
+    # Keep the model's descriptive value rather than forcing N/A — this
+    # preserves genuinely new categories seen in unseen documents.
+    return stripped[:30]
 
 
 def _normalize_financing_type(value: str) -> str:
+    """
+    Normalize FINANCING_TYPE to a canonical form.
+    Added Unit Linked and Hybrid (Bonus Based and Unit Linked) per corrected dataset.
+    """
     stripped = value.strip()
     lower = stripped.lower()
+
+    # Hybrid check first (most specific)
     if "hybrid" in lower or ("bonus" in lower and "unit" in lower):
         return "Hybrid (Bonus Based and Unit Linked)"
+
+    # Unit Linked
     if "unit linked" in lower or "unit-linked" in lower:
         return "Unit Linked"
+
+    # Known single-word canonicals
     canonical_map = {
         "conventional": "Conventional",
         "islamic": "Islamic",
@@ -1044,19 +900,108 @@ def _normalize_financing_type(value: str) -> str:
     for key, canonical in canonical_map.items():
         if key in lower:
             return canonical
+
+    # Pass through if already in a known exact form
     known_exact = {
         "Conventional", "Islamic", "Takaful", "Mudarabah",
         "Unit Linked", "Hybrid (Bonus Based and Unit Linked)", DEFAULT_VALUE,
     }
     if stripped in known_exact:
         return stripped
+
+    # Unknown value — preserve as-is (don't silently discard it)
     return stripped
+
+
+def _normalize_target_goal(value: str) -> str:
+    """Normalize TARGET_GOAL to corrected style."""
+    if not value or value == DEFAULT_VALUE:
+        return DEFAULT_VALUE
+    val_lower = value.lower()
+    mappings = {
+        "protection": "Protection",
+        "accidental": "Protection",
+        "savings": "Savings",
+        "education": "Education",
+        "health": "Health",
+        "hospitalization": "Health",
+        "marriage": "Marriage",
+        "multipurpose": "Multipurpose Savings",
+    }
+    for key, norm in mappings.items():
+        if key in val_lower:
+            return norm
+    return value.strip()[:50]
+
+
+def _normalize_channel(value: str) -> str:
+    """Standardize CHANNEL."""
+    if not value or value == DEFAULT_VALUE:
+        return DEFAULT_VALUE
+    val_lower = value.lower()
+    if "branch" in val_lower or "branches" in val_lower:
+        return "Bank Branch"
+    return value.strip()[:30]
+
+
+def _normalize_eligibility(value: str) -> str:
+    """Clean ELIGIBILITY_TYPE."""
+    if not value or value == DEFAULT_VALUE:
+        return DEFAULT_VALUE
+    # Keep concise
+    value = re.sub(r"Bank Alfalah Limited?", "Bank Alfalah", value, flags=re.I)
+    return truncate_to_boundary(value.strip(), 100)
+
+
+def _normalize_customer_type(value: str) -> str:
+    """
+    CUSTOMER_TYPE may legitimately hold MULTIPLE enum values (ground truth
+    shows e.g. "Salaried|Self-Employed"), so — unlike the previous version —
+    we no longer collapse to a single value. Each "|"-or-","-separated
+    segment is validated against the allowed enum; valid segments are kept
+    (deduplicated, order preserved) and joined with " | ". Segments that
+    don't match the enum are dropped rather than kept as free text, since
+    CUSTOMER_TYPE must stay a controlled vocabulary field.
+    """
+    allowed = {
+        "Salaried", "Self-Employed", "SME",
+        "Corporate", "Retail", "Government",
+    }
+    stripped = value.strip()
+    if not stripped or stripped.upper() == DEFAULT_VALUE:
+        return DEFAULT_VALUE
+
+    segments = re.split(r"[|,;]+", stripped)
+    kept = []
+    for seg in segments:
+        seg_clean = seg.strip()
+        if not seg_clean:
+            continue
+        for vt in allowed:
+            if seg_clean.lower() == vt.lower() and vt not in kept:
+                kept.append(vt)
+                break
+    if kept:
+        return " | ".join(kept)
+    return DEFAULT_VALUE
 
 
 def normalize_record(record, entry):
     """
-    Normalize an extracted record. Unchanged from original — all existing
-    business logic preserved.
+    Normalize an extracted record with corrections for all known model errors.
+
+    Key normalization rules applied here:
+    - PRODUCT_NAME: ALL-CAPS converted to Title Case
+    - PLAN_TYPE: descriptive-category cleanup (see _normalize_plan_type)
+    - FINANCING_TYPE: canonical Unit Linked / Hybrid mapping
+    - GENDER: strict allowed-value enforcement
+    - CUSTOMER_TYPE: multi-value enum enforcement, "|"-joined
+    - TARGET_GOAL, CHANNEL, ELIGIBILITY_TYPE, tenure fields enhanced
+    - Numeric fields: strip units, commas, currency symbols — UNLESS the
+      value is a genuine tiered table for a tier-aware numeric field, in
+      which case the tiered text is preserved (see _is_tiered_value)
+    - List-type text fields: delimiter normalized to " | "
+    - All text fields: truncated at word boundary to max length
     """
     if not isinstance(record, dict):
         return blank_record(entry)
@@ -1069,14 +1014,33 @@ def normalize_record(record, entry):
         if value in (None, "", []):
             value = DEFAULT_VALUE
 
+        # ----------------------------------------------------------------
+        # Numeric columns
+        # ----------------------------------------------------------------
         if col in NUMERIC_COLUMNS and isinstance(value, str):
             stripped = value.strip()
             if not stripped or stripped.upper() == DEFAULT_VALUE:
                 value = DEFAULT_VALUE
+            elif col in TIER_AWARE_NUMERIC_COLUMNS and _is_tiered_value(stripped):
+                # Preserve the tiered table as text instead of collapsing
+                # it to a single number (root cause of a real data-loss bug
+                # observed in the audit: tiered contribution/balance tables
+                # were being reduced to just the first number).
+                #
+                # FIX: Before the general delimiter pass, normalise inter-tier
+                # commas.  The general pass skips commas for TIER_AWARE fields
+                # (they're not in COMMA_IS_LIST_SEPARATOR_FIELDS) because commas
+                # also appear INSIDE amounts ("5,000"). However a comma followed
+                # by a letter is unambiguous as a list separator — thousands-
+                # separators are always followed by digits, never letters.
+                # e.g. "Bronze:5,000, Silver:10,000" → "Bronze:5,000 | Silver:10,000"
+                stripped = re.sub(r",\s+(?=[A-Za-z])", " | ", stripped)
+                value = _normalize_list_delimiters(col, stripped)
             else:
                 match = re.match(r'^(\d+(?:\.\d+)?)', stripped.replace(",", ""))
                 if match:
                     num_str = match.group(1)
+                    # Strip trailing ".0"
                     if "." in num_str:
                         try:
                             value = str(int(float(num_str)))
@@ -1087,6 +1051,9 @@ def normalize_record(record, entry):
                 else:
                     value = DEFAULT_VALUE
 
+        # ----------------------------------------------------------------
+        # PRODUCT_NAME: normalize ALL-CAPS headings to Title Case
+        # ----------------------------------------------------------------
         if col == "PRODUCT_NAME" and isinstance(value, str):
             stripped_name = value.strip()
             if (stripped_name
@@ -1095,13 +1062,40 @@ def normalize_record(record, entry):
                     and len(stripped_name) > 5):
                 value = stripped_name.title()
 
+        # ----------------------------------------------------------------
+        # PLAN_TYPE: descriptive-category cleanup
+        # ----------------------------------------------------------------
         if col == "PLAN_TYPE" and isinstance(value, str):
             value = _normalize_plan_type(value)
 
+        # ----------------------------------------------------------------
+        # FINANCING_TYPE: canonical mapping
+        # ----------------------------------------------------------------
         if col == "FINANCING_TYPE" and isinstance(value, str):
             if value not in (DEFAULT_VALUE, ""):
                 value = _normalize_financing_type(value)
 
+        # ----------------------------------------------------------------
+        # TARGET_GOAL normalization
+        # ----------------------------------------------------------------
+        if col == "TARGET_GOAL" and isinstance(value, str):
+            value = _normalize_target_goal(value)
+
+        # ----------------------------------------------------------------
+        # CHANNEL normalization
+        # ----------------------------------------------------------------
+        if col == "CHANNEL" and isinstance(value, str):
+            value = _normalize_channel(value)
+
+        # ----------------------------------------------------------------
+        # ELIGIBILITY_TYPE normalization
+        # ----------------------------------------------------------------
+        if col == "ELIGIBILITY_TYPE" and isinstance(value, str):
+            value = _normalize_eligibility(value)
+
+        # ----------------------------------------------------------------
+        # GENDER: strict enforcement of allowed values
+        # ----------------------------------------------------------------
         if col == "GENDER" and isinstance(value, str):
             value_lower = value.strip().lower()
             if value_lower in ("male", "m"):
@@ -1113,32 +1107,44 @@ def normalize_record(record, entry):
             elif value_lower in ("n/a", "na", ""):
                 value = DEFAULT_VALUE
             else:
+                # Unrecognized value — do not silently accept
                 value = DEFAULT_VALUE
 
+        # ----------------------------------------------------------------
+        # CUSTOMER_TYPE: multi-value enum enforcement
+        # ----------------------------------------------------------------
         if col == "CUSTOMER_TYPE" and isinstance(value, str):
-            allowed = {
-                "Salaried", "Self-Employed", "SME",
-                "Corporate", "Retail", "Government",
-            }
-            stripped_ct = value.strip()
-            if stripped_ct in allowed:
-                pass
-            elif " | " in stripped_ct:
-                # Multiple pipe-separated values — validate each token
-                tokens = [t.strip() for t in stripped_ct.split(" | ")]
-                valid_tokens = [t for t in tokens if t in allowed]
-                value = " | ".join(valid_tokens) if valid_tokens else DEFAULT_VALUE
-            elif "," in stripped_ct:
-                first = stripped_ct.split(",")[0].strip()
-                value = first if first in allowed else DEFAULT_VALUE
-            elif stripped_ct.lower() == "n/a":
-                value = DEFAULT_VALUE
+            value = _normalize_customer_type(value)
 
-        if col == "OPTIONAL_RIDERS" and isinstance(value, str):
-            if value != DEFAULT_VALUE:
-                if "." not in value:
-                    value = re.sub(r"\s*;\s*", " | ", value).strip().strip("|").strip()
+        # ----------------------------------------------------------------
+        # Generic list-delimiter normalization (see G10 in the prompt):
+        # ";" -> " | " always; ", " -> " | " only for strictly list-type
+        # fields where a comma can never be a monetary/prose separator.
+        # ----------------------------------------------------------------
+        if isinstance(value, str) and value not in (DEFAULT_VALUE, ""):
+            if col in (
+                COMMA_IS_LIST_SEPARATOR_FIELDS
+                | {
+                    "KEY_BENEFITS", "KEY_EXCLUSIONS", "REQUIRED_DOCUMENTS",
+                    "SEGMENT_TIER", "SPECIAL_CONDITIONS", "FEES_AND_CHARGES",
+                    "COVERAGE_AMOUNT",
+                }
+            ):
+                value = _normalize_list_delimiters(col, value)
+            elif ";" in value:
+                # Even fields not in the list above should never keep a
+                # semicolon list separator (G10) — safe to convert globally.
+                value = _normalize_list_delimiters(col, value)
 
+        # ----------------------------------------------------------------
+        # TENURE normalization - keep as-is but truncate
+        # ----------------------------------------------------------------
+        if col in ("TENURE", "TENURE_OPTIONS") and isinstance(value, str):
+            value = truncate_to_boundary(value.strip(), field_max_lengths.get(col, 50))
+
+        # ----------------------------------------------------------------
+        # Truncate verbose text fields to max length
+        # ----------------------------------------------------------------
         if col in field_max_lengths and isinstance(value, str):
             max_len = field_max_lengths[col]
             if len(value) > max_len:
@@ -1146,7 +1152,47 @@ def normalize_record(record, entry):
 
         normalized[col] = value
 
+    # ----------------------------------------------------------------
+    # Cross-field post-processing (generic, not product-specific)
+    # ----------------------------------------------------------------
+
+    # FIX A: MIN_CONTRIBUTION / MIN_INVESTMENT swap for insurance products.
+    # Qwen2.5-3B conflates "contribution/premium" with "investment" for
+    # insurance plans.  For any IBG (insurer-underwritten) product, premiums
+    # and contribution amounts belong in MIN_CONTRIBUTION, not MIN_INVESTMENT.
+    # If MIN_CONTRIBUTION is empty but MIN_INVESTMENT is not, move the value.
+    # MIN_INVESTMENT is kept as N/A because it is not a concept that applies
+    # to insurance/takaful plans (it is for portfolio or fund products).
+    lead_marker = normalized.get("LEAD_MARKER", DEFAULT_VALUE)
+    if lead_marker == "IBG":
+        if normalized.get("MIN_CONTRIBUTION", DEFAULT_VALUE) == DEFAULT_VALUE:
+            rescued = normalized.get("MIN_INVESTMENT", DEFAULT_VALUE)
+            if rescued != DEFAULT_VALUE:
+                normalized["MIN_CONTRIBUTION"] = rescued
+                normalized["MIN_INVESTMENT"] = DEFAULT_VALUE
+
+    # FIX B: TENURE_OPTIONS / PREMIUM_PAYMENT_FREQUENCY confusion.
+    # The model often places payment frequencies (Annual, Quarterly, etc.)
+    # in TENURE_OPTIONS instead of PREMIUM_PAYMENT_FREQUENCY.  Detect this
+    # by checking whether TENURE_OPTIONS items look like payment periods
+    # (no year/number in them) rather than plan durations (contain a digit).
+    _FREQ_TERMS = {"annual", "semi-annual", "semi annual", "quarterly", "monthly", "bi-annual"}
+    tenure_opts_val = normalized.get("TENURE_OPTIONS", DEFAULT_VALUE)
+    if isinstance(tenure_opts_val, str) and tenure_opts_val != DEFAULT_VALUE:
+        parts = [p.strip() for p in re.split(r"\s*\|\s*", tenure_opts_val) if p.strip()]
+        freq_parts = [p for p in parts if p.lower() in _FREQ_TERMS]
+        dur_parts  = [p for p in parts if p not in freq_parts]  # has digits or unknown
+        if freq_parts:
+            # Rescue payment frequencies into PREMIUM_PAYMENT_FREQUENCY if empty.
+            ppf = normalized.get("PREMIUM_PAYMENT_FREQUENCY", DEFAULT_VALUE)
+            if ppf == DEFAULT_VALUE:
+                normalized["PREMIUM_PAYMENT_FREQUENCY"] = " | ".join(freq_parts)
+            # Leave only genuine duration options in TENURE_OPTIONS.
+            normalized["TENURE_OPTIONS"] = " | ".join(dur_parts) if dur_parts else DEFAULT_VALUE
+
+    # Always preserve PRODUCT_NAME and SOURCE_FILE_PRODUCT
     raw_name = record.get("PRODUCT_NAME") or entry["title"]
+    # Apply title-case fix to the preserved name too
     if isinstance(raw_name, str):
         if (raw_name.strip()
                 and raw_name.strip() == raw_name.strip().upper()
@@ -1159,136 +1205,13 @@ def normalize_record(record, entry):
 
 
 # ============================================================================
-# CONFIDENCE + EVIDENCE TRACKING (internal only)
-# ============================================================================
-
-def _extract_with_evidence(raw_json: dict, retrieved_chunks: list[dict]) -> dict:
-    """
-    For each extracted field value, try to locate the supporting evidence
-    in the retrieved chunks. Returns an internal evidence dict (not written
-    to final JSONL output unless DEBUG_MODE=true).
-    """
-    evidence: dict[str, dict] = {}
-    chunk_texts = [c["text"] for c in retrieved_chunks]
-    all_text = " ".join(chunk_texts).lower()
-
-    for field, value in raw_json.items():
-        if value in (None, "", DEFAULT_VALUE, "N/A"):
-            evidence[field] = {"value": value, "confidence": 0.0, "evidence": "", "chunk_id": -1}
-            continue
-
-        value_str = str(value).lower()
-        # Simple heuristic: does the value (or a key substring) appear in retrieved chunks?
-        found_in = -1
-        best_conf = 0.3  # base confidence for present-but-unverified value
-
-        # Search each chunk for the value
-        for chunk in retrieved_chunks:
-            chunk_lower = chunk["text"].lower()
-            if value_str in chunk_lower:
-                found_in = chunk.get("chunk_id", -1)
-                best_conf = 0.95
-                break
-            # Partial match: check if 40%+ of words appear
-            value_words = [w for w in value_str.split() if len(w) > 3]
-            if value_words:
-                matches = sum(1 for w in value_words if w in chunk_lower)
-                ratio = matches / len(value_words)
-                if ratio > 0.5 and ratio * 0.9 > best_conf:
-                    best_conf = ratio * 0.9
-                    found_in = chunk.get("chunk_id", -1)
-
-        # Determine evidence snippet
-        if found_in >= 0:
-            src_text = next(
-                (c["text"] for c in retrieved_chunks if c.get("chunk_id") == found_in),
-                ""
-            )
-            # Find surrounding sentence
-            idx = src_text.lower().find(value_str[:20]) if len(value_str) >= 4 else -1
-            if idx >= 0:
-                start = max(0, idx - 60)
-                end = min(len(src_text), idx + 120)
-                snippet = src_text[start:end].replace("\n", " ").strip()
-            else:
-                snippet = src_text[:120].replace("\n", " ").strip()
-        else:
-            snippet = ""
-            best_conf = 0.2  # value not found in any retrieved chunk
-
-        evidence[field] = {
-            "value": value,
-            "confidence": round(best_conf, 2),
-            "evidence": snippet,
-            "chunk_id": found_in,
-        }
-
-    return evidence
-
-
-def _confidence_merge(
-    accumulated: dict,
-    new_evidence: dict[str, dict],
-    columns: list[str],
-) -> dict:
-    """
-    Improved merge strategy (replaces "first non-null wins"):
-    1. Highest confidence wins
-    2. Explicit evidence (found in chunk) preferred over unverified
-    3. Majority agreement (tracked via confidence accumulation)
-    4. N/A is always overridable
-
-    `accumulated` maps column → {"value": ..., "confidence": float}
-    Returns updated accumulated dict.
-    """
-    for col in columns:
-        new_ev = new_evidence.get(col, {})
-        new_val = new_ev.get("value", DEFAULT_VALUE)
-        new_conf = new_ev.get("confidence", 0.0)
-
-        if new_val in (None, "", DEFAULT_VALUE):
-            continue
-
-        old = accumulated.get(col, {})
-        old_val = old.get("value", DEFAULT_VALUE)
-        old_conf = old.get("confidence", 0.0)
-
-        if old_val in (None, "", DEFAULT_VALUE):
-            # First real value found
-            accumulated[col] = {"value": new_val, "confidence": new_conf}
-        elif new_conf > old_conf:
-            # Higher confidence replaces lower
-            accumulated[col] = {"value": new_val, "confidence": new_conf}
-        elif new_val == old_val:
-            # Agreement boosts confidence (majority vote signal)
-            accumulated[col] = {
-                "value": old_val,
-                "confidence": min(1.0, old_conf + 0.05),
-            }
-
-    return accumulated
-
-
-def _flatten_accumulated(accumulated: dict, columns: list[str]) -> dict:
-    """Extract just the values from the confidence-tracking dict."""
-    result = {}
-    for col in columns:
-        entry = accumulated.get(col)
-        if isinstance(entry, dict):
-            result[col] = entry.get("value", DEFAULT_VALUE)
-        else:
-            result[col] = entry if entry is not None else DEFAULT_VALUE
-    return result
-
-
-# ============================================================================
 # Prompt builders
 # ============================================================================
 
 def build_prompt(entry, chunk, tokenizer, chunk_idx=1, chunk_total=1):
     """
-    Build the extraction prompt for ONE chunk (legacy path / validation pass).
-    Uses the full SYSTEM_PROMPT with all 56 fields.
+    Build the extraction prompt for ONE chunk of the document.
+    `chunk` is already cut to size by chunk_text() — do not slice it again.
     """
     if chunk_total > 1:
         chunk_note = (
@@ -1318,11 +1241,16 @@ def build_prompt(entry, chunk, tokenizer, chunk_idx=1, chunk_total=1):
         try:
             try:
                 return tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True, enable_thinking=False,
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
                 )
             except TypeError:
                 return tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True,
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
                 )
         except Exception:
             pass
@@ -1330,54 +1258,14 @@ def build_prompt(entry, chunk, tokenizer, chunk_idx=1, chunk_total=1):
     return f"{SYSTEM_PROMPT}\n\n{user_msg}"
 
 
-def build_group_extraction_prompt(
-    group_name: str,
-    group_fields: list[str],
-    entry: dict,
-    chunks: list[dict],
-    tokenizer,
-) -> str:
-    """
-    Build a focused group-specific extraction prompt.
-    Only includes fields for the active group.
-    """
-    group_system = build_group_prompt(group_name, group_fields, entry)
-
-    combined_text = "\n\n---\n\n".join(c["text"] for c in chunks)
-
-    user_msg = (
-        f"Product title: {entry['title']}\n"
-        f"Source file: {get_source_filename(entry)}\n"
-        f"--- PRODUCT TEXT START ---\n"
-        f"{combined_text}\n"
-        f"--- PRODUCT TEXT END ---\n\n"
-        f"Extract ONLY these fields: {', '.join(group_fields)}\n"
-        f"Return ONE valid JSON object with exactly these {len(group_fields)} keys."
-    )
-
-    messages = [
-        {"role": "system", "content": group_system},
-        {"role": "user", "content": user_msg},
-    ]
-
-    if hasattr(tokenizer, "apply_chat_template"):
-        try:
-            try:
-                return tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True, enable_thinking=False,
-                )
-            except TypeError:
-                return tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True,
-                )
-        except Exception:
-            pass
-
-    return f"{group_system}\n\n{user_msg}"
-
-
 def build_repair_prompt(entry, raw_text):
-    """Compact repair prompt for malformed JSON output."""
+    """
+    Compact repair prompt for malformed JSON output.
+
+    Intentionally does NOT include the full SYSTEM_PROMPT to avoid exceeding
+    Qwen2.5-3B's context limit when the broken output is also long. The essential
+    rules are inlined here instead.
+    """
     repair_instructions = f"""You are repairing broken JSON from a data extraction task.
 Product: {entry['title']}
 Source file: {get_source_filename(entry)}
@@ -1386,31 +1274,51 @@ BROKEN OUTPUT TO REPAIR:
 {raw_text[:3000]}
 
 REPAIR RULES — apply all of these:
-- Return exactly ONE valid JSON object, nothing else
+- Return exactly ONE valid JSON object with 56 fields, nothing else
 - Use "N/A" for every missing or unparseable field (never null/None/NaN/"")
 - PRODUCT_NAME: Title Case (never ALL CAPS)
 - LEAD_MARKER: exactly "IBG" or "BNK"
-- PLAN_TYPE: one of Insurance|Savings & Protection Insurance|Insurance (Hospitalization)|Protection|Health|Savings|Deposit|Loan|Card|Investment|Service|Loyalty
-- CUSTOMER_TYPE: exactly one of Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A (pipe-separated if multiple)
+- PLAN_TYPE: short descriptive category; must contain "Insurance" for any
+  insurer/takaful-underwritten product (e.g. "Insurance",
+  "Savings & Protection Insurance", "Insurance (Hospitalization)");
+  otherwise one of Deposit|Loan|Card|Service|Loyalty|Investment|Savings
+- CUSTOMER_TYPE: one or more of Salaried|Self-Employed|SME|Corporate|Retail|
+  Government joined by " | " if multiple, or "N/A"
 - GENDER: exactly one of Male|Female|All|N/A
-- FINANCING_TYPE: one of Conventional|Islamic|Takaful|Mudarabah|Unit Linked|Hybrid (Bonus Based and Unit Linked)|N/A
-- Numeric fields (MIN_AGE, MAX_AGE, MIN_BALANCE, MIN_INCOME, MIN_INCOME_USD,
-  MIN_INVESTMENT, MIN_CONTRIBUTION, MIN_TERM_YEARS, MAX_TERM_YEARS,
-  FREE_LOOK_PERIOD_DAYS, IS_BANK_OFFERED): integers only, no units, no .0
+- FINANCING_TYPE: one of Conventional|Islamic|Takaful|Mudarabah|Unit Linked|
+  Hybrid (Bonus Based and Unit Linked)|N/A
+- TARGET_GOAL: standardized short term like Protection, Savings, Education,
+  Health, Marriage
+- CHANNEL: "Bank Branch" if applicable
+- Numeric fields (MIN_AGE, MAX_AGE, MIN_TERM_YEARS, MAX_TERM_YEARS,
+  FREE_LOOK_PERIOD_DAYS, IS_BANK_OFFERED): integers only, no units, no .0.
+  MIN_BALANCE/MIN_INCOME/MIN_INCOME_USD/MIN_INVESTMENT/MIN_CONTRIBUTION:
+  a single integer, OR the full tiered table text if genuinely tiered.
 - TENURE_OPTIONS: plan duration choices only, NOT payment frequency
 - PREMIUM_PAYMENT_FREQUENCY: how customer pays (Annual/Quarterly/etc.) or "N/A"
-- OPTIONAL_RIDERS: pipe-separated (" | "), not semicolons
+- Use " | " as the separator for every multi-value field (never semicolons)
 - SPECIAL_CONDITIONS: max 250 chars
 - SOURCE_FILE_PRODUCT: filename only, no path
 - No markdown fences, no explanations outside the JSON
 
 Return the repaired JSON object now."""
 
+    messages = [
+        {"role": "user", "content": repair_instructions},
+    ]
+
+    # Use chat template if available (no system prompt to save tokens)
+    if hasattr(entry.get("_tokenizer_ref"), "apply_chat_template"):
+        pass  # no tokenizer ref stored in entry; fall through
+
     return repair_instructions
 
 
 def build_validation_prompt(entry, extracted_json):
-    """Validation and correction prompt using the full system context."""
+    """
+    Validation and correction prompt using the full system context.
+    Checks the 56-field output against the corrected extraction rules.
+    """
     validation_instructions = f"""You extracted this JSON. Validate and fix any issues:
 
 EXTRACTED JSON:
@@ -1419,47 +1327,90 @@ EXTRACTED JSON:
 VALIDATION RULES — check each and FIX if violated:
 
 1. PRODUCT_NAME: Is it Title Case? Not ALL CAPS?
+   WRONG: "JUBILEE KAMIL TAKAFUL SAVINGS PLAN"
+   CORRECT: "Jubilee Kamil Takaful Savings Plan"
 
-2. PLAN_TYPE: Does it contain the word "Insurance" for insurer/takaful products?
-   Accident/theft protection → "Insurance"
-   Savings + protection endowment → "Savings & Protection Insurance"
-   Hospitalization → "Insurance (Hospitalization)"
-   Bank-only product → one of Deposit|Loan|Card|Service|Loyalty|Investment|Savings
+2. PLAN_TYPE: For any insurer/takaful-underwritten product, does it contain
+   the word "Insurance" (optionally with a short qualifier like
+   "Savings & Protection Insurance" or "Insurance (Hospitalization)")?
+   For a bank-only product, is it one of Deposit|Loan|Card|Service|
+   Loyalty|Investment|Savings?
 
-3. CUSTOMER_TYPE: Exactly one of Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A
-   (pipe-separated " | " if multiple apply). Never free text.
+3. TARGET_GOAL: Standardized short value like "Protection", "Savings", "Education", "Health", "Marriage"
 
-4. GENDER: Is it exactly one of Male|Female|All|N/A?
-   "N/A" if gender is not mentioned. "All" ONLY if explicitly stated.
+4. CUSTOMER_TYPE: Are all values from Salaried|Self-Employed|SME|Corporate|
+   Retail|Government, joined by " | " if more than one? No free text/bank names.
 
-5. FINANCING_TYPE: For unit-linked plans (PIA, fund allocation) → "Unit Linked"
+5. CUSTOMER_SEGMENT, TARGET_SEGMENT, SEGMENT_TIER: Do NOT change these to "N/A"
+   if they already contain a value — preserve whatever was extracted. Only set
+   "N/A" if the field is currently empty or null.
+   Note the distinction:
+   - CUSTOMER_SEGMENT: who the product is sold to, e.g. "All Bank Alfalah Customers"
+   - TARGET_SEGMENT: marketing positioning / planning purpose, e.g. "Protection Planning"
+   - SEGMENT_TIER: named tiers, e.g. "Bronze | Silver | Gold | Platinum"
+   - ELIGIBILITY_TYPE: operational eligibility criteria (age, CNIC, income rules)
+   Do NOT move ELIGIBILITY_TYPE content into TARGET_SEGMENT or vice versa.
+
+6. CHANNEL: "Bank Branch" if branches mentioned.
+
+7. ELIGIBILITY_TYPE: Concise operational eligibility summary (age range, CNIC
+   uniqueness, income floor, one-policy rules). This is NOT a marketing purpose
+   statement — do not replace it with positioning language.
+
+8. GENDER: Is it exactly one of Male|Female|All|N/A?
+   "All" if the product is offered broadly with no gender restriction and
+   eligibility info is present. "N/A" only if no customer/eligibility
+   information is given at all.
+
+9. FINANCING_TYPE: For unit-linked plans (PIA, fund allocation) → "Unit Linked"
    Hybrid (bonus + unit-linked) → "Hybrid (Bonus Based and Unit Linked)"
+   NOT "N/A" for plans that explicitly mention unit-linked structure.
 
-6. DEPOSIT_PROFIT_TYPE / DEPOSIT_PROFIT_FREQUENCY: Unit-linked plans → both "N/A"
-   Health/protection plans → both "N/A"
+10. DEPOSIT_PROFIT_TYPE / DEPOSIT_PROFIT_FREQUENCY: Unit-linked plans → both "N/A"
+    Health/protection plans (no savings) → both "N/A"
+    Do NOT set "At Maturity" for unit-linked plans.
 
-7. TENURE_OPTIONS: ONLY plan duration choices (e.g. "10 | 15 | 20 years")
-   Payment frequencies → PREMIUM_PAYMENT_FREQUENCY instead.
-   If no distinct plan duration menu → "N/A"
+11. TENURE_OPTIONS: Is it ONLY plan duration choices (e.g. "5 | 10 | 15 | 20 years")?
+    Words like Annual, Quarterly, Monthly, Semi-Annual are payment frequencies,
+    NOT plan durations — move them to PREMIUM_PAYMENT_FREQUENCY instead.
+    If no distinct plan duration menu → "N/A".
 
-8. PREMIUM_PAYMENT_FREQUENCY: Payment frequency (Annual/Semi-Annual/Quarterly/Monthly)
-   Pipe-separated " | " if multiple.
+12. PREMIUM_PAYMENT_FREQUENCY: How the customer pays (Annual/Semi-Annual/Quarterly/
+    Monthly), e.g. "Annual | Semi-Annual | Quarterly". "N/A" if not stated.
+    If TENURE_OPTIONS holds payment frequency terms, move them here.
 
-9. OPTIONAL_RIDERS: Pipe-separated " | " (not semicolons, not commas)
+13. Are all multi-value fields separated by " | " (never semicolons, never
+    commas as the list separator)?
+    WRONG: "Accidental Death; Income Benefit"  or  "Accidental Death, Income Benefit"
+    CORRECT: "Accidental Death | Income Benefit"
 
-10. Numeric fields: integers ONLY (no PKR, no commas, no .0):
-    MIN_AGE, MAX_AGE, MIN_BALANCE, AVG_BALANCE_REQUIREMENT, MIN_INCOME,
-    MIN_INCOME_USD, MIN_INVESTMENT, MIN_CONTRIBUTION, MIN_TERM_YEARS,
-    MAX_TERM_YEARS, FREE_LOOK_PERIOD_DAYS, IS_BANK_OFFERED
+14. Numeric fields: Do single-value numeric fields contain ONLY integers
+    (no PKR, no commas, no .0)? Tiered fields (MIN_BALANCE, MIN_INCOME,
+    MIN_INVESTMENT, MIN_CONTRIBUTION, etc.) may legitimately keep a full
+    tiered table instead of one number if the source document tiers them.
+    Fields: MIN_AGE, MAX_AGE, MIN_TERM_YEARS, MAX_TERM_YEARS,
+    FREE_LOOK_PERIOD_DAYS, IS_BANK_OFFERED must always be plain integers.
+    WRONG: "18.0", "PKR 250,000"  CORRECT: "18", "250000"
 
-11. FREE_LOOK_PERIOD_DAYS: ONLY if THIS product explicitly states it. Never default to 14.
+15. FREE_LOOK_PERIOD_DAYS: Is it set ONLY because this product explicitly mentions it?
+    If not explicitly stated → "N/A". Do NOT default to 14.
 
-12. SEGMENT_TIER / SERVICE_TYPE / CUSTOMER_SEGMENT / TARGET_SEGMENT:
-    "N/A" unless explicitly stated.
+16. MIN_CONTRIBUTION vs PRICING_RATE vs MIN_INVESTMENT:
+    - Tiered premium/contribution amounts belong in MIN_CONTRIBUTION, not
+      PRICING_RATE (which is for interest/profit/markup rates) and not
+      MIN_INVESTMENT (which is for portfolio/fund/investment products, not
+      insurance premiums).
+    - For insurance/takaful plans (LEAD_MARKER="IBG"): if MIN_CONTRIBUTION is
+      "N/A" but MIN_INVESTMENT has a contribution-style amount, move it to
+      MIN_CONTRIBUTION and set MIN_INVESTMENT to "N/A".
 
-13. SOURCE_FILE_PRODUCT: Filename only (no folder path).
+17. OPTIONAL_RIDERS vs KEY_BENEFITS: OPTIONAL_RIDERS should only contain
+    items the document explicitly labels as optional add-ons, not the
+    product's core/default benefits (which belong in KEY_BENEFITS).
 
-14. All 56 fields present? No null/None/NaN/empty string → "N/A"
+18. SOURCE_FILE_PRODUCT: Filename only (no folder path).
+
+19. All 56 fields present? No null/None/NaN/empty string → "N/A"
     Columns: PRODUCT_NAME, LEAD_MARKER, SOURCE_FILE_PRODUCT, PLAN_TYPE, TARGET_GOAL,
     CUSTOMER_TYPE, EMPLOYMENT_TYPE, CUSTOMER_SEGMENT, TARGET_SEGMENT, SEGMENT_TIER,
     MIN_AGE, MAX_AGE, GENDER, IS_BANK_OFFERED, ACCOUNT_TYPE, CARD_TYPE, CHANNEL,
@@ -1474,9 +1425,7 @@ VALIDATION RULES — check each and FIX if violated:
     FREE_LOOK_PERIOD_DAYS, REQUIRED_DOCUMENTS, CLAIMS_SERVICE_CONTACT,
     KEY_EXCLUSIONS, TAX_ZAKAT_TREATMENT, PREMIUM_PAYMENT_FREQUENCY
 
-15. All multi-value list fields use " | " as separator (not ";" or ","):
-    KEY_BENEFITS, OPTIONAL_RIDERS, KEY_EXCLUSIONS, REQUIRED_DOCUMENTS,
-    SPECIAL_CONDITIONS, PREMIUM_PAYMENT_FREQUENCY, TENURE_OPTIONS, COVERAGE_AMOUNT
+Refer to the system prompt above for full field definitions and all rules.
 
 If ANY rule is violated, return CORRECTED JSON. Otherwise return JSON unchanged.
 Fix ONLY the violations, preserve everything else.
@@ -1486,24 +1435,32 @@ Return ONLY valid JSON, no explanations."""
 
 
 # ============================================================================
-# Model inference (unchanged from original)
+# Model inference
 # ============================================================================
 
 def free_gpu_memory():
+    """
+    Release cached/fragmented CUDA memory between generate() calls.
+    empty_cache() returns RESERVED-but-UNUSED memory to the CUDA driver.
+    It cannot free the model's weights (live tensors). Use GPU_RESERVE_GIB
+    to limit how much of the GPU the loader fills with weights.
+    """
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
 
-def get_raw_generation(model, tokenizer, prompt):
+def get_raw_generation(model, tokenizer, prompt, max_new_tokens=None):
+    effective_max_new_tokens = max_new_tokens or MAX_NEW_TOKENS
+
     inputs = tokenizer(prompt, return_tensors="pt")
     device = getattr(model, "device", None)
     if device is not None:
         inputs = {key: value.to(device) for key, value in inputs.items()}
 
     generation_kwargs = {
-        "max_new_tokens": MAX_NEW_TOKENS,
+        "max_new_tokens": effective_max_new_tokens,
         "do_sample": False,
         "repetition_penalty": REPETITION_PENALTY,
         "pad_token_id": tokenizer.pad_token_id or tokenizer.eos_token_id,
@@ -1525,130 +1482,41 @@ def get_raw_generation(model, tokenizer, prompt):
         clean_up_tokenization_spaces=False,
     )
 
+    hit_token_limit = generated_ids.shape[-1] >= effective_max_new_tokens
+    if hit_token_limit:
+        # The model ran out of budget before emitting EOS on its own, which
+        # means the JSON is almost certainly truncated mid-field rather than
+        # genuinely malformed. Surface this distinctly from a real parse
+        # error so it's obvious in the logs which one you're dealing with.
+        print(
+            f"    note: generation hit max_new_tokens={effective_max_new_tokens} "
+            f"(output likely truncated, not malformed) — attempting auto-close recovery"
+        )
+
+    # Explicitly drop tensor references to free GPU memory before next call.
     del inputs, output_ids, generated_ids
     free_gpu_memory()
 
     return text
 
 
-# ============================================================================
-# HYBRID RAG EXTRACTION (new path)
-# ============================================================================
-
-def extract_group(
-    model,
-    tokenizer,
-    entry: dict,
-    doc_index: DocumentIndex,
-    group_name: str,
-    group_fields: list[str],
-) -> dict[str, dict]:
+def extract_one_chunk(model, tokenizer, entry, chunk, chunk_idx, chunk_total, max_new_tokens=None):
     """
-    Retrieve relevant chunks for this group, run focused extraction,
-    return evidence dict mapping field → {value, confidence, evidence, chunk_id}.
+    Run extraction on a SINGLE chunk of the document (initial attempt +
+    one compact repair retry if output is not parseable JSON).
+    Validation is done once on the final merged record, not per chunk.
+    Returns a normalized record dict, or None if both attempts failed.
     """
-    query = FIELD_GROUP_QUERIES[group_name]
-    retrieved = doc_index.retrieve(query, k=HYBRID_TOP_K)
-
-    if not retrieved:
-        # Fallback: use first 4 chunks
-        retrieved = doc_index.chunks[:HYBRID_TOP_K]
-
-    prompt = build_group_extraction_prompt(
-        group_name, group_fields, entry, retrieved, tokenizer
-    )
-    raw = get_raw_generation(model, tokenizer, prompt)
-
-    try:
-        parsed = parse_json_blob(raw)
-    except Exception:
-        # Attempt repair
-        repair_prompt = build_repair_prompt(entry, raw)
-        repaired_raw = get_raw_generation(model, tokenizer, repair_prompt)
-        try:
-            parsed = parse_json_blob(repaired_raw)
-        except Exception as e:
-            print(f"    Warning: group '{group_name}' failed to parse after repair: {e}")
-            return {}
-
-    # Attach evidence tracking
-    evidence = _extract_with_evidence(parsed, retrieved)
-    return evidence
-
-
-def extract_one_product_hybrid(model, tokenizer, entry: dict, text: str) -> dict:
-    """
-    Full Hybrid RAG extraction pipeline:
-    1. Build per-document token-chunk index (FAISS + BM25)
-    2. For each field group: retrieve relevant chunks → focused extraction
-    3. Merge all groups using confidence-weighted strategy
-    4. Run one final validation pass
-    5. Normalize and return
-    6. Destroy the document index
-    """
-    doc_index = DocumentIndex(text)
-    doc_index.build()
-
-    # Confidence-tracking accumulator: col → {value, confidence}
-    accumulated: dict[str, dict] = {
-        col: {"value": DEFAULT_VALUE, "confidence": 0.0} for col in COLUMNS
-    }
-
-    for group_name, group_fields in FIELD_GROUPS.items():
-        print(f"    Extracting group: {group_name} ({len(group_fields)} fields)…")
-        group_evidence = extract_group(
-            model, tokenizer, entry, doc_index, group_name, group_fields
-        )
-        accumulated = _confidence_merge(accumulated, group_evidence, group_fields)
-        free_gpu_memory()
-
-    # Flatten to plain dict for normalization and validation
-    merged = _flatten_accumulated(accumulated, COLUMNS)
-    merged_normalized = normalize_record(merged, entry)
-
-    # Final validation pass (full prompt with all 56 fields)
-    validation_prompt = build_validation_prompt(entry, merged_normalized)
-    validation_raw = get_raw_generation(model, tokenizer, validation_prompt)
-    try:
-        validated_parsed = parse_json_blob(validation_raw)
-        result = normalize_record(validated_parsed, entry)
-    except Exception:
-        result = merged_normalized
-
-    # Destroy document index — no cross-product contamination
-    doc_index.destroy()
-    free_gpu_memory()
-
-    return result
-
-
-# ============================================================================
-# LEGACY CHUNKED EXTRACTION (unchanged, used when ENABLE_HYBRID_RAG=False)
-# ============================================================================
-
-def merge_records(accumulated: dict, new_record: dict, columns) -> dict:
-    """Legacy first-non-null-wins merge."""
-    for col in columns:
-        old = accumulated.get(col)
-        new = new_record.get(col)
-        old_is_empty = old is None or old == "" or old == DEFAULT_VALUE
-        new_is_real = new not in (None, "", DEFAULT_VALUE)
-        if old_is_empty and new_is_real:
-            accumulated[col] = new
-    return accumulated
-
-
-def extract_one_chunk(model, tokenizer, entry, chunk, chunk_idx, chunk_total):
-    """Legacy single-chunk extraction with repair fallback."""
     prompt = build_prompt(entry, chunk, tokenizer, chunk_idx, chunk_total)
-    raw = get_raw_generation(model, tokenizer, prompt)
+    raw = get_raw_generation(model, tokenizer, prompt, max_new_tokens=max_new_tokens)
 
     try:
         parsed = parse_json_blob(raw)
         return normalize_record(parsed, entry)
     except Exception:
+        # Compact repair prompt (no full SYSTEM_PROMPT) to stay within context
         repair_prompt = build_repair_prompt(entry, raw)
-        repaired_raw = get_raw_generation(model, tokenizer, repair_prompt)
+        repaired_raw = get_raw_generation(model, tokenizer, repair_prompt, max_new_tokens=max_new_tokens)
         try:
             repaired_parsed = parse_json_blob(repaired_raw)
             return normalize_record(repaired_parsed, entry)
@@ -1660,8 +1528,22 @@ def extract_one_chunk(model, tokenizer, entry, chunk, chunk_idx, chunk_total):
             return None
 
 
-def extract_one_product_legacy(model, tokenizer, entry, text):
-    """Legacy chunked extraction path (ENABLE_HYBRID_RAG=False)."""
+def extract_one_product(model, tokenizer, entry, text, max_new_tokens=None):
+    """
+    Chunked extraction + field-level merge + single validation pass.
+
+    The document is split into TEXT_CHUNK_SIZE-char pieces. Each piece is
+    sent to the model separately. Results are merged field-by-field
+    (first real value found for a field across chunks wins). A single
+    validation pass runs on the final merged record.
+
+    If ENABLE_CHUNKING=False, the whole document is sent in one call
+    (risks OOM on long documents + large system prompt).
+
+    max_new_tokens: optional override (used by the OOM retry loop in main()
+    to shrink the generation budget — and therefore the KV-cache/activation
+    memory — on subsequent attempts instead of repeating an identical call).
+    """
     if ENABLE_CHUNKING:
         chunks = chunk_text(text, TEXT_CHUNK_SIZE, TEXT_CHUNK_OVERLAP)
     else:
@@ -1672,7 +1554,9 @@ def extract_one_product_legacy(model, tokenizer, entry, text):
     any_chunk_succeeded = False
 
     for i, chunk in enumerate(chunks, start=1):
-        chunk_record = extract_one_chunk(model, tokenizer, entry, chunk, i, chunk_total)
+        chunk_record = extract_one_chunk(
+            model, tokenizer, entry, chunk, i, chunk_total, max_new_tokens=max_new_tokens
+        )
         if chunk_record is not None:
             any_chunk_succeeded = True
             accumulated = merge_records(accumulated, chunk_record, COLUMNS)
@@ -1681,32 +1565,25 @@ def extract_one_product_legacy(model, tokenizer, entry, text):
     if not any_chunk_succeeded:
         return blank_record(entry)
 
+    # Single validation/correction pass on the merged record.
     validation_prompt = build_validation_prompt(entry, accumulated)
-    validation_raw = get_raw_generation(model, tokenizer, validation_prompt)
+    validation_raw = get_raw_generation(model, tokenizer, validation_prompt, max_new_tokens=max_new_tokens)
     try:
         validated_parsed = parse_json_blob(validation_raw)
         return normalize_record(validated_parsed, entry)
     except Exception:
+        # If the validation call itself fails to parse, the merged record
+        # (already normalized field-by-field) is still a valid result.
         return accumulated
 
 
-# ============================================================================
-# UNIFIED ENTRY POINT
-# ============================================================================
-
-def extract_one(model, tokenizer, entry, text):
-    """
-    Main extraction entry point. Routes to Hybrid RAG or legacy pipeline
-    based on ENABLE_HYBRID_RAG environment variable.
-    """
-    if ENABLE_HYBRID_RAG:
-        return extract_one_product_hybrid(model, tokenizer, entry, text)
-    else:
-        return extract_one_product_legacy(model, tokenizer, entry, text)
+def extract_one(model, tokenizer, entry, text, max_new_tokens=None):
+    """Main extraction entry point: chunked extraction + merge + validation."""
+    return extract_one_product(model, tokenizer, entry, text, max_new_tokens=max_new_tokens)
 
 
 # ============================================================================
-# Model loader (unchanged from original)
+# Model loader
 # ============================================================================
 
 def make_generator():
@@ -1743,8 +1620,8 @@ def make_generator():
         raise SystemExit(
             f"Model not found on Hugging Face: {MODEL_NAME}\n"
             "This usually means the repo id is wrong.\n"
-            "Use the exact Hugging Face model id from the model card, or set "
-            "HF_MODEL_NAME_OR_PATH to a local folder path.\n"
+            "Use the exact Hugging Face model id from the model card, or set HF_MODEL_NAME_OR_PATH\n"
+            "to a local folder path.\n"
             "If the repo is private or gated, authenticate in Colab first."
         ) from exc
 
@@ -1756,6 +1633,8 @@ def make_generator():
     if DEVICE_MAP.lower() != "none":
         model_kwargs["device_map"] = DEVICE_MAP
 
+        # Cap how much GPU memory Accelerate fills with weights, leaving
+        # GPU_RESERVE_GIB free for the KV-cache that generate() needs.
         if torch.cuda.is_available() and DEVICE_MAP.lower() == "auto":
             max_memory = {}
             for i in range(torch.cuda.device_count()):
@@ -1766,16 +1645,18 @@ def make_generator():
             model_kwargs["max_memory"] = max_memory
             print(f"GPU headroom reserved: {GPU_RESERVE_GIB} GiB (max_memory={max_memory})")
 
-    if TORCH_DTYPE == "float16":
-        model_kwargs["torch_dtype"] = torch.float16
-    elif TORCH_DTYPE == "bfloat16":
-        model_kwargs["torch_dtype"] = torch.bfloat16
-    elif TORCH_DTYPE == "float32":
-        model_kwargs["torch_dtype"] = torch.float32
-    elif TORCH_DTYPE == "auto":
-        model_kwargs["torch_dtype"] = "auto"
+    # FIX: always stream weights directly into place instead of materializing
+    # a full-precision copy first — this alone can be several extra GiB on a
+    # 7B model.
+    model_kwargs["low_cpu_mem_usage"] = True
 
     if LOAD_IN_4BIT or LOAD_IN_8BIT:
+        # FIX: do NOT also set model_kwargs["torch_dtype"] here. Passing a
+        # top-level torch_dtype alongside quantization_config is what caused
+        # this process to hold ~14GiB right after loading (essentially the
+        # full fp16 model), instead of the ~4-5GiB a real 4-bit 7B model
+        # should take. bnb_4bit_compute_dtype below is the correct place to
+        # control dtype when quantizing.
         model_kwargs["quantization_config"] = BitsAndBytesConfig(
             load_in_4bit=LOAD_IN_4BIT,
             load_in_8bit=LOAD_IN_8BIT,
@@ -1783,6 +1664,14 @@ def make_generator():
             bnb_4bit_quant_type="nf4",
             bnb_4bit_use_double_quant=True,
         )
+    elif TORCH_DTYPE == "float16":
+        model_kwargs["torch_dtype"] = torch.float16
+    elif TORCH_DTYPE == "bfloat16":
+        model_kwargs["torch_dtype"] = torch.bfloat16
+    elif TORCH_DTYPE == "float32":
+        model_kwargs["torch_dtype"] = torch.float32
+    elif TORCH_DTYPE == "auto":
+        model_kwargs["torch_dtype"] = "auto"
 
     print(f"Loading model: {MODEL_NAME}")
     print(f"Model class:   {MODEL_CLASS}")
@@ -1803,6 +1692,16 @@ def make_generator():
             model.generation_config.pad_token_id = tokenizer.pad_token_id
         if tokenizer.eos_token_id is not None:
             model.generation_config.eos_token_id = tokenizer.eos_token_id
+
+    if torch.cuda.is_available():
+        allocated_gib = torch.cuda.memory_allocated() / (1024**3)
+        reserved_gib = torch.cuda.memory_reserved() / (1024**3)
+        print(
+            f"Post-load GPU memory: {allocated_gib:.2f} GiB allocated, "
+            f"{reserved_gib:.2f} GiB reserved "
+            f"(expect ~4-6 GiB for a 4-bit 7B model — if this is much higher, "
+            f"quantization isn't actually shrinking memory)."
+        )
 
     return model, tokenizer
 
@@ -1828,9 +1727,6 @@ def load_done_ids():
 # ============================================================================
 
 def main():
-    pipeline_mode = "Hybrid RAG" if ENABLE_HYBRID_RAG else "Legacy Chunked"
-    print(f"\n  Pipeline mode: {pipeline_mode}")
-
     input_files = select_input_files()
     index = build_index_from_files(input_files)
 
@@ -1877,8 +1773,22 @@ def main():
                 continue
 
             for attempt in range(3):
+                # FIX: shrink the generation budget on each retry. Retrying
+                # with the exact same max_new_tokens after an OOM just fails
+                # the same way again — empty_cache() only frees already-
+                # reserved-but-unused memory, it can't create headroom that
+                # wasn't there. Cutting the token budget shrinks the
+                # KV-cache/activation memory generate() needs, giving later
+                # attempts an actual chance to succeed instead of a
+                # guaranteed repeat failure.
+                attempt_max_new_tokens = max(
+                    400, int(MAX_NEW_TOKENS * (0.6 ** attempt))
+                )
                 try:
-                    data = extract_one(model, tokenizer, entry, text)
+                    data = extract_one(
+                        model, tokenizer, entry, text,
+                        max_new_tokens=attempt_max_new_tokens,
+                    )
                     rec = {"product_no": entry["product_no"], **data}
                     out.write(json.dumps(rec, ensure_ascii=False) + "\n")
                     out.flush()
@@ -1888,10 +1798,14 @@ def main():
                     )
                     break
                 except torch.cuda.OutOfMemoryError as e:
+                    # Clear fragmented allocator state before retrying —
+                    # each retry must start from a clean memory state.
                     free_gpu_memory()
                     print(
                         f"[{entry['product_no']:03d}/{len(index)}] "
-                        f"CUDA OOM on attempt {attempt + 1}, cleared cache and retrying: {e}"
+                        f"CUDA OOM on attempt {attempt + 1} "
+                        f"(max_new_tokens={attempt_max_new_tokens}), "
+                        f"cleared cache and retrying: {e}"
                     )
                     time.sleep(5)
                 except Exception as e:
@@ -1903,6 +1817,7 @@ def main():
             else:
                 print(f"[{entry['product_no']:03d}/{len(index)}] FAILED after retries")
 
+            # Clean up after every product to prevent slow memory accumulation.
             free_gpu_memory()
 
     print("Done. Output:", OUT_JSONL)
