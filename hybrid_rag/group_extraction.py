@@ -184,12 +184,24 @@ def extract_group(
     "page", "is_table"}} for every field in this group. Fields the model
     omits or that fail evidence verification come back with value=None,
     confidence=0.0.
+
+    Terminal logging: prints per-field ✓/✗ results and a group summary so
+    you can see exactly what was extracted and why, without enabling
+    EXTRACTION_DEBUG_MODE.
     """
+    # Minimum confidence below which an unverified value is treated as
+    # noise and discarded. Prevents hallucinated values (e.g.
+    # COLLATERAL_TYPE="Debit Card" in a takaful plan) from contaminating
+    # the flat record.
+    _CONFIDENCE_FLOOR = 0.25
+
+    total_fields = len(group["field_order"])
     result: dict[str, dict] = {
         name: {"value": None, "confidence": 0.0, "evidence": None, "chunk_id": None, "page": None, "is_table": False}
         for name in group["fields"]
     }
     if not chunks:
+        print(f"    ⚠  No chunks retrieved for group '{group['name']}' — all fields N/A")
         return result
 
     chunks_by_id = {c["chunk_id"]: c for c in chunks}
@@ -198,37 +210,41 @@ def extract_group(
     try:
         raw = generate_fn(messages)
     except Exception as e:
-        print(f"    [group_extraction] LLM call failed for group '{group['key']}': {e}")
+        print(f"    ✗ LLM call FAILED for group '{group['name']}': {e}")
         return result
 
     if not raw or not raw.strip():
-        print(f"    [group_extraction] EMPTY generation for group '{group['key']}' "
-              f"-- check chat template / stop tokens / max_new_tokens.")
+        print(f"    ✗ EMPTY generation for group '{group['name']}'"
+              f" — check chat template / stop tokens / max_new_tokens.")
         return result
 
     parsed = _extract_json_object(raw)
     if not parsed:
-        preview = raw.strip().replace("\n", " ")[:300]
-        print(f"    [group_extraction] unparseable output for group '{group['key']}' "
-              f"({len(raw)} chars). First 300 chars: {preview!r}")
+        preview = raw.strip().replace("\n", " ")[:200]
+        print(f"    ✗ Unparseable JSON for group '{group['name']}'"
+              f" ({len(raw)} chars). Preview: {preview!r}")
         return result
 
-    for name in group["fields"]:
+    extracted_count = 0
+    for name in group["field_order"]:
         raw_field = parsed.get(name)
         if raw_field is None:
+            print(f"      ✗ {name}: (not in model output)")
             continue
+
         # Tolerate the model returning a bare value instead of the full
         # {value, confidence, evidence, ...} object.
         if isinstance(raw_field, dict):
-            value = raw_field.get("value")
+            value      = raw_field.get("value")
             confidence = raw_field.get("confidence", 0.5)
-            evidence = raw_field.get("evidence")
-            chunk_id = raw_field.get("chunk_id")
-            page = raw_field.get("page")
+            evidence   = raw_field.get("evidence")
+            chunk_id   = raw_field.get("chunk_id")
+            page       = raw_field.get("page")
         else:
             value, confidence, evidence, chunk_id, page = raw_field, 0.4, None, None, None
 
         if value in (None, "", "null", "N/A", "n/a"):
+            print(f"      ✗ {name}: (null/N/A)")
             continue
 
         try:
@@ -240,13 +256,25 @@ def extract_group(
         evidence_ok, is_table = _verify_evidence(evidence, chunks_by_id)
         if evidence is not None and not evidence_ok:
             # Model cited evidence that isn't actually in the retrieved
-            # text -- don't trust it fully, but don't discard the value
-            # either (it may still be correct, just mis-cited).
+            # text — cap confidence; if very low, discard as hallucination.
             confidence = min(confidence, 0.4)
 
-        # Resolve page/chunk_id from the actual cited chunk when possible,
-        # rather than trusting the model's own (sometimes wrong) numbers.
-        resolved_chunk = chunks_by_id.get(chunk_id) if chunk_id in chunks_by_id else None
+        # BUG FIX: confidence floor to reject hallucinated values.
+        # A 3B model on an unrelated chunk will sometimes assign a field
+        # like COLLATERAL_TYPE="Debit Card" with low confidence. Without
+        # this floor, that wrong value would make it into the flat record
+        # and survive all the way to the final JSONL output.
+        if confidence < _CONFIDENCE_FLOOR and not evidence_ok:
+            print(f"      ✗ {name}: '{str(value)[:50]}' "
+                  f"(conf={confidence:.2f} < floor={_CONFIDENCE_FLOOR}, no evidence → discarded)")
+            continue
+
+        # BUG FIX: chunk_id may be None (NoneType not hashable) — the old
+        # code did `chunk_id in chunks_by_id` which raises TypeError when
+        # chunk_id is None. Guard with an explicit None check.
+        resolved_chunk = None
+        if chunk_id is not None and chunk_id in chunks_by_id:
+            resolved_chunk = chunks_by_id[chunk_id]
         if resolved_chunk is None and evidence_ok:
             for c in chunks_by_id.values():
                 if evidence and evidence.strip() in c["text"]:
@@ -254,12 +282,18 @@ def extract_group(
                     break
 
         result[name] = {
-            "value": value,
+            "value":      value,
             "confidence": confidence,
-            "evidence": evidence,
-            "chunk_id": resolved_chunk["chunk_id"] if resolved_chunk else chunk_id,
-            "page": resolved_chunk["page_number"] if resolved_chunk else page,
-            "is_table": is_table,
+            "evidence":   evidence,
+            "chunk_id":   resolved_chunk["chunk_id"] if resolved_chunk else chunk_id,
+            "page":       resolved_chunk["page_number"] if resolved_chunk else page,
+            "is_table":   is_table,
         }
+        val_preview = str(value)[:60].replace("\n", " ")
+        ev_flag = "✓ev" if evidence_ok else ("?ev" if evidence else "no-ev")
+        print(f"      ✓ {name}: \"{val_preview}\" (conf={confidence:.2f}, {ev_flag})")
+        extracted_count += 1
 
+    status = "✓" if extracted_count > 0 else "✗"
+    print(f"    {status} Group '{group['name']}': {extracted_count}/{total_fields} fields extracted")
     return result

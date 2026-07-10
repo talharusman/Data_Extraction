@@ -102,7 +102,10 @@ DEBUG_JSONL = OUT_JSONL.with_suffix(".debug.jsonl")
 # what caused validation output to truncate and (before the merge-on-top
 # fix above) wipe out already-good fields. Give it real headroom,
 # independent of whatever MAX_NEW_TOKENS is set to elsewhere.
-RAG_VALIDATION_MAX_NEW_TOKENS = env_int("RAG_VALIDATION_MAX_NEW_TOKENS", 3000)
+# INCREASED from 3000 → 4500: validation was still truncating at 3000
+# tokens because the model occasionally emits reasoning preamble before
+# the JSON, eating into the output budget.
+RAG_VALIDATION_MAX_NEW_TOKENS = env_int("RAG_VALIDATION_MAX_NEW_TOKENS", 4500)
 
 # Fail fast at startup if the schema and the one-time field grouping have
 # drifted apart (per field_groups.py's own docstring: re-run/edit that file
@@ -140,7 +143,7 @@ def build_lean_validation_prompt(entry, extracted_json: dict) -> str:
     validation_instructions = f"""You extracted this JSON. Validate and fix any issues:
 
 EXTRACTED JSON:
-{json.dumps(extracted_json, indent=2)}
+{json.dumps(extracted_json)}
 
 VALIDATION RULES -- check each and FIX if violated:
 
@@ -284,18 +287,35 @@ def extract_one_product_hybrid(model, tokenizer, entry, text, page_texts, max_ne
         overlap_tokens=RAG_OVERLAP_TOKENS,
         page_texts=page_texts,
     )
+    print(f"  \u2500\u2500 [{entry['title'][:55]}] \u2500\u2500")
+    print(f"  \u2192 {len(chunks)} token-chunks created (target={RAG_TARGET_TOKENS} tok, overlap={RAG_OVERLAP_TOKENS} tok)")
 
     doc_index = DocumentIndex(embedder=embedder)
     try:
         doc_index.build(chunks)  # embeddings + FAISS + BM25 built ONCE here
+        print(f"  \u2192 FAISS + BM25 index built. Starting {len(fg.FIELD_GROUPS)}-group extraction...\n")
 
         all_group_results: dict[str, dict[str, dict]] = {}
-        for group in fg.FIELD_GROUPS:
+        n_groups = len(fg.FIELD_GROUPS)
+        for grp_idx, group in enumerate(fg.FIELD_GROUPS):
+            budget = group_max_new_tokens(group, max_new_tokens)
+            print(f"  \u25b6 [{grp_idx+1}/{n_groups}] {group['name']} "
+                  f"({len(group['field_order'])} fields, budget={budget} tokens, top_k={RAG_TOP_K})")
+
             retrieved = retrieve_for_group(doc_index, group, top_k=RAG_TOP_K, alpha=RAG_ALPHA)
 
-            # Right-sized per-group budget (see group_max_new_tokens) instead
-            # of reusing the full 56-field ceiling for a 2-field group.
-            generate_fn = make_generate_fn(model, tokenizer, group_max_new_tokens(group, max_new_tokens))
+            # For the Identity group always include the very first chunk
+            # (document header/title page) so PRODUCT_NAME, PLAN_TYPE, and
+            # PROVIDER_NAME are never missed due to retrieval scoring.
+            if group["key"] == "identity" and chunks:
+                first = dict(chunks[0])
+                first.setdefault("score", 1.0)
+                if not any(c["chunk_id"] == first["chunk_id"] for c in retrieved):
+                    retrieved = [first] + retrieved[:RAG_TOP_K - 1]
+                    print(f"    + Injected chunk #1 (document header) into identity retrieval")
+
+            # Right-sized per-group budget (see group_max_new_tokens).
+            generate_fn = make_generate_fn(model, tokenizer, budget)
 
             passes = []
             for _ in range(max(1, RAG_ENSEMBLE_PASSES)):
@@ -311,13 +331,15 @@ def extract_one_product_hybrid(model, tokenizer, entry, text, page_texts, max_ne
         # Deterministic field (never asked of the LLM).
         flat_record["SOURCE_FILE_PRODUCT"] = _v2.get_source_filename(entry)
 
+        # --- Extraction summary before validation ---
+        n_extracted = sum(1 for v in flat_record.values() if v != _v2.DEFAULT_VALUE)
+        print(f"\n  \u2500\u2500 Extraction summary: {n_extracted}/{len(flat_record)} fields populated (non-N/A) \u2500\u2500")
+
         # Merged-record normalization pass (reused verbatim from 02).
         normalized = _v2.normalize_record(flat_record, entry)
 
-        # Final single full-record validation pass. Uses the LEAN validation
-        # prompt (same checklist as 02's build_validation_prompt, minus the
-        # ~8-9K char SYSTEM_PROMPT prefix) -- see build_lean_validation_prompt
-        # docstring above for why that prefix is redundant/wasteful here.
+        # Final single full-record validation pass.
+        print(f"  \u25b6 Validation pass (budget={RAG_VALIDATION_MAX_NEW_TOKENS} tokens)...")
         validation_prompt = build_lean_validation_prompt(entry, normalized)
 
         # BUG FIX: the validation prompt was passed as a raw string to
@@ -368,15 +390,18 @@ def extract_one_product_hybrid(model, tokenizer, entry, text, page_texts, max_ne
             if not isinstance(validated_parsed, dict):
                 raise ValueError("validation output was not a JSON object")
             merged_after_validation = dict(normalized)
+            corrections = 0
             for col in COLUMNS:
                 v = validated_parsed.get(col)
                 if v not in (None, "", "null", "None"):
+                    if v != normalized.get(col):
+                        corrections += 1
                     merged_after_validation[col] = v
                 # else: keep normalized[col] -- field wasn't reached/returned.
             final_record = _v2.normalize_record(merged_after_validation, entry)
+            print(f"  \u2713 Validation applied ({corrections} field(s) corrected)")
         except Exception as e:
-            print(f"    [validation] could not use validation output ({e}); "
-                  f"keeping pre-validation extraction unchanged.")
+            print(f"  \u2717 Validation failed ({e}) \u2014 keeping pre-validation extraction.")
             final_record = normalized
 
         if DEBUG_MODE:

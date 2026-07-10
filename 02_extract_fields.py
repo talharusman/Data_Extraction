@@ -1190,8 +1190,15 @@ def normalize_record(record, entry):
             # Leave only genuine duration options in TENURE_OPTIONS.
             normalized["TENURE_OPTIONS"] = " | ".join(dur_parts) if dur_parts else DEFAULT_VALUE
 
-    # Always preserve PRODUCT_NAME and SOURCE_FILE_PRODUCT
-    raw_name = record.get("PRODUCT_NAME") or entry["title"]
+    # Always preserve PRODUCT_NAME and SOURCE_FILE_PRODUCT.
+    # BUG FIX: `record.get("PRODUCT_NAME") or entry["title"]` short-circuits
+    # to "N/A" when the LLM returned "N/A" (a truthy non-empty string), so
+    # the fallback to entry["title"] was NEVER reached. Explicitly check for
+    # the DEFAULT_VALUE sentinel so the document title is used as a fallback
+    # whenever the model couldn't extract the product name.
+    raw_name = record.get("PRODUCT_NAME")
+    if not raw_name or raw_name == DEFAULT_VALUE:
+        raw_name = entry["title"]
     # Apply title-case fix to the preserved name too
     if isinstance(raw_name, str):
         if (raw_name.strip()
