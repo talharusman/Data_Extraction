@@ -225,11 +225,36 @@ def extract_group(
               f" ({len(raw)} chars). Preview: {preview!r}")
         return result
 
+    # Detect the "single-envelope" failure mode: the model returned one
+    # {value, confidence, evidence, chunk_id, page} object at the top level
+    # instead of one per field. This happens when a small model misreads the
+    # output contract. In this case none of the field names exist as keys.
+    _ENVELOPE_KEYS = {"value", "confidence", "evidence", "chunk_id", "page"}
+    top_keys = set(str(k).lower() for k in parsed.keys())
+    if top_keys <= _ENVELOPE_KEYS and _ENVELOPE_KEYS & top_keys:
+        preview = raw.strip().replace("\n", " ")[:300]
+        print(f"    ✗ Model returned a single RAG envelope instead of one per field "
+              f"for group '{group['name']}'. Raw preview: {preview!r}")
+        return result
+
+    # Build a case-insensitive lookup as a fallback for models that return
+    # lowercase field names (e.g. 'product_name' instead of 'PRODUCT_NAME').
+    parsed_lower = {k.lower(): v for k, v in parsed.items()}
+
     extracted_count = 0
     for name in group["field_order"]:
-        raw_field = parsed.get(name)
-        if raw_field is None:
+        # Try exact key first; fall back to lowercase match.
+        if name in parsed:
+            raw_field = parsed[name]
+        elif name.lower() in parsed_lower:
+            raw_field = parsed_lower[name.lower()]
+            print(f"      ~ {name}: found via lowercase key lookup")
+        else:
             print(f"      ✗ {name}: (not in model output)")
+            continue
+
+        if raw_field is None:
+            print(f"      ✗ {name}: (null — model explicitly returned null)")
             continue
 
         # Tolerate the model returning a bare value instead of the full

@@ -960,13 +960,30 @@ def _normalize_customer_type(value: str) -> str:
     we no longer collapse to a single value. Each "|"-or-","-separated
     segment is validated against the allowed enum; valid segments are kept
     (deduplicated, order preserved) and joined with " | ". Segments that
-    don't match the enum are dropped rather than kept as free text, since
-    CUSTOMER_TYPE must stay a controlled vocabulary field.
+    don't match the enum are mapped to the closest canonical value, or
+    dropped as a last resort.
+
+    BUG FIX: "All Bank Alfalah Limited customers" was silently dropped to
+    N/A because it didn't match the strict enum. Added "Retail" synonyms
+    for broad-customer-base descriptions, which is the correct label for
+    mass-market bank products.
     """
     allowed = {
         "Salaried", "Self-Employed", "SME",
         "Corporate", "Retail", "Government",
     }
+    # Synonyms: map loose descriptions → canonical enum value.
+    # Order matters: more specific patterns first.
+    _SYNONYM_MAP = [
+        (re.compile(r"\bsme\b|\bsmall.+medium\b",              re.I), "SME"),
+        (re.compile(r"\bcorporate\b|\bbusiness\b|\bcommercial\b", re.I), "Corporate"),
+        (re.compile(r"\bgovernment\b|\bpublic.+sector\b",       re.I), "Government"),
+        (re.compile(r"\bsalari",                                re.I), "Salaried"),
+        (re.compile(r"\bself.?employ",                          re.I), "Self-Employed"),
+        # "All customers", "All bank Alfalah customers", "Individual", "Retail"
+        (re.compile(r"\ball\b|\bindividual\b|\bretail\b|\bpersonal\b|\bconsumer\b", re.I), "Retail"),
+    ]
+
     stripped = value.strip()
     if not stripped or stripped.upper() == DEFAULT_VALUE:
         return DEFAULT_VALUE
@@ -977,10 +994,20 @@ def _normalize_customer_type(value: str) -> str:
         seg_clean = seg.strip()
         if not seg_clean:
             continue
+        # Exact match first.
+        matched = False
         for vt in allowed:
             if seg_clean.lower() == vt.lower() and vt not in kept:
                 kept.append(vt)
+                matched = True
                 break
+        if not matched:
+            # Try synonym map.
+            for pattern, canonical in _SYNONYM_MAP:
+                if pattern.search(seg_clean) and canonical not in kept:
+                    kept.append(canonical)
+                    matched = True
+                    break
     if kept:
         return " | ".join(kept)
     return DEFAULT_VALUE

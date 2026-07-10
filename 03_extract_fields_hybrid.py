@@ -331,6 +331,122 @@ def extract_one_product_hybrid(model, tokenizer, entry, text, page_texts, max_ne
         # Deterministic field (never asked of the LLM).
         flat_record["SOURCE_FILE_PRODUCT"] = _v2.get_source_filename(entry)
 
+        # -----------------------------------------------------------------
+        # Deterministic post-processing: fill fields the LLM reliably misses
+        # -----------------------------------------------------------------
+        _dv = _v2.DEFAULT_VALUE
+        folder_lower   = entry.get("folder",    "").lower()
+        fname_lower    = entry.get("filename",  "").lower()
+        title_lower    = entry.get("title",     "").lower()
+
+        # LEAD_MARKER: infer from folder / filename keyword.
+        # IBG = insurer-brokered (takaful/life/insurance products).
+        # BNK = bank products (deposits, loans, cards, etc.).
+        if flat_record.get("LEAD_MARKER", _dv) == _dv:
+            ibg_kw = ("takaful", "insurance", "ibg", "life", "banca")
+            bnk_kw = ("loan", "deposit", "card", "saving", "current", "bnk")
+            if any(kw in folder_lower or kw in fname_lower for kw in ibg_kw):
+                flat_record["LEAD_MARKER"] = "IBG"
+                print("    + LEAD_MARKER = IBG (auto-detected from folder/filename)")
+            elif any(kw in folder_lower or kw in fname_lower for kw in bnk_kw):
+                flat_record["LEAD_MARKER"] = "BNK"
+                print("    + LEAD_MARKER = BNK (auto-detected from folder/filename)")
+
+        # PLAN_TYPE: infer from filename / folder when LLM returned N/A.
+        if flat_record.get("PLAN_TYPE", _dv) == _dv:
+            type_kw_map = [
+                (("takaful", "insurance"),       "Insurance"),
+                (("loan", "financing", "ijarah"), "Loan"),
+                (("deposit", "saving"),           "Savings"),
+                (("card",),                       "Card"),
+                (("investment",),                 "Investment"),
+            ]
+            for keywords, plan_type in type_kw_map:
+                if any(kw in folder_lower or kw in fname_lower for kw in keywords):
+                    flat_record["PLAN_TYPE"] = plan_type
+                    print(f"    + PLAN_TYPE = {plan_type!r} (auto-detected from folder/filename)")
+                    break
+
+        # PROVIDER_NAME: try a simple regex extraction from the document text
+        # when the LLM returned N/A for the identity group.
+        if flat_record.get("PROVIDER_NAME", _dv) == _dv:
+            import re as _re
+            # Match "Bank/Company/Ltd" patterns near common insurer keywords.
+            prov_match = _re.search(
+                r"([A-Z][A-Za-z]+(?: [A-Z][A-Za-z]+){0,4} (?:Insurance|Takaful|Life|Bank) "
+                r"(?:Company |Limited|Ltd)?)",
+                text,
+            )
+            if prov_match:
+                flat_record["PROVIDER_NAME"] = prov_match.group(0).strip()
+                print(f"    + PROVIDER_NAME = {flat_record['PROVIDER_NAME']!r} (regex from text)")
+
+        # TARGET_GOAL: infer from filename / text keywords.
+        if flat_record.get("TARGET_GOAL", _dv) == _dv:
+            goal_kw_map = [
+                (("protection", "accidental", "zaamin"),              "Protection"),
+                (("education",),                                       "Education"),
+                (("saving", "endowment"),                              "Savings"),
+                (("marriage", "uroos", "zeenat"),                      "Marriage"),
+                (("health", "shifa"),                                  "Health"),
+                (("multipurpose", "tadbeer"),                          "Multipurpose Savings"),
+            ]
+            all_text_lower = (folder_lower + " " + fname_lower + " " + title_lower).lower()
+            for keywords, goal in goal_kw_map:
+                if any(kw in all_text_lower for kw in keywords):
+                    flat_record["TARGET_GOAL"] = goal
+                    print(f"    + TARGET_GOAL = {goal!r} (auto-detected)")
+                    break
+
+        # TENURE / MIN_TERM_YEARS / MAX_TERM_YEARS: simple text regex when
+        # profit_tenure_terms group returned N/A (common for short documents).
+        if flat_record.get("TENURE", _dv) == _dv:
+            import re as _re
+            tenure_match = _re.search(
+                r"(?:policy|plan|contract)\s+term[^.]{0,60}?(\d+)\s*(year|month)",
+                text, _re.IGNORECASE,
+            )
+            if tenure_match:
+                num, unit = tenure_match.group(1), tenure_match.group(2).lower()
+                tenure_str = f"{num} {unit}{'s' if int(num) > 1 else ''}"
+                flat_record["TENURE"] = tenure_str
+                print(f"    + TENURE = {tenure_str!r} (regex from text)")
+                if unit == "year":
+                    flat_record.setdefault("MIN_TERM_YEARS", num)
+                    flat_record.setdefault("MAX_TERM_YEARS", num)
+
+        # PRODUCT_DESCRIPTION: if still N/A, take the first sentence of the
+        # document text (always present, reliable for short documents).
+        if flat_record.get("PRODUCT_DESCRIPTION", _dv) == _dv and text.strip():
+            import re as _re
+            first_sentence = _re.split(r"(?<=[.!?])\s+", text.strip())[0]
+            if 10 < len(first_sentence) <= 250:
+                flat_record["PRODUCT_DESCRIPTION"] = first_sentence
+                print(f"    + PRODUCT_DESCRIPTION from first sentence ({len(first_sentence)} chars)")
+
+        # Clear loan/mortgage-specific fields for insurance/takaful products.
+        # These fields (COLLATERAL_TYPE, EQUITY_REQUIREMENT, DBR_LIMIT) have no
+        # meaning for a protection plan -- the 3B model sometimes assigns debit
+        # card details or policy limits to them by mistake.
+        is_insurance = (
+            flat_record.get("LEAD_MARKER") == "IBG"
+            or flat_record.get("PLAN_TYPE", "") == "Insurance"
+            or any(kw in folder_lower or kw in fname_lower
+                   for kw in ("takaful", "insurance", "ibg", "life", "banca"))
+        )
+        if is_insurance:
+            _loan_only = ("COLLATERAL_TYPE", "EQUITY_REQUIREMENT", "DBR_LIMIT",
+                          "BUSINESS_TENURE", "LOAN_AMOUNT_RANGE", "DEPOSIT_PROFIT_TYPE",
+                          "DEPOSIT_PROFIT_FREQUENCY")
+            cleared = []
+            for lf in _loan_only:
+                if flat_record.get(lf, _dv) not in (_dv, None):
+                    flat_record[lf] = _dv
+                    cleared.append(lf)
+            if cleared:
+                print(f"    + Cleared loan-only fields for insurance product: {cleared}")
+        # -----------------------------------------------------------------
+
         # --- Extraction summary before validation ---
         n_extracted = sum(1 for v in flat_record.values() if v != _v2.DEFAULT_VALUE)
         print(f"\n  \u2500\u2500 Extraction summary: {n_extracted}/{len(flat_record)} fields populated (non-N/A) \u2500\u2500")
