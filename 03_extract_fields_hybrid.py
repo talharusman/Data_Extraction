@@ -94,6 +94,16 @@ RAG_ENSEMBLE_PASSES = env_int("RAG_ENSEMBLE_PASSES", 1)
 DEBUG_MODE = env_bool("EXTRACTION_DEBUG_MODE", False)
 DEBUG_JSONL = OUT_JSONL.with_suffix(".debug.jsonl")
 
+# The validation pass must reproduce ALL 56 fields verbatim in one shot
+# (unlike a single field group, which only needs a handful). Summing this
+# project's own field_max_lengths gives ~4,380 chars of possible field
+# *content* alone, before field names/JSON punctuation -- reusing a
+# group-sized or even the plain extraction MAX_NEW_TOKENS budget here was
+# what caused validation output to truncate and (before the merge-on-top
+# fix above) wipe out already-good fields. Give it real headroom,
+# independent of whatever MAX_NEW_TOKENS is set to elsewhere.
+RAG_VALIDATION_MAX_NEW_TOKENS = env_int("RAG_VALIDATION_MAX_NEW_TOKENS", 3000)
+
 # Fail fast at startup if the schema and the one-time field grouping have
 # drifted apart (per field_groups.py's own docstring: re-run/edit that file
 # by hand if COLUMNS changes -- never regroup at runtime).
@@ -205,6 +215,29 @@ def make_generate_fn(model, tokenizer, max_new_tokens):
     return _generate
 
 
+def group_max_new_tokens(group: dict, ceiling: int) -> int:
+    """
+    Right-sizes the token budget per field group instead of reusing the
+    full 56-field ceiling (e.g. 2200) for every one of the 9 group calls.
+    Groups only ask for a handful of fields, each wrapped in the RAG
+    {value, confidence, evidence, chunk_id, page} envelope -- ~250 tokens
+    covers a typical field's worth of JSON + evidence quote (the evidence
+    string alone can be 30-80 tokens, plus key names, confidence float,
+    chunk_id, page, and JSON punctuation). The fixed overhead covers the
+    JSON skeleton (outer braces, field separators). Capped at `ceiling`
+    so this never asks for MORE than the original budget, only less where
+    it's safe to.
+
+    BUG FIX: the original 130-token estimate was far too low for the RAG
+    envelope, causing truncation on most groups (the 830-token truncation
+    warning in logs proved this). Raised to 250 tokens/field and floor
+    from 300 to 500.
+    """
+    n_fields = len(group["field_order"])
+    budget = 250 + 250 * n_fields
+    return max(500, min(budget, ceiling))
+
+
 # ---------------------------------------------------------------------------
 # Page-aware text extraction (best-effort). Falls back to 02's
 # read_file_text() (single blob, page 1) for formats without native pages.
@@ -221,6 +254,7 @@ def read_pages(abs_path: Path) -> tuple[str, list[str] | None]:
     """
     if abs_path.suffix.lower() == ".pdf":
         try:
+            # pyrefly: ignore [missing-import]
             import fitz  # PyMuPDF
             pages = []
             with fitz.open(abs_path) as doc:
@@ -255,11 +289,13 @@ def extract_one_product_hybrid(model, tokenizer, entry, text, page_texts, max_ne
     try:
         doc_index.build(chunks)  # embeddings + FAISS + BM25 built ONCE here
 
-        generate_fn = make_generate_fn(model, tokenizer, max_new_tokens)
-
         all_group_results: dict[str, dict[str, dict]] = {}
         for group in fg.FIELD_GROUPS:
             retrieved = retrieve_for_group(doc_index, group, top_k=RAG_TOP_K, alpha=RAG_ALPHA)
+
+            # Right-sized per-group budget (see group_max_new_tokens) instead
+            # of reusing the full 56-field ceiling for a 2-field group.
+            generate_fn = make_generate_fn(model, tokenizer, group_max_new_tokens(group, max_new_tokens))
 
             passes = []
             for _ in range(max(1, RAG_ENSEMBLE_PASSES)):
@@ -283,11 +319,64 @@ def extract_one_product_hybrid(model, tokenizer, entry, text, page_texts, max_ne
         # ~8-9K char SYSTEM_PROMPT prefix) -- see build_lean_validation_prompt
         # docstring above for why that prefix is redundant/wasteful here.
         validation_prompt = build_lean_validation_prompt(entry, normalized)
-        validation_raw = _v2.get_raw_generation(model, tokenizer, validation_prompt, max_new_tokens=max_new_tokens)
+
+        # BUG FIX: the validation prompt was passed as a raw string to
+        # get_raw_generation() WITHOUT applying the chat template. For
+        # Qwen2.5-Instruct, the chat template (<|im_start|>system/user/
+        # assistant<|im_end|>) is essential for the model to understand it
+        # should produce a JSON response. Without it, the model generates
+        # random continuations or malformed output, which either fails JSON
+        # parsing (acceptable — falls back to `normalized`) or produces a
+        # truncated/partial JSON whose merge-on-top logic can overwrite good
+        # values with bad ones.
+        validation_messages = [
+            {"role": "system", "content": "You are a JSON validation assistant. Return only valid JSON, no explanations."},
+            {"role": "user", "content": validation_prompt},
+        ]
+        try:
+            try:
+                templated_prompt = tokenizer.apply_chat_template(
+                    validation_messages, tokenize=False, add_generation_prompt=True, enable_thinking=False,
+                )
+            except TypeError:
+                templated_prompt = tokenizer.apply_chat_template(
+                    validation_messages, tokenize=False, add_generation_prompt=True,
+                )
+        except Exception:
+            templated_prompt = validation_prompt
+
+        validation_raw = _v2.get_raw_generation(
+            model, tokenizer, templated_prompt,
+            max_new_tokens=RAG_VALIDATION_MAX_NEW_TOKENS,
+        )
+
+        # BUG FIX: the validation call asks the model to re-emit the FULL
+        # 56-field JSON. If that output is truncated (hits max_new_tokens)
+        # or partially malformed, _v2.normalize_record() used to fill in
+        # DEFAULT_VALUE ("N/A") for every field missing from the truncated
+        # output -- silently wiping out fields that were already correctly
+        # extracted in `normalized`, even though the model never intended to
+        # clear them (it just never got that far before being cut off). That
+        # was the actual cause of rows coming back with "no data extracted."
+        #
+        # Fix: treat validated_parsed as a set of CORRECTIONS layered on top
+        # of `normalized`, not a wholesale replacement. Any field the
+        # validation pass didn't return (or returned empty) falls back to
+        # the value `normalized` already had, instead of "N/A".
         try:
             validated_parsed = _v2.parse_json_blob(validation_raw)
-            final_record = _v2.normalize_record(validated_parsed, entry)
-        except Exception:
+            if not isinstance(validated_parsed, dict):
+                raise ValueError("validation output was not a JSON object")
+            merged_after_validation = dict(normalized)
+            for col in COLUMNS:
+                v = validated_parsed.get(col)
+                if v not in (None, "", "null", "None"):
+                    merged_after_validation[col] = v
+                # else: keep normalized[col] -- field wasn't reached/returned.
+            final_record = _v2.normalize_record(merged_after_validation, entry)
+        except Exception as e:
+            print(f"    [validation] could not use validation output ({e}); "
+                  f"keeping pre-validation extraction unchanged.")
             final_record = normalized
 
         if DEBUG_MODE:
@@ -358,7 +447,14 @@ def main():
                 continue
 
             for attempt in range(3):
-                attempt_max_new_tokens = max(400, int(_v2.MAX_NEW_TOKENS * (0.6 ** attempt)))
+                # BUG FIX: the old code progressively shrank the token budget
+                # on each retry (2200 → 1320 → 792), which was a holdover
+                # from 02's monolithic pipeline where reducing output size
+                # helped avoid OOM. In the hybrid pipeline, group budgets are
+                # already right-sized by group_max_new_tokens() — shrinking
+                # the ceiling only causes MORE truncation and WORSE results
+                # on each retry. Use the full budget on every attempt.
+                attempt_max_new_tokens = _v2.MAX_NEW_TOKENS
                 try:
                     data = extract_one_product_hybrid(
                         model, tokenizer, entry, text, page_texts,
