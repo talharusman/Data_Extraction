@@ -139,7 +139,7 @@ TEMPERATURE = env_float("HF_TEMPERATURE", 0.0)
 TOP_P = env_float("HF_TOP_P", 1.0)
 REPETITION_PENALTY = env_float("HF_REPETITION_PENALTY", 1.03)
 TEXT_CHUNK_SIZE = env_int("TEXT_CHUNK_SIZE", 6000)
-TEXT_CHUNK_OVERLAP = env_int("TEXT_CHUNK_OVERLAP", 300)
+TEXT_CHUNK_OVERLAP = env_int("TEXT_CHUNK_OVERLAP", 500)
 LOAD_IN_4BIT = env_bool("HF_LOAD_IN_4BIT", False)
 LOAD_IN_8BIT = env_bool("HF_LOAD_IN_8BIT", False)
 DEVICE_MAP = os.environ.get("HF_DEVICE_MAP", "auto").strip() or "auto"
@@ -473,9 +473,13 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
 def merge_records(accumulated: dict, new_record: dict, columns) -> dict:
     """
     Merge a single chunk's extracted record into the running accumulated
-    record for the product. A field is filled in from this chunk only if it
-    hasn't already been found (still DEFAULT_VALUE/empty) in an earlier
-    chunk — first chunk to find a real value for a field wins.
+    record for the product.
+
+    Strategy (improved):
+    - Empty → real value: accept the new value
+    - Both real: for text fields, prefer the LONGER value (more likely to be
+      complete, e.g. a full tier table vs a partial one from a chunk boundary).
+      For strict numeric fields, keep the first value found.
     """
     for col in columns:
         old = accumulated.get(col)
@@ -484,6 +488,12 @@ def merge_records(accumulated: dict, new_record: dict, columns) -> dict:
         new_is_real = new not in (None, "", DEFAULT_VALUE)
         if old_is_empty and new_is_real:
             accumulated[col] = new
+        elif not old_is_empty and new_is_real and col not in STRICT_NUMERIC_COLUMNS:
+            # Both have real values — prefer the longer one for non-strict-
+            # numeric fields, as it’s more likely to be the complete value
+            # (e.g. a full tier table vs a partial one from a chunk boundary).
+            if len(str(new)) > len(str(old)) + 20:
+                accumulated[col] = new
     return accumulated
 
 
@@ -788,19 +798,37 @@ def _is_tiered_value(stripped: str) -> bool:
     """
     Detect a tiered/table-style value (e.g. "Bronze:5,000, Silver:10,000")
     that should be PRESERVED as text rather than collapsed to one integer.
-    Generic pattern match — looks for two or more "Label: number" pairs —
-    so it generalizes to any provider's tier naming, not just this dataset.
+    Handles multiple formats: Label:number, Label=number, Label-number,
+    pipe-separated tiers, etc.
     """
+    # Pattern 1: "Label: number" or "Label= number" pairs
     pairs = re.findall(r"[A-Za-z][\w\s]{0,24}[:=]\s*[\d,]+", stripped)
-    return len(pairs) >= 2
+    if len(pairs) >= 2:
+        return True
+    # Pattern 2: pipe-separated segments, each containing a number
+    if "|" in stripped:
+        segments = [s.strip() for s in stripped.split("|")]
+        num_segments = sum(1 for seg in segments if seg and re.search(r"\d", seg))
+        if num_segments >= 2:
+            return True
+    # Pattern 3: "Label - number" pairs (dash separator)
+    dash_pairs = re.findall(r"[A-Za-z][\w\s]{0,24}\s*[-\u2013\u2014]\s*[\d,]+", stripped)
+    if len(dash_pairs) >= 2:
+        return True
+    return False
 
 
 def truncate_to_boundary(value: str, max_len: int) -> str:
-    """Truncate text at a word or punctuation boundary when possible."""
+    """Truncate text at a clean boundary when possible, preferring pipe
+    separators for list fields so partial items aren't left dangling."""
     if len(value) <= max_len:
         return value
 
     cut = value[:max_len].rstrip()
+    # Prefer a pipe separator boundary so list items stay complete
+    pipe_idx = cut.rfind(" | ")
+    if pipe_idx > max_len * 0.5:
+        return cut[:pipe_idx].rstrip(" ,;:-/|")
     boundary = max(cut.rfind(" "), cut.rfind(","), cut.rfind(";"), cut.rfind(":"), cut.rfind("-"), cut.rfind("|"))
     if boundary > 0:
         return cut[:boundary].rstrip(" ,;:-/|")
@@ -892,6 +920,18 @@ def _normalize_target_goal(value: str) -> str:
         "hospitalization": "Health",
         "marriage": "Marriage",
         "multipurpose": "Multipurpose Savings",
+        "retirement": "Retirement",
+        "children": "Education",
+        "hajj": "Hajj Savings",
+        "umrah": "Hajj Savings",
+        "vehicle": "Vehicle Financing",
+        "car": "Vehicle Financing",
+        "motor": "Vehicle Financing",
+        "housing": "Housing",
+        "home": "Housing",
+        "investment": "Investment",
+        "wealth": "Wealth Management",
+        "income": "Income Protection",
     }
     for key, norm in mappings.items():
         if key in val_lower:
@@ -910,11 +950,11 @@ def _normalize_channel(value: str) -> str:
 
 
 def _normalize_eligibility(value: str) -> str:
-    """Clean ELIGIBILITY_TYPE."""
+    """Clean ELIGIBILITY_TYPE — generic across all banks."""
     if not value or value == DEFAULT_VALUE:
         return DEFAULT_VALUE
-    # Keep concise
-    value = re.sub(r"Bank Alfalah Limited?", "Bank Alfalah", value, flags=re.I)
+    # Generic: normalize "Bank X Limited" → "Bank X" for any bank name
+    value = re.sub(r"\b(Bank\s+\w+(?:\s+\w+)?)\s+Limited\b", r"\1", value, flags=re.I)
     return truncate_to_boundary(value.strip(), 100)
 
 
