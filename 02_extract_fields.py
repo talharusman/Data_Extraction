@@ -61,6 +61,23 @@ CHANGES IN THIS VERSION (audit fixes — generic, not product-specific):
   (250->280), REQUIRED_DOCUMENTS (200->220), SPECIAL_CONDITIONS (200->250)
   based on corrected-dataset ground-truth lengths, so full tiered/category
   lists aren't truncated mid-list.
+- _normalize_target_goal extended with solar/green energy/financing
+  categories to correctly handle bank loan products (e.g. green energy term
+  finance facilities). The previous mapping only covered insurance/savings
+  plan goals and produced "Protection" for unrelated loan products.
+- _normalize_equity_requirement added to strip verbose prefixes (e.g.
+  "Minimum 20% (Salaried & Business)" → "20%") and normalize to the
+  canonical short percentage format expected in EQUITY_REQUIREMENT.
+- _crossfield_validate added to enforce LEAD_MARKER-based consistency:
+  BNK (bank-direct) products cannot have Unit Linked or Hybrid financing
+  types (which are IBG-only structures). This catches cascading errors when
+  a model misclassifies a loan product as IBG and then sets FINANCING_TYPE
+  to a fund-based value.
+- build_validation_prompt extended with rules 21-25 for LEAD_MARKER
+  consistency: BNK products must have Conventional/Islamic FINANCING_TYPE,
+  bank-only PROVIDER_NAME, N/A for COVERAGE_AMOUNT unless explicit amounts
+  are stated, and N/A for insurance-specific fields (FREE_LOOK_PERIOD_DAYS,
+  OPTIONAL_RIDERS, PREMIUM_PAYMENT_FREQUENCY, MIN_CONTRIBUTION).
 - All previous functionality (chunking, merge, repair/validation passes,
   JSON recovery, model loading) preserved unchanged.
 """
@@ -490,7 +507,7 @@ def merge_records(accumulated: dict, new_record: dict, columns) -> dict:
             accumulated[col] = new
         elif not old_is_empty and new_is_real and col not in STRICT_NUMERIC_COLUMNS:
             # Both have real values — prefer the longer one for non-strict-
-            # numeric fields, as it’s more likely to be the complete value
+            # numeric fields, as it's more likely to be the complete value
             # (e.g. a full tier table vs a partial one from a chunk boundary).
             if len(str(new)) > len(str(old)) + 20:
                 accumulated[col] = new
@@ -907,27 +924,50 @@ def _normalize_financing_type(value: str) -> str:
 
 
 def _normalize_target_goal(value: str) -> str:
-    """Normalize TARGET_GOAL to corrected style."""
+    """Normalize TARGET_GOAL to corrected style.
+
+    Extended with solar/green energy/financing categories so that bank loan
+    products (term finance, auto finance, SME financing) are correctly
+    classified instead of being mapped to insurance-product goals like
+    'Protection'. More specific multi-word keys are checked before shorter
+    single-word keys to prevent partial matches (e.g. 'green energy' before
+    'energy' alone).
+    """
     if not value or value == DEFAULT_VALUE:
         return DEFAULT_VALUE
     val_lower = value.lower()
     mappings = {
+        # Financing / loan categories — checked first so they take priority
+        # over shorter generic keys like "home" or "income".
+        "solar energy": "Solar Energy Financing",
+        "green energy": "Green Energy Financing",
+        "working capital": "SME Financing",
+        "income protection": "Income Protection",
+        # Single-word financing keys
+        "solar": "Solar Energy Financing",
+        "energy": "Green Energy Financing",
+        "green": "Green Energy Financing",
+        "vehicle": "Vehicle Financing",
+        "car": "Vehicle Financing",
+        "motor": "Vehicle Financing",
+        "housing": "Housing",
+        "sme": "SME Financing",
+        "business": "Business Financing",
+        "personal": "Personal Financing",
+        "micro": "Microfinance",
+        # Insurance / savings plan categories
+        "multipurpose": "Multipurpose Savings",
+        "hospitalization": "Health",
         "protection": "Protection",
         "accidental": "Protection",
         "savings": "Savings",
         "education": "Education",
         "health": "Health",
-        "hospitalization": "Health",
         "marriage": "Marriage",
-        "multipurpose": "Multipurpose Savings",
         "retirement": "Retirement",
         "children": "Education",
         "hajj": "Hajj Savings",
         "umrah": "Hajj Savings",
-        "vehicle": "Vehicle Financing",
-        "car": "Vehicle Financing",
-        "motor": "Vehicle Financing",
-        "housing": "Housing",
         "home": "Housing",
         "investment": "Investment",
         "wealth": "Wealth Management",
@@ -991,6 +1031,84 @@ def _normalize_customer_type(value: str) -> str:
     return DEFAULT_VALUE
 
 
+def _normalize_equity_requirement(value: str) -> str:
+    """
+    Normalize EQUITY_REQUIREMENT to a short percentage value.
+
+    Strips verbose prefixes such as "Minimum", "Min.", "At least" and
+    trailing parenthetical qualifiers so only the core percentage (e.g.
+    "20%") is stored. This matches the prompt's EQUITY_REQUIREMENT example
+    format and the data dictionary TYPE_HINT ("30%").
+
+    Examples:
+      "Minimum 20% (Salaried & Business)" → "20%"
+      "Min. 30%"                           → "30%"
+      "At least 25%"                       → "25%"
+      "20%"                                → "20%"
+    """
+    if not value or value == DEFAULT_VALUE:
+        return DEFAULT_VALUE
+    cleaned = value.strip()
+    # Remove leading verbose qualifiers
+    cleaned = re.sub(
+        r"^(minimum|min\.?|at\s+least|equity[:\s]+)\s*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    # Remove trailing parenthetical qualifiers e.g. "(Salaried & Business)"
+    cleaned = re.sub(r"\s*\(.*\)\s*$", "", cleaned).strip()
+    # Keep only the first percentage token if multiple remain
+    pct_match = re.search(r"(\d+(?:\.\d+)?%)", cleaned)
+    if pct_match:
+        return pct_match.group(1)
+    # If no % symbol but a plain number, append %
+    num_match = re.match(r"^(\d+(?:\.\d+)?)\s*$", cleaned)
+    if num_match:
+        return num_match.group(1) + "%"
+    return truncate_to_boundary(cleaned, 20)
+
+
+def _crossfield_validate(normalized: dict) -> dict:
+    """
+    Apply cross-field consistency rules that cannot be enforced on a
+    field-by-field basis during per-column normalization.
+
+    Called at the end of normalize_record after all per-field normalizations
+    have run. Rules:
+
+    1. BNK (bank-direct loan/deposit/card) products cannot have a
+       fund-based FINANCING_TYPE (Unit Linked or Hybrid), because those
+       structures are only valid for insurer-underwritten savings/investment
+       plans (IBG products). When a BNK product has been incorrectly
+       classified and FINANCING_TYPE has been set to a fund-based value, it
+       is reset to "Conventional" — the correct value for a bank-direct
+       loan with markup-based pricing and no fund/unit allocation language.
+
+    This function is intentionally narrow. It only auto-corrects cases where
+    the combination is logically impossible (a bank loan cannot be "Unit
+    Linked"). Fields that are merely unlikely for a BNK product (e.g.
+    COVERAGE_AMOUNT, FREE_LOOK_PERIOD_DAYS) are left for the validation
+    prompt pass to handle, since they can occasionally appear for bundled
+    insurance components within a loan product.
+    """
+    lead = normalized.get("LEAD_MARKER", DEFAULT_VALUE)
+    if not isinstance(lead, str):
+        return normalized
+
+    if lead.strip().upper() == "BNK":
+        # BNK: Unit Linked and Hybrid are IBG-only financing structures.
+        # A bank-direct loan product with KIBOR-based or fixed markup is
+        # by definition Conventional unless Islamic/Shariah wording appears.
+        fin_type = normalized.get("FINANCING_TYPE", DEFAULT_VALUE)
+        if isinstance(fin_type, str) and fin_type in (
+            "Unit Linked", "Hybrid (Bonus Based and Unit Linked)"
+        ):
+            normalized["FINANCING_TYPE"] = "Conventional"
+
+    return normalized
+
+
 def normalize_record(record, entry):
     """
     Normalize an extracted record with corrections for all known model errors.
@@ -1002,11 +1120,13 @@ def normalize_record(record, entry):
     - GENDER: strict allowed-value enforcement
     - CUSTOMER_TYPE: multi-value enum enforcement, "|"-joined
     - TARGET_GOAL, CHANNEL, ELIGIBILITY_TYPE, tenure fields enhanced
+    - EQUITY_REQUIREMENT: verbose prefix stripped to short percentage
     - Numeric fields: strip units, commas, currency symbols — UNLESS the
       value is a genuine tiered table for a tier-aware numeric field, in
       which case the tiered text is preserved (see _is_tiered_value)
     - List-type text fields: delimiter normalized to " | "
     - All text fields: truncated at word boundary to max length
+    - Cross-field: BNK product FINANCING_TYPE consistency enforced
     """
     if not isinstance(record, dict):
         return blank_record(entry)
@@ -1090,6 +1210,12 @@ def normalize_record(record, entry):
             value = _normalize_eligibility(value)
 
         # ----------------------------------------------------------------
+        # EQUITY_REQUIREMENT: strip verbose prefix to short percentage
+        # ----------------------------------------------------------------
+        if col == "EQUITY_REQUIREMENT" and isinstance(value, str):
+            value = _normalize_equity_requirement(value)
+
+        # ----------------------------------------------------------------
         # GENDER: strict enforcement of allowed values
         # ----------------------------------------------------------------
         if col == "GENDER" and isinstance(value, str):
@@ -1158,6 +1284,11 @@ def normalize_record(record, entry):
             raw_name = raw_name.strip().title()
     normalized["PRODUCT_NAME"] = raw_name
     normalized["SOURCE_FILE_PRODUCT"] = get_source_filename(entry)
+
+    # ----------------------------------------------------------------
+    # Cross-field consistency: must run after all per-field normalizations
+    # ----------------------------------------------------------------
+    normalized = _crossfield_validate(normalized)
 
     return normalized
 
@@ -1236,26 +1367,34 @@ REPAIR RULES — apply all of these:
 - Use "N/A" for every missing or unparseable field (never null/None/NaN/"")
 - PRODUCT_NAME: Title Case (never ALL CAPS)
 - LEAD_MARKER: exactly "IBG" or "BNK"
-- PLAN_TYPE: short descriptive category; must contain "Insurance" for any
-  insurer/takaful-underwritten product (e.g. "Insurance",
-  "Savings & Protection Insurance", "Insurance (Hospitalization)");
-  otherwise one of Deposit|Loan|Card|Service|Loyalty|Investment|Savings
+  → "BNK" for term finance, auto finance, home finance, green energy loan,
+    SME loan, personal loan, deposit, card — even if bundled insurance exists
+  → "IBG" ONLY when a named insurer/takaful company underwrites the product
+- PLAN_TYPE: must contain "Insurance" for IBG products; for BNK products
+  use one of Deposit|Loan|Card|Service|Loyalty|Investment|Savings
 - CUSTOMER_TYPE: one or more of Salaried|Self-Employed|SME|Corporate|Retail|
   Government joined by " | " if multiple, or "N/A"
 - GENDER: exactly one of Male|Female|All|N/A
-- FINANCING_TYPE: one of Conventional|Islamic|Takaful|Mudarabah|Unit Linked|
-  Hybrid (Bonus Based and Unit Linked)|N/A
+- FINANCING_TYPE: Conventional|Islamic|Takaful|Mudarabah|Unit Linked|
+  Hybrid (Bonus Based and Unit Linked)|N/A.
+  BNK loan products with KIBOR markup → "Conventional" (never Unit Linked/Hybrid)
 - TARGET_GOAL: standardized short term like Protection, Savings, Education,
-  Health, Marriage
+  Health, Marriage, Solar Energy Financing, Green Energy Financing,
+  Vehicle Financing, Housing, SME Financing, Business Financing
 - CHANNEL: "Bank Branch" if applicable
 - Numeric fields (MIN_AGE, MAX_AGE, MIN_TERM_YEARS, MAX_TERM_YEARS,
   FREE_LOOK_PERIOD_DAYS, IS_BANK_OFFERED): integers only, no units, no .0.
   MIN_BALANCE/MIN_INCOME/MIN_INCOME_USD/MIN_INVESTMENT/MIN_CONTRIBUTION:
   a single integer, OR the full tiered table text if genuinely tiered.
+- EQUITY_REQUIREMENT: short percentage only, e.g. "20%" not "Minimum 20%"
 - TENURE_OPTIONS: plan duration choices only, NOT payment frequency
-- PREMIUM_PAYMENT_FREQUENCY: how customer pays (Annual/Quarterly/etc.) or "N/A"
+- PREMIUM_PAYMENT_FREQUENCY: how customer pays premiums (Annual/Quarterly/etc.)
+  or "N/A" for loan/deposit products
+- PROVIDER_NAME: for BNK products, bank name only; never an insurance company
+- COVERAGE_AMOUNT: for BNK products, "N/A" unless specific PKR/USD cover
+  amounts are stated; insurance RATES (% p.a.) are NOT coverage amounts
 - Use " | " as the separator for every multi-value field (never semicolons)
-- SPECIAL_CONDITIONS: max 250 chars
+- SPECIAL_CONDITIONS: max 250 chars; only conditions from THIS document
 - SOURCE_FILE_PRODUCT: filename only, no path
 - No markdown fences, no explanations outside the JSON
 
@@ -1288,22 +1427,29 @@ VALIDATION RULES — check each and FIX if violated:
    WRONG: "JUBILEE KAMIL TAKAFUL SAVINGS PLAN"
    CORRECT: "Jubilee Kamil Takaful Savings Plan"
 
-2. PLAN_TYPE: For any insurer/takaful-underwritten product, does it contain
-   the word "Insurance" (optionally with a short qualifier like
+2. PLAN_TYPE: For any insurer/takaful-underwritten product (LEAD_MARKER="IBG"),
+   does it contain the word "Insurance" (optionally with a short qualifier like
    "Savings & Protection Insurance" or "Insurance (Hospitalization)")?
-   For a bank-only product, is it one of Deposit|Loan|Card|Service|
-   Loyalty|Investment|Savings?
+   For a bank-direct product (LEAD_MARKER="BNK"), is it one of
+   Deposit|Loan|Card|Service|Loyalty|Investment|Savings (never "Insurance")?
 
-3. TARGET_GOAL: Standardized short value like "Protection", "Savings", "Education", "Health", "Marriage"
+3. TARGET_GOAL: Standardized short value like "Protection", "Savings",
+   "Education", "Health", "Marriage", "Solar Energy Financing",
+   "Green Energy Financing", "Vehicle Financing", "Housing", "SME Financing",
+   "Business Financing", "Personal Financing".
 
 4. CUSTOMER_TYPE: Are all values from Salaried|Self-Employed|SME|Corporate|
    Retail|Government, joined by " | " if more than one? No free text/bank names.
+   Extract ONLY types explicitly named in the document. "Individuals" maps to
+   "Salaried | Self-Employed". Do NOT add Corporate/Retail unless those exact
+   category words appear in the document.
 
 5. CUSTOMER_SEGMENT/TARGET_SEGMENT/SEGMENT_TIER: Clean values or N/A
 
 6. CHANNEL: "Bank Branch" if branches mentioned
 
-7. ELIGIBILITY_TYPE: Concise summary including age and CNIC rules
+7. ELIGIBILITY_TYPE: Concise summary including age, income, and CNIC rules
+   for all customer segments mentioned.
 
 8. GENDER: Is it exactly one of Male|Female|All|N/A?
    "All" if the product is offered broadly with no gender restriction and
@@ -1316,6 +1462,7 @@ VALIDATION RULES — check each and FIX if violated:
 
 10. DEPOSIT_PROFIT_TYPE / DEPOSIT_PROFIT_FREQUENCY: Unit-linked plans → both "N/A"
     Health/protection plans (no savings) → both "N/A"
+    Loan products → both "N/A"
     Do NOT set "At Maturity" for unit-linked plans.
 
 11. TENURE_OPTIONS: Is it ONLY plan duration choices (e.g. "5 | 10 | 15 | 20 years")?
@@ -1323,6 +1470,7 @@ VALIDATION RULES — check each and FIX if violated:
     If no distinct plan duration menu → "N/A"
 
 12. PREMIUM_PAYMENT_FREQUENCY: Is it the payment frequency (Annual/Semi-Annual/Quarterly/Monthly)?
+    For loan or deposit products → "N/A" (repayment schedule ≠ premium payment).
     Example: "Annual | Semi-Annual | Quarterly" or "N/A"
 
 13. Are all multi-value fields separated by " | " (never semicolons, never
@@ -1343,11 +1491,12 @@ VALIDATION RULES — check each and FIX if violated:
 
 16. MIN_CONTRIBUTION vs PRICING_RATE: tiered premium/contribution amounts
     belong in MIN_CONTRIBUTION, not PRICING_RATE. PRICING_RATE is reserved
-    for interest/profit/markup rates.
+    for interest/profit/markup rates. MIN_CONTRIBUTION="N/A" for loan products.
 
 17. OPTIONAL_RIDERS vs KEY_BENEFITS: OPTIONAL_RIDERS should only contain
     items the document explicitly labels as optional add-ons, not the
     product's core/default benefits (which belong in KEY_BENEFITS).
+    Loan products → OPTIONAL_RIDERS="N/A".
 
 18. SEGMENT_TIER / SERVICE_TYPE / CUSTOMER_SEGMENT / TARGET_SEGMENT:
     "N/A" unless explicitly stated in the document. Do NOT derive from other fields.
@@ -1368,6 +1517,45 @@ VALIDATION RULES — check each and FIX if violated:
     PRICING_RATE, FEES_AND_CHARGES, KEY_BENEFITS, OPTIONAL_RIDERS,
     FREE_LOOK_PERIOD_DAYS, REQUIRED_DOCUMENTS, CLAIMS_SERVICE_CONTACT,
     KEY_EXCLUSIONS, TAX_ZAKAT_TREATMENT, PREMIUM_PAYMENT_FREQUENCY
+
+21. LEAD_MARKER + PLAN_TYPE consistency:
+    If LEAD_MARKER="BNK" → PLAN_TYPE must NOT contain "Insurance". Fix to the
+    correct bank-only value: Loan|Deposit|Card|Service|Loyalty|Investment|Savings.
+    If LEAD_MARKER="IBG" → PLAN_TYPE MUST contain "Insurance".
+
+22. LEAD_MARKER + FINANCING_TYPE consistency:
+    If LEAD_MARKER="BNK" and the document has no fund/unit-allocation/PIA language:
+    FINANCING_TYPE must be Conventional|Islamic|N/A — never "Unit Linked" or
+    "Hybrid (Bonus Based and Unit Linked)". A bank loan with KIBOR-based markup
+    and no Shariah/Islamic wording → "Conventional".
+
+23. LEAD_MARKER + PROVIDER_NAME:
+    If LEAD_MARKER="BNK": PROVIDER_NAME must be the bank name only (e.g.
+    "Bank Alfalah Limited"). It must NOT contain an insurance or takaful
+    company name. Fix to the bank name found in the document.
+
+24. LEAD_MARKER + COVERAGE_AMOUNT:
+    If LEAD_MARKER="BNK": COVERAGE_AMOUNT="N/A" unless the document explicitly
+    states rupee or dollar sum-assured amounts for a bundled insurance component.
+    Insurance RATES such as "0.49% p.a." or "0.5% p.a." are NOT coverage
+    amounts — they belong in PRICING_RATE or FEES_AND_CHARGES. Fix accordingly.
+
+25. LEAD_MARKER + insurance-specific fields:
+    If LEAD_MARKER="BNK" and the product is a loan/deposit/card with no
+    insurance plan structure: the following should all be "N/A" unless the
+    document explicitly provides these values for a bundled insurance component:
+    FREE_LOOK_PERIOD_DAYS, OPTIONAL_RIDERS, PREMIUM_PAYMENT_FREQUENCY,
+    MIN_CONTRIBUTION.
+
+26. EQUITY_REQUIREMENT: Must be a short percentage (e.g. "20%"), not a verbose
+    phrase. Strip "Minimum", "Min.", "At least" prefixes and parenthetical
+    qualifiers. WRONG: "Minimum 20% (Salaried & Business)"  CORRECT: "20%"
+
+27. MIN_INCOME for multi-segment products: If the document gives different
+    income thresholds for different segments (e.g. Salaried 50,000 and
+    Self-Employed 100,000), use the tiered format:
+    "Salaried:50000 | Self-Employed:100000"
+    Do NOT use only the lower segment's income and discard the others.
 
 Refer to the system prompt above for full field definitions and all rules.
 
