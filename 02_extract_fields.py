@@ -235,158 +235,6 @@ def load_system_prompt(prompt_file: str = "EXTRACTION_SYSTEM_PROMPT.txt") -> str
 # Load the system prompt at module level
 SYSTEM_PROMPT = load_system_prompt()
 
-# ============================================================================
-# NEW FUNCTION 1: Smart LEAD_MARKER Correction Based on Product Signals
-# ============================================================================
-# INSERT THIS BEFORE normalize_record() function (around line 1110)
-
-def _infer_and_correct_lead_marker(normalized: dict) -> dict:
-    """
-    Smart inference and correction of LEAD_MARKER based on explicit content signals.
-    
-    Corrects common misclassifications:
-    - A loan product (contains "term finance", "loan", "KIBOR", markup rates) 
-      should be BNK, not IBG
-    - An insurance product (contains "insurance", "policy", "premium", "coverage plan")
-      should be IBG, not BNK
-    
-    Priority: Trust the extracted LEAD_MARKER FIRST (the model may have it right).
-    Only correct if product description + field content contradict it.
-    """
-    if not isinstance(normalized, dict):
-        return normalized
-    
-    desc = (normalized.get("PRODUCT_DESCRIPTION", "") or "").lower()
-    plan = (normalized.get("PLAN_TYPE", "") or "").lower()
-    prov = (normalized.get("PROVIDER_NAME", "") or "").lower()
-    pricing = (normalized.get("PRICING_RATE", "") or "").lower()
-    
-    # Signals that indicate a LOAN product (should be BNK)
-    loan_signals = {
-        "term finance", "loan", "credit", "financing", "overdraft", 
-        "markup", "kibor", "murabaha", "musharaka", "ijarah",
-        "working capital", "auto", "housing", "vehicle", "sme",
-        "business loan", "term facility", "credit facility"
-    }
-    
-    # Signals that indicate an INSURANCE product (should be IBG)
-    insurance_signals = {
-        "insurance", "protection", "plan", "takaful", "endowment",
-        "unit-linked", "unit linked", "investment-linked", "cover",
-        "policy", "premium", "rider", "hospitalization", "death benefit",
-        "claims", "underwritten"
-    }
-    
-    combined_text = f"{desc} {plan} {prov} {pricing}".lower()
-    
-    loan_score = sum(1 for sig in loan_signals if sig in combined_text)
-    insurance_score = sum(1 for sig in insurance_signals if sig in combined_text)
-    
-    current_marker = normalized.get("LEAD_MARKER", "").strip().upper()
-    
-    # Only correct if the signals are VERY clear and contradict the current marker
-    if loan_score >= 2 and current_marker == "IBG":
-        # This is clearly a loan product but marked as insurance — correct it
-        normalized["LEAD_MARKER"] = "BNK"
-        # Cascade corrections for insurance-only fields per G12 rule
-        for field in ["COVERAGE_AMOUNT", "FREE_LOOK_PERIOD_DAYS", 
-                      "OPTIONAL_RIDERS", "PREMIUM_PAYMENT_FREQUENCY", 
-                      "MIN_CONTRIBUTION", "KEY_EXCLUSIONS", "CLAIMS_SERVICE_CONTACT"]:
-            if field in normalized:
-                normalized[field] = "N/A"
-    
-    elif insurance_score >= 2 and current_marker == "BNK":
-        # This is clearly an insurance product but marked as bank-only — correct it
-        normalized["LEAD_MARKER"] = "IBG"
-        # Cascade corrections for loan-only fields
-        for field in ["LOAN_AMOUNT_RANGE", "COLLATERAL_TYPE", "EQUITY_REQUIREMENT", "DBR_LIMIT"]:
-            if field in normalized:
-                normalized[field] = "N/A"
-    
-    return normalized
-
-
-# ============================================================================
-# NEW FUNCTION 2: Normalize EMPLOYMENT_TYPE to Short Form
-# ============================================================================
-# INSERT THIS BEFORE normalize_record() function (around line 1115)
-
-def _normalize_employment_type(value: str) -> str:
-    """
-    Normalize EMPLOYMENT_TYPE to a short form.
-    
-    Common mistakes:
-    - Extracting full target-market paragraphs (100+ chars)
-    - Mixing employment types with other eligibility criteria
-    
-    Short forms allowed:
-    - "Salaried" (or "Permanent", "Contractual" as modifiers)
-    - "Self-Employed" (or "SEP", "SEB", "Proprietor")
-    - "SME" (or "Business Owner")
-    - Multiple types: "Salaried | Self-Employed"
-    
-    Strategy: If value is > 100 chars, it's probably a full paragraph — extract
-    only the employment-type keywords from it.
-    """
-    if not value or value == "N/A":
-        return "N/A"
-    
-    stripped = value.strip()
-    if not stripped or len(stripped) == 0:
-        return "N/A"
-    
-    # If the value is already short (< 60 chars), normalize the short forms
-    if len(stripped) < 60:
-        normalized_map = {
-            "permanent": "Salaried",
-            "salaried": "Salaried",
-            "contractual": "Contractual",
-            "self-employed": "Self-Employed",
-            "self employed": "Self-Employed",
-            "sep": "Self-Employed",
-            "seb": "Self-Employed",
-            "proprietor": "Self-Employed",
-            "business": "SME",
-            "sme": "SME",
-            "corporate": "Corporate",
-            "retail": "Retail",
-            "government": "Government",
-        }
-        lower = stripped.lower()
-        for key, norm in normalized_map.items():
-            if key in lower:
-                return norm
-        return stripped
-    
-    # Value is >= 60 chars — likely a full paragraph
-    # Extract employment-type keywords
-    lower = stripped.lower()
-    
-    keywords = {
-        "salaried": "Salaried",
-        "permanent": "Salaried",
-        "self-employed": "Self-Employed",
-        "self employed": "Self-Employed",
-        "sep": "Self-Employed",
-        "business": "SME",
-        "sme": "SME",
-        "proprietor": "Self-Employed",
-        "partnership": "Self-Employed",
-        "corporate": "Corporate",
-        "contractual": "Contractual",
-    }
-    
-    found = []
-    for key, norm in keywords.items():
-        if key in lower and norm not in found:
-            found.append(norm)
-    
-    if found:
-        return " | ".join(found)
-    
-    # Fallback: truncate to 50 chars if still unrecognized
-    return truncate_to_boundary(stripped, 50)
-
 
 # ============================================================================
 # File reading functions
@@ -1036,11 +884,6 @@ def _normalize_plan_type(value: str) -> str:
     return stripped[:30]
 
 
-# ============================================================================
-# UPDATED FUNCTION 3: Strengthen _normalize_financing_type for Loan Detection
-# ============================================================================
-# REPLACE the existing _normalize_financing_type function (around line 887)
-
 def _normalize_financing_type(value: str) -> str:
     """
     Normalize FINANCING_TYPE to a canonical form.
@@ -1101,6 +944,7 @@ def _normalize_financing_type(value: str) -> str:
         return stripped
 
     return stripped
+
 
 def _normalize_target_goal(value: str) -> str:
     """Normalize TARGET_GOAL to corrected style.
@@ -1247,10 +1091,6 @@ def _normalize_equity_requirement(value: str) -> str:
         return num_match.group(1) + "%"
     return truncate_to_boundary(cleaned, 20)
 
-# ============================================================================
-# UPDATED FUNCTION 4: Enhanced _crossfield_validate for Loan vs Insurance
-# ============================================================================
-# REPLACE the existing _crossfield_validate function (around line 1072)
 
 def _crossfield_validate(normalized: dict) -> dict:
     """
@@ -1317,35 +1157,148 @@ def _crossfield_validate(normalized: dict) -> dict:
     return normalized
 
 
-# ============================================================================
-# UPDATED normalize_record() FUNCTION
-# ============================================================================
-# REPLACE this section in the existing normalize_record() function.
-# Find the section around line 1200 where CHANNEL is normalized and add the
-# EMPLOYMENT_TYPE normalization there:
-
-# After the CHANNEL normalization (around line 1205), add:
-        # ----------------------------------------------------------------
-        # EMPLOYMENT_TYPE normalization
-        # ----------------------------------------------------------------
-        if col == "EMPLOYMENT_TYPE" and isinstance(value, str):
-            value = _normalize_employment_type(value)
-
-
-# Then, at the END of normalize_record() function (around line 1320), 
-# REPLACE this:
-#    normalized = _crossfield_validate(normalized)
-#    return normalized
-
-# With this:
-    # Cross-field validation
-    normalized = _crossfield_validate(normalized)
+def _infer_and_correct_lead_marker(normalized: dict) -> dict:
+    """
+    Smart inference and correction of LEAD_MARKER based on explicit content signals.
     
-    # CRITICAL FIX: Infer and correct LEAD_MARKER based on product signals
-    # This catches loans incorrectly classified as insurance products
-    normalized = _infer_and_correct_lead_marker(normalized)
+    Corrects common misclassifications:
+    - A loan product (contains "term finance", "loan", "KIBOR", markup rates) 
+      should be BNK, not IBG
+    - An insurance product (contains "insurance", "policy", "premium", "coverage plan")
+      should be IBG, not BNK
+    
+    Priority: Trust the extracted LEAD_MARKER FIRST (the model may have it right).
+    Only correct if product description + field content contradict it.
+    """
+    if not isinstance(normalized, dict):
+        return normalized
+    
+    desc = (normalized.get("PRODUCT_DESCRIPTION", "") or "").lower()
+    plan = (normalized.get("PLAN_TYPE", "") or "").lower()
+    prov = (normalized.get("PROVIDER_NAME", "") or "").lower()
+    pricing = (normalized.get("PRICING_RATE", "") or "").lower()
+    
+    # Signals that indicate a LOAN product (should be BNK)
+    loan_signals = {
+        "term finance", "loan", "credit", "financing", "overdraft", 
+        "markup", "kibor", "murabaha", "musharaka", "ijarah",
+        "working capital", "auto", "housing", "vehicle", "sme",
+        "business loan", "term facility", "credit facility"
+    }
+    
+    # Signals that indicate an INSURANCE product (should be IBG)
+    insurance_signals = {
+        "insurance", "protection", "plan", "takaful", "endowment",
+        "unit-linked", "unit linked", "investment-linked", "cover",
+        "policy", "premium", "rider", "hospitalization", "death benefit",
+        "claims", "underwritten"
+    }
+    
+    combined_text = f"{desc} {plan} {prov} {pricing}".lower()
+    
+    loan_score = sum(1 for sig in loan_signals if sig in combined_text)
+    insurance_score = sum(1 for sig in insurance_signals if sig in combined_text)
+    
+    current_marker = normalized.get("LEAD_MARKER", "").strip().upper()
+    
+    # Only correct if the signals are VERY clear and contradict the current marker
+    if loan_score >= 2 and current_marker == "IBG":
+        # This is clearly a loan product but marked as insurance — correct it
+        normalized["LEAD_MARKER"] = "BNK"
+        # Cascade corrections for insurance-only fields per G12 rule
+        for field in ["COVERAGE_AMOUNT", "FREE_LOOK_PERIOD_DAYS", 
+                      "OPTIONAL_RIDERS", "PREMIUM_PAYMENT_FREQUENCY", 
+                      "MIN_CONTRIBUTION", "KEY_EXCLUSIONS", "CLAIMS_SERVICE_CONTACT"]:
+            if field in normalized:
+                normalized[field] = "N/A"
+    
+    elif insurance_score >= 2 and current_marker == "BNK":
+        # This is clearly an insurance product but marked as bank-only — correct it
+        normalized["LEAD_MARKER"] = "IBG"
+        # Cascade corrections for loan-only fields
+        for field in ["LOAN_AMOUNT_RANGE", "COLLATERAL_TYPE", "EQUITY_REQUIREMENT", "DBR_LIMIT"]:
+            if field in normalized:
+                normalized[field] = "N/A"
     
     return normalized
+
+
+def _normalize_employment_type(value: str) -> str:
+    """
+    Normalize EMPLOYMENT_TYPE to a short form.
+    
+    Common mistakes:
+    - Extracting full target-market paragraphs (100+ chars)
+    - Mixing employment types with other eligibility criteria
+    
+    Short forms allowed:
+    - "Salaried" (or "Permanent", "Contractual" as modifiers)
+    - "Self-Employed" (or "SEP", "SEB", "Proprietor")
+    - "SME" (or "Business Owner")
+    - Multiple types: "Salaried | Self-Employed"
+    
+    Strategy: If value is > 100 chars, it's probably a full paragraph — extract
+    only the employment-type keywords from it.
+    """
+    if not value or value == "N/A":
+        return "N/A"
+    
+    stripped = value.strip()
+    if not stripped or len(stripped) == 0:
+        return "N/A"
+    
+    # If the value is already short (< 60 chars), normalize the short forms
+    if len(stripped) < 60:
+        normalized_map = {
+            "permanent": "Salaried",
+            "salaried": "Salaried",
+            "contractual": "Contractual",
+            "self-employed": "Self-Employed",
+            "self employed": "Self-Employed",
+            "sep": "Self-Employed",
+            "seb": "Self-Employed",
+            "proprietor": "Self-Employed",
+            "business": "SME",
+            "sme": "SME",
+            "corporate": "Corporate",
+            "retail": "Retail",
+            "government": "Government",
+        }
+        lower = stripped.lower()
+        for key, norm in normalized_map.items():
+            if key in lower:
+                return norm
+        return stripped
+    
+    # Value is >= 60 chars — likely a full paragraph
+    # Extract employment-type keywords
+    lower = stripped.lower()
+    
+    keywords = {
+        "salaried": "Salaried",
+        "permanent": "Salaried",
+        "self-employed": "Self-Employed",
+        "self employed": "Self-Employed",
+        "sep": "Self-Employed",
+        "business": "SME",
+        "sme": "SME",
+        "proprietor": "Self-Employed",
+        "partnership": "Self-Employed",
+        "corporate": "Corporate",
+        "contractual": "Contractual",
+    }
+    
+    found = []
+    for key, norm in keywords.items():
+        if key in lower and norm not in found:
+            found.append(norm)
+    
+    if found:
+        return " | ".join(found)
+    
+    # Fallback: truncate to 50 chars if still unrecognized
+    return truncate_to_boundary(stripped, 50)
+
 
 def normalize_record(record, entry):
     """
@@ -1442,6 +1395,12 @@ def normalize_record(record, entry):
             value = _normalize_channel(value)
 
         # ----------------------------------------------------------------
+        # EMPLOYMENT_TYPE normalization
+        # ----------------------------------------------------------------
+        if col == "EMPLOYMENT_TYPE" and isinstance(value, str):
+            value = _normalize_employment_type(value)
+
+        # ----------------------------------------------------------------
         # ELIGIBILITY_TYPE normalization
         # ----------------------------------------------------------------
         if col == "ELIGIBILITY_TYPE" and isinstance(value, str):
@@ -1527,7 +1486,11 @@ def normalize_record(record, entry):
     # Cross-field consistency: must run after all per-field normalizations
     # ----------------------------------------------------------------
     normalized = _crossfield_validate(normalized)
-
+    
+    # CRITICAL FIX: Infer and correct LEAD_MARKER based on product signals
+    # This catches loans incorrectly classified as insurance products
+    normalized = _infer_and_correct_lead_marker(normalized)
+    
     return normalized
 
 
