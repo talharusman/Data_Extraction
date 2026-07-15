@@ -37,18 +37,9 @@ G6. Extract each field from THIS product's own section only. Never copy
     values across products in the same document, and never let a similarly
     named product from general knowledge influence any field — the given
     text is the ONLY source of truth.
-G7. CAREFUL with fields where the text may contain the information without
-    using the exact field name as a label:
-    CUSTOMER_SEGMENT → extract if the document mentions who the product is
-    for (e.g. "for all Bank X customers" → "All Bank X Customers").
-    Only "N/A" if no audience/customer info is given at all.
-    TARGET_SEGMENT → extract if the document states or implies the product's
-    planning purpose (e.g. "protection planning", "education planning").
-    Only "N/A" if no planning/positioning context is given.
-    SEGMENT_TIER → extract if the document names any tiers, levels, or
-    plan variants (e.g. Bronze/Silver/Gold, Plan A/Plan B). Only "N/A"
-    if no tier/variant names appear at all.
-    SERVICE_TYPE, CURRENCY_TYPE → "N/A" unless explicitly stated.
+G7. DO NOT DERIVE fields that aren't explicitly supported by the text:
+    CUSTOMER_SEGMENT, TARGET_SEGMENT, SEGMENT_TIER, SERVICE_TYPE,
+    CURRENCY_TYPE → "N/A" unless explicitly stated.
     Exception — GENDER: if the document does not restrict the product to
     one gender and it is offered broadly to bank customers, GENDER="All".
     Use "N/A" only when the document gives no eligibility/customer
@@ -203,36 +194,6 @@ TAX_ZAKAT_TREATMENT: max100. THIS product section only. Else "N/A".
 PREMIUM_PAYMENT_FREQUENCY: max50. How the customer PAYS, separated by " | "
   if multiple, e.g. "Annual | Semi-Annual | Quarterly". Else "N/A".
 
-===DISAMBIGUATION RULES (MUST READ)===
-D1. MIN_CONTRIBUTION vs MIN_INVESTMENT:
-  MIN_CONTRIBUTION = recurring premium/contribution the customer pays
-  periodically. Keywords: "contribution", "premium", "installment",
-  "takaful contribution". MIN_INVESTMENT = one-time lump-sum investment
-  or placement. Keywords: "investment", "placement", "deposit".
-  If it's called a "contribution" or "premium", → MIN_CONTRIBUTION.
-  For LEAD_MARKER="IBG" products, default to MIN_CONTRIBUTION if unsure.
-D2. TENURE_OPTIONS vs PREMIUM_PAYMENT_FREQUENCY:
-  TENURE_OPTIONS = plan DURATION choices (how many years). E.g. "5 | 10
-  | 15 | 20 years". PREMIUM_PAYMENT_FREQUENCY = how often the customer
-  PAYS. E.g. "Annual | Semi-Annual | Quarterly".
-  "Annual, Semi-Annual, Quarterly" is ALWAYS payment frequency → put in
-  PREMIUM_PAYMENT_FREQUENCY, NEVER in TENURE_OPTIONS.
-  "5, 10, 15, 20 years" is ALWAYS plan duration → put in TENURE_OPTIONS.
-D3. TARGET_GOAL vs TARGET_SEGMENT:
-  TARGET_GOAL = single-word PURPOSE (Protection, Savings, Education,
-  Health). TARGET_SEGMENT = market POSITIONING phrase (Protection
-  Planning, Education Planning, Savings Planning).
-D4. CUSTOMER_TYPE vs CUSTOMER_SEGMENT:
-  CUSTOMER_TYPE = ONLY enum: Salaried|Self-Employed|SME|Corporate|
-  Retail|Government. CUSTOMER_SEGMENT = free-text audience (e.g. "All
-  Bank Alfalah Customers", "NRP", "Mass Market"). Never put free text
-  or bank names in CUSTOMER_TYPE.
-D5. KEY_BENEFITS vs OPTIONAL_RIDERS:
-  KEY_BENEFITS = included by default. OPTIONAL_RIDERS = requires extra
-  payment or explicit opt-in (only if document says "optional",
-  "add-on", "rider", "supplementary"). If not distinguished →
-  KEY_BENEFITS only, OPTIONAL_RIDERS = "N/A".
-
 ===WORKED EXAMPLES (ground-truth style)===
 Accident/theft protection plan underwritten by an insurer:
   PLAN_TYPE: "Insurance" | LEAD_MARKER: "IBG"
@@ -280,11 +241,3 @@ Hospitalization plan:
 × Using ";" as a list separator anywhere (use " | ")
 × Skipping trailing products in multi-product documents
 × Filling character budget with narrative filler instead of facts
-× "Annual | Semi-Annual | Quarterly" in TENURE_OPTIONS (that is payment
-  frequency → PREMIUM_PAYMENT_FREQUENCY)
-× Premium/contribution amounts in MIN_INVESTMENT (those are contributions
-  → MIN_CONTRIBUTION)
-× TARGET_SEGMENT value in TARGET_GOAL or vice versa
-× Free text or bank names in CUSTOMER_TYPE (enum values only)
-× Core product benefits in OPTIONAL_RIDERS (only explicitly optional
-  add-ons belong there)
