@@ -235,6 +235,158 @@ def load_system_prompt(prompt_file: str = "EXTRACTION_SYSTEM_PROMPT.txt") -> str
 # Load the system prompt at module level
 SYSTEM_PROMPT = load_system_prompt()
 
+# ============================================================================
+# NEW FUNCTION 1: Smart LEAD_MARKER Correction Based on Product Signals
+# ============================================================================
+# INSERT THIS BEFORE normalize_record() function (around line 1110)
+
+def _infer_and_correct_lead_marker(normalized: dict) -> dict:
+    """
+    Smart inference and correction of LEAD_MARKER based on explicit content signals.
+    
+    Corrects common misclassifications:
+    - A loan product (contains "term finance", "loan", "KIBOR", markup rates) 
+      should be BNK, not IBG
+    - An insurance product (contains "insurance", "policy", "premium", "coverage plan")
+      should be IBG, not BNK
+    
+    Priority: Trust the extracted LEAD_MARKER FIRST (the model may have it right).
+    Only correct if product description + field content contradict it.
+    """
+    if not isinstance(normalized, dict):
+        return normalized
+    
+    desc = (normalized.get("PRODUCT_DESCRIPTION", "") or "").lower()
+    plan = (normalized.get("PLAN_TYPE", "") or "").lower()
+    prov = (normalized.get("PROVIDER_NAME", "") or "").lower()
+    pricing = (normalized.get("PRICING_RATE", "") or "").lower()
+    
+    # Signals that indicate a LOAN product (should be BNK)
+    loan_signals = {
+        "term finance", "loan", "credit", "financing", "overdraft", 
+        "markup", "kibor", "murabaha", "musharaka", "ijarah",
+        "working capital", "auto", "housing", "vehicle", "sme",
+        "business loan", "term facility", "credit facility"
+    }
+    
+    # Signals that indicate an INSURANCE product (should be IBG)
+    insurance_signals = {
+        "insurance", "protection", "plan", "takaful", "endowment",
+        "unit-linked", "unit linked", "investment-linked", "cover",
+        "policy", "premium", "rider", "hospitalization", "death benefit",
+        "claims", "underwritten"
+    }
+    
+    combined_text = f"{desc} {plan} {prov} {pricing}".lower()
+    
+    loan_score = sum(1 for sig in loan_signals if sig in combined_text)
+    insurance_score = sum(1 for sig in insurance_signals if sig in combined_text)
+    
+    current_marker = normalized.get("LEAD_MARKER", "").strip().upper()
+    
+    # Only correct if the signals are VERY clear and contradict the current marker
+    if loan_score >= 2 and current_marker == "IBG":
+        # This is clearly a loan product but marked as insurance — correct it
+        normalized["LEAD_MARKER"] = "BNK"
+        # Cascade corrections for insurance-only fields per G12 rule
+        for field in ["COVERAGE_AMOUNT", "FREE_LOOK_PERIOD_DAYS", 
+                      "OPTIONAL_RIDERS", "PREMIUM_PAYMENT_FREQUENCY", 
+                      "MIN_CONTRIBUTION", "KEY_EXCLUSIONS", "CLAIMS_SERVICE_CONTACT"]:
+            if field in normalized:
+                normalized[field] = "N/A"
+    
+    elif insurance_score >= 2 and current_marker == "BNK":
+        # This is clearly an insurance product but marked as bank-only — correct it
+        normalized["LEAD_MARKER"] = "IBG"
+        # Cascade corrections for loan-only fields
+        for field in ["LOAN_AMOUNT_RANGE", "COLLATERAL_TYPE", "EQUITY_REQUIREMENT", "DBR_LIMIT"]:
+            if field in normalized:
+                normalized[field] = "N/A"
+    
+    return normalized
+
+
+# ============================================================================
+# NEW FUNCTION 2: Normalize EMPLOYMENT_TYPE to Short Form
+# ============================================================================
+# INSERT THIS BEFORE normalize_record() function (around line 1115)
+
+def _normalize_employment_type(value: str) -> str:
+    """
+    Normalize EMPLOYMENT_TYPE to a short form.
+    
+    Common mistakes:
+    - Extracting full target-market paragraphs (100+ chars)
+    - Mixing employment types with other eligibility criteria
+    
+    Short forms allowed:
+    - "Salaried" (or "Permanent", "Contractual" as modifiers)
+    - "Self-Employed" (or "SEP", "SEB", "Proprietor")
+    - "SME" (or "Business Owner")
+    - Multiple types: "Salaried | Self-Employed"
+    
+    Strategy: If value is > 100 chars, it's probably a full paragraph — extract
+    only the employment-type keywords from it.
+    """
+    if not value or value == "N/A":
+        return "N/A"
+    
+    stripped = value.strip()
+    if not stripped or len(stripped) == 0:
+        return "N/A"
+    
+    # If the value is already short (< 60 chars), normalize the short forms
+    if len(stripped) < 60:
+        normalized_map = {
+            "permanent": "Salaried",
+            "salaried": "Salaried",
+            "contractual": "Contractual",
+            "self-employed": "Self-Employed",
+            "self employed": "Self-Employed",
+            "sep": "Self-Employed",
+            "seb": "Self-Employed",
+            "proprietor": "Self-Employed",
+            "business": "SME",
+            "sme": "SME",
+            "corporate": "Corporate",
+            "retail": "Retail",
+            "government": "Government",
+        }
+        lower = stripped.lower()
+        for key, norm in normalized_map.items():
+            if key in lower:
+                return norm
+        return stripped
+    
+    # Value is >= 60 chars — likely a full paragraph
+    # Extract employment-type keywords
+    lower = stripped.lower()
+    
+    keywords = {
+        "salaried": "Salaried",
+        "permanent": "Salaried",
+        "self-employed": "Self-Employed",
+        "self employed": "Self-Employed",
+        "sep": "Self-Employed",
+        "business": "SME",
+        "sme": "SME",
+        "proprietor": "Self-Employed",
+        "partnership": "Self-Employed",
+        "corporate": "Corporate",
+        "contractual": "Contractual",
+    }
+    
+    found = []
+    for key, norm in keywords.items():
+        if key in lower and norm not in found:
+            found.append(norm)
+    
+    if found:
+        return " | ".join(found)
+    
+    # Fallback: truncate to 50 chars if still unrecognized
+    return truncate_to_boundary(stripped, 50)
+
 
 # ============================================================================
 # File reading functions
@@ -884,23 +1036,52 @@ def _normalize_plan_type(value: str) -> str:
     return stripped[:30]
 
 
+# ============================================================================
+# UPDATED FUNCTION 3: Strengthen _normalize_financing_type for Loan Detection
+# ============================================================================
+# REPLACE the existing _normalize_financing_type function (around line 887)
+
 def _normalize_financing_type(value: str) -> str:
     """
     Normalize FINANCING_TYPE to a canonical form.
-    Added Unit Linked and Hybrid (Bonus Based and Unit Linked) per corrected dataset.
+    
+    CRITICAL: Do NOT set to Unit Linked or Hybrid for loan products.
+    Bank loans with markup/KIBOR rates are ALWAYS Conventional or Islamic,
+    never Unit Linked or Hybrid (which are insurance investment structures).
     """
     stripped = value.strip()
+    if not stripped or stripped == "N/A":
+        return "N/A"
+    
     lower = stripped.lower()
 
-    # Hybrid check first (most specific)
+    # Check for clear loan signals — if found, override to Conventional/Islamic
+    # These keywords indicate a bank loan, not an insurance investment structure
+    loan_signals = {
+        "markup", "kibor", "murabaha", "musharaka", "ijarah",
+        "term loan", "credit facility", "financing facility", 
+        "overdraft", "conventional bank", "islamic bank"
+    }
+    
+    if any(sig in lower for sig in loan_signals):
+        # This is a loan product, not insurance
+        if any(word in lower for word in ["islamic", "murabaha", "musharaka", "ijarah", "shariah"]):
+            return "Islamic"
+        else:
+            return "Conventional"
+
+    # Hybrid check (insurance-only structures)
     if "hybrid" in lower or ("bonus" in lower and "unit" in lower):
         return "Hybrid (Bonus Based and Unit Linked)"
 
-    # Unit Linked
-    if "unit linked" in lower or "unit-linked" in lower:
+    # Unit Linked (insurance-only)
+    if "unit linked" in lower or "unit-linked" in lower or "pia" in lower:
+        # But if loan signals are present, this is a mistake — use Conventional
+        if any(sig in lower for sig in loan_signals):
+            return "Conventional"
         return "Unit Linked"
 
-    # Known single-word canonicals
+    # Single-word canonicals
     canonical_map = {
         "conventional": "Conventional",
         "islamic": "Islamic",
@@ -911,17 +1092,15 @@ def _normalize_financing_type(value: str) -> str:
         if key in lower:
             return canonical
 
-    # Pass through if already in a known exact form
+    # Pass through if already in known form
     known_exact = {
         "Conventional", "Islamic", "Takaful", "Mudarabah",
-        "Unit Linked", "Hybrid (Bonus Based and Unit Linked)", DEFAULT_VALUE,
+        "Unit Linked", "Hybrid (Bonus Based and Unit Linked)", "N/A",
     }
     if stripped in known_exact:
         return stripped
 
-    # Unknown value — preserve as-is (don't silently discard it)
     return stripped
-
 
 def _normalize_target_goal(value: str) -> str:
     """Normalize TARGET_GOAL to corrected style.
@@ -1068,46 +1247,105 @@ def _normalize_equity_requirement(value: str) -> str:
         return num_match.group(1) + "%"
     return truncate_to_boundary(cleaned, 20)
 
+# ============================================================================
+# UPDATED FUNCTION 4: Enhanced _crossfield_validate for Loan vs Insurance
+# ============================================================================
+# REPLACE the existing _crossfield_validate function (around line 1072)
 
 def _crossfield_validate(normalized: dict) -> dict:
     """
     Apply cross-field consistency rules that cannot be enforced on a
     field-by-field basis during per-column normalization.
 
-    Called at the end of normalize_record after all per-field normalizations
-    have run. Rules:
-
-    1. BNK (bank-direct loan/deposit/card) products cannot have a
-       fund-based FINANCING_TYPE (Unit Linked or Hybrid), because those
-       structures are only valid for insurer-underwritten savings/investment
-       plans (IBG products). When a BNK product has been incorrectly
-       classified and FINANCING_TYPE has been set to a fund-based value, it
-       is reset to "Conventional" — the correct value for a bank-direct
-       loan with markup-based pricing and no fund/unit allocation language.
-
-    This function is intentionally narrow. It only auto-corrects cases where
-    the combination is logically impossible (a bank loan cannot be "Unit
-    Linked"). Fields that are merely unlikely for a BNK product (e.g.
-    COVERAGE_AMOUNT, FREE_LOOK_PERIOD_DAYS) are left for the validation
-    prompt pass to handle, since they can occasionally appear for bundled
-    insurance components within a loan product.
+    Called before other cross-field corrections to enforce basic consistency
+    between product type (LEAD_MARKER) and field-level values.
     """
-    lead = normalized.get("LEAD_MARKER", DEFAULT_VALUE)
-    if not isinstance(lead, str):
+    lead = normalized.get("LEAD_MARKER", "").strip().upper()
+    
+    if not isinstance(lead, str) or lead not in ("BNK", "IBG"):
         return normalized
 
-    if lead.strip().upper() == "BNK":
-        # BNK: Unit Linked and Hybrid are IBG-only financing structures.
-        # A bank-direct loan product with KIBOR-based or fixed markup is
-        # by definition Conventional unless Islamic/Shariah wording appears.
-        fin_type = normalized.get("FINANCING_TYPE", DEFAULT_VALUE)
+    # ================================================================
+    # BNK (Bank-Direct Loan/Deposit/Account/Card) Product Rules
+    # ================================================================
+    if lead == "BNK":
+        # Bank products cannot have fund-based financing (Unit Linked or Hybrid)
+        # These are insurance/investment structures, not bank lending structures
+        fin_type = normalized.get("FINANCING_TYPE", "")
         if isinstance(fin_type, str) and fin_type in (
             "Unit Linked", "Hybrid (Bonus Based and Unit Linked)"
         ):
             normalized["FINANCING_TYPE"] = "Conventional"
+        
+        # Insurance-specific fields MUST be N/A for bank products per G12
+        insurance_fields = {
+            "COVERAGE_AMOUNT",          # Insurance coverage amounts
+            "FREE_LOOK_PERIOD_DAYS",    # Insurance free-look period
+            "OPTIONAL_RIDERS",          # Insurance optional riders
+            "PREMIUM_PAYMENT_FREQUENCY", # Insurance premium payment mode
+            "MIN_CONTRIBUTION",         # Insurance premium minimum
+            "KEY_EXCLUSIONS",           # Insurance exclusions
+            "CLAIMS_SERVICE_CONTACT",   # Insurance claims contact
+        }
+        for field in insurance_fields:
+            if field in normalized:
+                current = normalized[field]
+                if isinstance(current, str) and current not in ("N/A", ""):
+                    # This is a bank product but has an insurance-specific field populated
+                    # Set it to N/A per spec
+                    normalized[field] = "N/A"
+
+    # ================================================================
+    # IBG (Insurance/Takaful-Underwritten Product) Rules
+    # ================================================================
+    elif lead == "IBG":
+        # Insurance products should not have loan-specific fields populated
+        # with actual values (these are for BNK products only)
+        loan_fields = {
+            "LOAN_AMOUNT_RANGE",    # Only loans have amount ranges
+            "COLLATERAL_TYPE",      # Only loans have collateral
+            "DBR_LIMIT",           # Only loans have debt ratios
+        }
+        for field in loan_fields:
+            if field in normalized:
+                current = normalized[field]
+                # Only clear if it looks like a loan field got populated by mistake
+                if isinstance(current, str) and current not in ("N/A", "") and \
+                   any(kw in current.lower() for kw in ["million", "thousand", "k", "m", "pkr", "usd", "million", "lending"]):
+                    normalized[field] = "N/A"
 
     return normalized
 
+
+# ============================================================================
+# UPDATED normalize_record() FUNCTION
+# ============================================================================
+# REPLACE this section in the existing normalize_record() function.
+# Find the section around line 1200 where CHANNEL is normalized and add the
+# EMPLOYMENT_TYPE normalization there:
+
+# After the CHANNEL normalization (around line 1205), add:
+        # ----------------------------------------------------------------
+        # EMPLOYMENT_TYPE normalization
+        # ----------------------------------------------------------------
+        if col == "EMPLOYMENT_TYPE" and isinstance(value, str):
+            value = _normalize_employment_type(value)
+
+
+# Then, at the END of normalize_record() function (around line 1320), 
+# REPLACE this:
+#    normalized = _crossfield_validate(normalized)
+#    return normalized
+
+# With this:
+    # Cross-field validation
+    normalized = _crossfield_validate(normalized)
+    
+    # CRITICAL FIX: Infer and correct LEAD_MARKER based on product signals
+    # This catches loans incorrectly classified as insurance products
+    normalized = _infer_and_correct_lead_marker(normalized)
+    
+    return normalized
 
 def normalize_record(record, entry):
     """

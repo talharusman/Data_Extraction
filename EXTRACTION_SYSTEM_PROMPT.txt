@@ -59,37 +59,60 @@ G11. Do not reuse boilerplate wording (e.g. "Sum Covered + PIA + Surplus",
     actually contains that concept. Different products in the same family
     can have very different structures — extract only what this section
     states.
+G12. PRODUCT TYPE CLASSIFICATION (Loan vs Insurance vs Deposit vs other):
+    Loan products: "term finance", "loan", "credit facility", "financing",
+    "overdraft", "home financing", "auto financing", "business loan" →
+    LEAD_MARKER="BNK", PLAN_TYPE="Loan", FINANCING_TYPE="Conventional"
+    or "Islamic" (NOT Unit Linked or Hybrid).
+    Insurance/Takaful products: "insurance", "protection", "plan",
+    "endowment", "investment-linked", "takaful" → LEAD_MARKER="IBG",
+    PLAN_TYPE contains "Insurance", FINANCING_TYPE per rules.
+    For ANY loan product, ALL insurance-specific fields must be "N/A":
+    FREE_LOOK_PERIOD_DAYS, OPTIONAL_RIDERS, PREMIUM_PAYMENT_FREQUENCY,
+    COVERAGE_AMOUNT, MIN_CONTRIBUTION, KEY_EXCLUSIONS.
 
 ===COLUMN RULES===
 PRODUCT_NAME: max50. Title Case from heading, this document only.
-LEAD_MARKER: "IBG"=insurance/takaful/protection/health underwritten by an
-  insurance or takaful company. "BNK"=account/card/loan/deposit sold
-  directly by the bank with no underwriting insurer.
+LEAD_MARKER: Classify FIRST.
+  "IBG" = insurance/takaful/protection/health product underwritten by an
+    insurance or takaful company.
+  "BNK" = loan/account/card/deposit/service sold directly by the bank with
+    no insurance underwriting (bank's own balance sheet risk or
+    conventional/Islamic finance, not insurance-backed).
+  DECISION: Look for these keywords to classify:
+  - Keywords → BNK: "term finance", "loan", "credit", "financing facility",
+    "overdraft", "deposit account", "savings account", "current account",
+    "debit card", "credit card", "forex", "investment", "service"
+  - Keywords → IBG: "insurance", "protection", "takaful", "plan", "cover",
+    "endowment", "unit-linked", "fund"
+  - If in doubt, check who underwrites: PROVIDER_NAME mentions insurer name
+    (IGI, EFU, Alfalah Insurance) → IBG; bank name only → BNK.
 SOURCE_FILE_PRODUCT: filename only. Same for all products from one file.
-PLAN_TYPE: max30. Short descriptive category, NOT a single rigid word.
-  For any insurer/takaful-underwritten product (LEAD_MARKER="IBG"): the
-  value MUST contain the word "Insurance", optionally with a qualifier that
-  reflects the product's primary nature, e.g.:
-    - Pure accident/theft/card protection cover → "Insurance"
-    - Savings + protection / endowment / unit-linked education or
-      multipurpose plan → "Savings & Protection Insurance"
-    - Hospitalization / medical cover → "Insurance (Hospitalization)"
-  Pick the qualifier that best matches the product's stated purpose; keep it
-  short and Insurance-anchored.
-  For the bank's own non-insurance product, use one word:
-  Deposit|Loan|Card|Service|Loyalty|Investment|Savings.
-TARGET_GOAL: max50. Standardized purpose closest to document intent, e.g.
-  "Protection", "Savings", "Education", "Health", "Marriage",
-  "Multipurpose Savings", "Savings and Protection".
-CUSTOMER_TYPE: one or more values from the fixed enum, separated by " | " if
-  more than one applies → Salaried|Self-Employed|SME|Corporate|Retail|
-  Government|N/A. Never write free text (e.g. never a bank name — that
-  belongs in ELIGIBILITY_TYPE). If the document only says the product is for
-  the bank's general customer base with no named type, use "Retail".
-EMPLOYMENT_TYPE: the primary employment/occupation type EXPLICITLY
-  emphasized for this product (e.g. "Salaried"). Do NOT copy an entire
-  Target Market paragraph verbatim. If no single primary type is stated,
-  use "N/A".
+PLAN_TYPE: max30.
+  For BNK (bank products): one word only → Loan|Deposit|Account|Card|Service|
+    Investment|Savings|Overdraft.
+  For IBG (insurance products): must contain "Insurance" with optional qualifier:
+    - Pure protection → "Insurance"
+    - Savings+protection, endowment, unit-linked education/multi-purpose →
+      "Savings & Protection Insurance"
+    - Health/hospitalization → "Insurance (Hospitalization)"
+TARGET_GOAL: max50. Product purpose:
+  For loans: "Green Energy", "Housing", "Auto", "Business", "Education Financing",
+    "Agricultural", "Financing" (generic)
+  For insurance: "Protection", "Savings", "Education", "Health", "Marriage",
+    "Retirement", "Multipurpose Savings"
+  For deposits: "Savings", "Returns", "Liquidity"
+CUSTOMER_TYPE: Enum only: Salaried|Self-Employed|SME|Corporate|Retail|Government|N/A.
+  CRITICAL: Extract ONLY the types EXPLICITLY mentioned in the document for
+  THIS product. Do NOT list all possible types. If document says "for Salaried
+  customers" only, use "Salaried" only. If it says "Salaried and Self-Employed",
+  use "Salaried | Self-Employed". Default "Retail" ONLY if it explicitly says
+  "general bank customers" or "retail customers".
+EMPLOYMENT_TYPE: max25. Primary employment type EXPLICITLY emphasized.
+  Use short form: "Salaried", "Self-Employed", "SME", "Permanent", "Contractual",
+  "Business Owner". Do NOT copy full eligibility paragraphs. If multiple types
+  are separately segmented (Salaried segment vs Self-Employed segment), list
+  them with " | ": "Salaried | Self-Employed". If no single clear type, "N/A".
 CUSTOMER_SEGMENT: Explicit segment e.g. "All Bank Alfalah Customers",
   "Retail", "Mass Market". Else "N/A".
 TARGET_SEGMENT: Explicit positioning e.g. "Protection Planning",
@@ -97,147 +120,201 @@ TARGET_SEGMENT: Explicit positioning e.g. "Protection Planning",
 SEGMENT_TIER: Explicit tier names joined by " | ", e.g.
   "Bronze | Silver | Gold | Platinum". Else "N/A".
 MIN_AGE/MAX_AGE: Entry age integers. MAX_AGE=entry limit NOT attained age.
-  "18-55 yrs, coverage to 85" → 55.
-GENDER: see G7 exception. "Female"/"Male" only if explicitly restricted.
-IS_BANK_OFFERED: see G5.
-ACCOUNT_TYPE: Current|Savings|Wallet|Digital|N/A. Insurance plans → "N/A".
-CARD_TYPE: Debit Card|Credit Card|Virtual Debit|N/A. Set only if the product
-  is explicitly tied to a card (cardholders, ATM/POS use); if a card type
-  isn't named but ATM/debit-linked usage is described, "Debit Card" is
-  acceptable; otherwise "N/A".
-CHANNEL: max30. "Bank Branch" if branches mentioned. Else explicit or "N/A".
-ELIGIBILITY_TYPE: max100. Short summary e.g. "Bank Alfalah customers, age
-  18-60, unique CNIC". Include age, CNIC, one-policy rules.
+  "18-55 yrs, coverage to 85" → MIN_AGE=18, MAX_AGE=55.
+GENDER: see G7 exception. "Female"/"Male" only if explicitly restricted. Else "N/A".
+IS_BANK_OFFERED: 1 if bank-offered (any distribution channel mentioned).
+  "N/A" only if fully independent, no bank involvement stated.
+ACCOUNT_TYPE: Current|Savings|Wallet|Digital|N/A.
+  For loans and insurance products → "N/A".
+CARD_TYPE: Debit Card|Credit Card|Virtual Debit|N/A.
+  Set ONLY if product is explicitly tied to a card. For loans/insurance → "N/A".
+CHANNEL: max30. Primary channel. "Bank Branch" if branches mentioned.
+  Else explicit channel or "N/A".
+ELIGIBILITY_TYPE: max100. Short summary (age, CNIC, income, employment tenure,
+  CNIC policy rules, any one-product-per-CNIC restrictions). Join multiple
+  requirements with " | ". Compact; no narrative prose.
 SERVICE_TYPE/REWARD_TYPE: max25. Only if explicitly stated. Else "N/A".
 CURRENCY: "PKR"/"USD"/"PKR + FCY". Pakistan products default → "PKR".
-CURRENCY_TYPE: "PKR"|"FCY"|"PKR + FCY"|"N/A". Only if explicitly stated.
+CURRENCY_TYPE: "PKR"|"FCY"|"PKR + FCY"|"N/A".
+  ONLY if THIS document explicitly states it offers or limits to FCY.
+  Do not infer from CURRENCY alone. Default "N/A".
 MIN_BALANCE/AVG_BALANCE_REQUIREMENT/MIN_INCOME/MIN_INCOME_USD/MIN_INVESTMENT:
-  a single integer, OR — if the document gives a tiered table (Bronze/
-  Silver/Gold amounts) — keep the tiered text as "Tier:amount | Tier:amount"
-  instead of forcing one number. Else "N/A".
-MIN_CONTRIBUTION: minimum contribution/premium. Single integer if one value
-  ("PKR 25,000"→25000), OR the full tiered table if the product has
-  per-tier contribution amounts, e.g. "Bronze:5,000 | Silver:10,000 |
-  Gold:15,000 | Platinum:20,000". Tiered premium/contribution tables belong
-  here, NOT in PRICING_RATE.
-LOAN_AMOUNT_RANGE: max50. Loans only. E.g. "200K-3M".
-COVERAGE_AMOUNT: max300. ALL coverage categories with their amounts/ranges,
-  separated by " | ", e.g. "Accidental Death + Permanent Disability:
-  500K-1,750K | ATM Cash Withdrawal: 100K-200K | Fraudulent Transaction:
-  50K-100K". Include every category stated for this product, not just the
-  first few.
-FINANCING_TYPE: Conventional|Islamic|Takaful|Mudarabah|Unit Linked|
-  Hybrid (Bonus Based and Unit Linked)|N/A.
-  DECISION ORDER (first match wins):
-  1. Bonus-based sum assured/additions together with unit-linked/PIA/fund
-     language → "Hybrid (Bonus Based and Unit Linked)".
-  2. Any mention of a Participant Investment/Individual Account (PIA), unit
-     allocation, fund allocation, or bid/offer spread → "Unit Linked", even
-     if the plan is also called "Takaful" (Takaful = Shariah mode; Unit
-     Linked = investment structure, which takes priority for this field).
-  3. Else, explicit Takaful/Shariah wording with no PIA/fund language →
-     "Takaful". Explicit conventional → "Conventional". Explicit Mudarabah
-     → "Mudarabah". Explicit Islamic (non-Takaful wording) → "Islamic".
-  4. Else "N/A".
-DEPOSIT_PROFIT_TYPE: Variable|Tier-based|Fixed|Bonus-based|
-  Bonus-based & Unit-linked|N/A. Unit-linked or health/protection plans →
-  "N/A".
-DEPOSIT_PROFIT_FREQUENCY: Monthly|Quarterly|Semi-annual|Annual|At Maturity|
-  N/A. Unit-linked or health/protection plans → "N/A". Customer PAYMENT
-  frequency belongs in PREMIUM_PAYMENT_FREQUENCY, not here.
-TENURE: max50. Normalized, e.g. "1 year (yearly renewable)",
-  "10-67 years (up to attained age of 85)".
-TENURE_OPTIONS: max50. Plan DURATION choices only (e.g. "5 | 10 | 15 | 20
-  years"). NOT payment frequency → "N/A" if no distinct duration menu.
-MIN_TERM_YEARS/MAX_TERM_YEARS: plan term years as integers. Only set
-  MAX_TERM_YEARS if the document gives a distinct maximum term or range; if
-  the product is a single renewable term with no stated max, MAX_TERM_YEARS
-  = "N/A" (do not duplicate MIN_TERM_YEARS).
-BUSINESS_TENURE: max30. SME only. Else "N/A".
-COLLATERAL_TYPE/EQUITY_REQUIREMENT/DBR_LIMIT: Loan products only. Else "N/A".
-TRANSACTION_LIMIT: max50. If stated. Else "N/A".
-SPECIAL_CONDITIONS: max250. Concrete restrictions only (one-policy-per-CNIC,
-  free look period, reporting windows, aggregate limits), separated by
-  " | ". Skip narrative wording.
-PRODUCT_DESCRIPTION: max250. One compact sentence: what it is, who
-  underwrites it, its core mechanism. Skip marketing language.
-PROVIDER_NAME: max100. Underwriter/insurer name FIRST, then the bank
-  relationship, e.g. "Alfalah Insurance Company Limited-WTO (in partnership
-  with Bank Alfalah Limited)" or "IGI Life Insurance (Window Takaful
-  Operations), Bank Alfalah Limited". For bank-only products, just the bank
-  name.
-PRODUCT_VARIANT_TIER: max50. Tier names joined by " | ", e.g.
-  "Bronze | Silver | Gold | Platinum".
-PRICING_RATE: max400. Interest/profit/markup RATES or non-premium pricing
-  (e.g. deposit profit rate tables, card fee rates). Do NOT put tiered
-  insurance premium/contribution amounts here — those belong in
-  MIN_CONTRIBUTION. If this product has no separate rate beyond its
-  premium, use "N/A".
-FEES_AND_CHARGES: max300. Named fees only, "Fee name: amount/%" pairs
-  separated by " | ".
-KEY_BENEFITS: max280. CORE benefits included by default (not optional
-  add-ons), separated by " | ", leading with the concrete benefit/amount,
-  e.g. "Accidental Death and Permanent Disability cover | ATM cash
-  withdrawal theft cover".
-OPTIONAL_RIDERS: max300. Only benefits the document explicitly labels as an
-  optional/add-on rider (not core covers already listed in KEY_BENEFITS),
-  separated by " | ". If the document doesn't distinguish optional riders
-  from core benefits, use "N/A".
-FREE_LOOK_PERIOD_DAYS: integer ONLY if THIS product explicitly states it.
-  Never default to 14.
-REQUIRED_DOCUMENTS: max220. Short names only, separated by " | ", e.g.
-  "Auto Debit Form | CNIC | Declaration Form".
-CLAIMS_SERVICE_CONTACT: max200. URL or phone ONLY.
-KEY_EXCLUSIONS: max200. Separated by " | ". THIS product section only.
+  Single integer if one value ("PKR 25,000"→25000), OR tiered table text
+  (Bronze/Silver/Gold amounts) if present. Else "N/A".
+MIN_CONTRIBUTION: Insurance/takaful premium minimum. For loans → "N/A".
+  Single integer if one value, OR full tiered table. Else "N/A".
+LOAN_AMOUNT_RANGE: max50. Loans only. Extract explicitly stated range or limit.
+  E.g. "Up to PKR 5 Million", "200K-3M", "500K-2M". For non-loans → "N/A".
+COVERAGE_AMOUNT: max300. Insurance-only (IBG). ALL coverage categories with
+  amounts/ranges, separated by " | ". For bank products (BNK) → "N/A".
+FINANCING_TYPE:
+  DECISION ORDER (applies to IBG/insurance ONLY; BNK loans → see note below):
+  1. Bonus-based sum assured/additions + unit-linked/PIA/fund language →
+     "Hybrid (Bonus Based and Unit Linked)".
+  2. PIA, unit allocation, fund allocation, bid/offer spread → "Unit Linked".
+  3. Explicit Takaful/Shariah + no PIA/fund language → "Takaful".
+  4. Explicit conventional insurance → "Conventional".
+  5. Explicit Mudarabah → "Mudarabah".
+  6. Explicit Islamic (non-Takaful) → "Islamic".
+  7. Else "N/A".
+  FOR BNK (BANK LOANS):
+  - Loan products are ALWAYS "Conventional" or "Islamic" based on product
+    language (markup, KIBOR, Murabaha, Musharaka, etc.).
+  - NEVER set to "Unit Linked" or "Hybrid" for a loan product — these are
+    insurance-only investment structures. If document mentions "markup rates"
+    or "KIBOR", it is Conventional lending, not Unit Linked.
+  - If document says "Islamic", check for Mudarabah, Musharaka, Ijarah,
+    Murabaha terminology. If found, use "Islamic". Else "Conventional".
+DEPOSIT_PROFIT_TYPE: Variable|Tier-based|Fixed|Bonus-based|Bonus-based & Unit-linked|N/A.
+  Unit-linked products → "N/A". Bank loans → "N/A". Health/protection plans → "N/A".
+DEPOSIT_PROFIT_FREQUENCY: Monthly|Quarterly|Semi-annual|Annual|At Maturity|N/A.
+  Unit-linked, loans, health/protection → "N/A". This is the bank's PROFIT
+  distribution frequency, not customer payment frequency.
+TENURE: max50. Readable tenor text, e.g. "1 year (yearly renewable)",
+  "10-67 years (up to attained age of 85)", "Up to 10 years".
+  Extract exactly as stated; normalize only if needed for clarity.
+TENURE_OPTIONS: max50. Plan DURATION choices only (e.g. "5 | 10 | 15 | 20 years").
+  NOT payment frequency. If no distinct menu of durations → "N/A".
+MIN_TERM_YEARS/MAX_TERM_YEARS: plan term as integers. Set separately if both exist.
+  E.g. if "Up to 10 years", MIN_TERM_YEARS="N/A", MAX_TERM_YEARS=10.
+  If "10-year term", MIN_TERM_YEARS=10, MAX_TERM_YEARS="N/A".
+  If "5-10 year options", MIN_TERM_YEARS=5, MAX_TERM_YEARS=10.
+BUSINESS_TENURE: max30. SME only. E.g. "Min. 2 years", "Min. 3 years for SEB".
   Else "N/A".
-TAX_ZAKAT_TREATMENT: max100. THIS product section only. Else "N/A".
-PREMIUM_PAYMENT_FREQUENCY: max50. How the customer PAYS, separated by " | "
-  if multiple, e.g. "Annual | Semi-Annual | Quarterly". Else "N/A".
+COLLATERAL_TYPE: max50. Loan products only. E.g. "Property Mortgage", "Residential
+  Owned", "Security/Collateral". For non-loans → "N/A".
+EQUITY_REQUIREMENT: max50. Loan products only. E.g. "20%", "30%", "Minimum 20%".
+  Normalize to short form (e.g. "Minimum 20% (Salaried & Business)" → "20%").
+  For non-loans → "N/A".
+DBR_LIMIT: max50. Loan products only. E.g. "<=40%", "<=50%". Else "N/A".
+TRANSACTION_LIMIT: max50. Usage/balance/transaction cap. If stated, extract.
+  Else "N/A".
+SPECIAL_CONDITIONS: max250. Concrete restrictions ONLY (one-policy-per-CNIC,
+  free look period windows, reporting windows, aggregate limits, specific
+  loan terms like "no balloon payment in 1st year"). Separated by " | ".
+  Do NOT include insurance claims terms, underwriting exclusions, or general
+  product description. Skip narrative wording.
+PRODUCT_DESCRIPTION: max250. One compact sentence: what it is, who provides it,
+  core mechanism/purpose. Skip marketing language.
+  E.g. "Term finance facility for SMEs installing solar equipment, funded by
+  Bank Alfalah, with interest rates at KIBOR + markup."
+PROVIDER_NAME: max100.
+  For IBG (insurance): Insurer name FIRST, then bank relationship.
+    E.g. "Alfalah Insurance Company Limited-WTO (in partnership with Bank
+    Alfalah Limited)" or "IGI Life Insurance, Bank Alfalah Limited".
+  For BNK (loans/accounts): Bank name only.
+    E.g. "Bank Alfalah Limited".
+PRODUCT_VARIANT_TIER: max50. Tier names joined by " | " (e.g. "Bronze | Silver |
+  Gold | Platinum"). Else "N/A".
+PRICING_RATE: max400. Interest/profit RATES or pricing (e.g. deposit profit
+  rate tables, loan markup tables, card fee rates).
+  Do NOT include tiered insurance premiums (those go in MIN_CONTRIBUTION) or
+  loan amounts (those go in LOAN_AMOUNT_RANGE).
+  E.g. for a loan: "Salaried: 1 Year KIBOR + 3%, Businessman: 1 Year KIBOR + 4%"
+  (rates only, not equity requirements or loan amounts).
+  For non-rate products → "N/A".
+FEES_AND_CHARGES: max300. Named fees only, "Fee name: amount/%" pairs separated
+  by " | ". E.g. "Processing Fee: As per SOC | Issuance Fee: 500 PKR".
+  Do NOT include rates or equity percentages (those go in PRICING_RATE).
+KEY_BENEFITS: max280. CORE benefits included by default (not optional add-ons).
+  For insurance: tangible covers (death cover, hospitalization, disability).
+  For loans: core terms (rate, tenure, loan amount limits, early settlement
+  options).
+  Separated by " | ", leading with concrete benefit/amount first.
+  Do NOT include pricing rates or equity requirements (those belong in
+  PRICING_RATE).
+OPTIONAL_RIDERS: max300. Benefits document explicitly labels as "optional"
+  or "add-on" rider (not core covers in KEY_BENEFITS).
+  For non-insurance products → "N/A".
+  For insurance: if document doesn't distinguish optional from core, use "N/A".
+FREE_LOOK_PERIOD_DAYS: Insurance only. Integer if THIS product explicitly states it.
+  Never default to 14. Bank loans/deposits → "N/A".
+REQUIRED_DOCUMENTS: max220. Short names only, separated by " | ". E.g.
+  "CNIC | Auto Debit Form | Declaration Form | Income Proof | Property Documents".
+  Concise, no full descriptive paragraphs.
+CLAIMS_SERVICE_CONTACT: max200. Insurance/protection products only.
+  Phone or URL. For loans/deposits → "N/A".
+KEY_EXCLUSIONS: max200. Insurance/protection products only. Separated by " | ".
+  THIS product section only. Do NOT reuse boilerplate exclusions from
+  prompt examples. For loans/deposits → "N/A".
+TAX_ZAKAT_TREATMENT: max100. THIS product section only. Zakat applicability,
+  tax notes if stated. Else "N/A".
+PREMIUM_PAYMENT_FREQUENCY: max50. How the customer PAYS premiums/contributions
+  for insurance. E.g. "Annual | Semi-Annual | Quarterly". Else "N/A".
+  For bank loans and deposits → "N/A" (use mode of repayment details in
+  SPECIAL_CONDITIONS if relevant).
 
 ===WORKED EXAMPLES (ground-truth style)===
-Accident/theft protection plan underwritten by an insurer:
-  PLAN_TYPE: "Insurance" | LEAD_MARKER: "IBG"
-  MIN_CONTRIBUTION: "Bronze:5,000 | Silver:10,000 | Gold:15,000 |
-    Platinum:20,000"
+Term Finance Loan for Solar Equipment (BNK product):
+  LEAD_MARKER: "BNK" | PLAN_TYPE: "Loan" | FINANCING_TYPE: "Conventional"
+  TARGET_GOAL: "Green Energy"
+  CUSTOMER_TYPE: "Salaried | Self-Employed" (only types explicitly mentioned)
+  MIN_INCOME: "50000" (Salaried), "100000" (Self-Employed) → extract both if
+    they differ, using key: "Salaried:50000 | Self-Employed:100000"
+  LOAN_AMOUNT_RANGE: "Up to PKR 5 Million"
+  MIN_TERM_YEARS: "N/A" | MAX_TERM_YEARS: "10"
+  COLLATERAL_TYPE: "Residential Owned"
+  EQUITY_REQUIREMENT: "20%"
+  PRICING_RATE: "Salaried: 1 Year KIBOR + 3% | Businessman: 1 Year KIBOR + 4%"
+  KEY_BENEFITS: "Tenure up to 10 years | Early settlement allowed | Property
+    as collateral"
+  COVERAGE_AMOUNT: "N/A" (no insurance coverage in a loan product)
+  FREE_LOOK_PERIOD_DAYS: "N/A" (loan product, not insurance)
+  KEY_EXCLUSIONS: "N/A" (loan product, not insurance)
+  OPTIONAL_RIDERS: "N/A" (loan product, not insurance)
+  PREMIUM_PAYMENT_FREQUENCY: "N/A" (loan product, not insurance)
+
+Accident/theft protection plan underwritten by an insurer (IBG product):
+  LEAD_MARKER: "IBG" | PLAN_TYPE: "Insurance"
+  MIN_CONTRIBUTION: "Bronze:5,000 | Silver:10,000 | Gold:15,000 | Platinum:20,000"
   COVERAGE_AMOUNT: "Accidental Death + Permanent Disability: 500K-1,750K |
     ATM Cash Withdrawal: 100K-200K | Fraudulent Transaction: 50K-100K"
-  PROVIDER_NAME: "Alfalah Insurance Company Limited-WTO (in partnership
-    with Bank Alfalah Limited)"
-  SPECIAL_CONDITIONS: "ATM theft covered within 2km if reported within 48
-    hours | Fraudulent transactions covered within 5 hours of misplacement
-    | One policy per unique CNIC"
+  PROVIDER_NAME: "Alfalah Insurance Company Limited-WTO (in partnership with
+    Bank Alfalah Limited)"
+  SPECIAL_CONDITIONS: "ATM theft covered within 2km if reported within 48 hours |
+    Fraudulent transactions covered within 5 hours of misplacement | One policy
+    per unique CNIC"
+  LOAN_AMOUNT_RANGE: "N/A" (not a loan)
+  COLLATERAL_TYPE: "N/A" (not a loan)
 
-Unit-linked savings & education plan underwritten by an insurer:
-  PLAN_TYPE: "Savings & Protection Insurance"
+Unit-linked savings & education plan underwritten by an insurer (IBG product):
+  LEAD_MARKER: "IBG" | PLAN_TYPE: "Savings & Protection Insurance"
   FINANCING_TYPE: "Unit Linked" (PIA/fund allocation present)
   TENURE_OPTIONS: "5 | 10 | 15 | 20 years"
   PREMIUM_PAYMENT_FREQUENCY: "Annual | Semi-Annual | Quarterly"
+  FREE_LOOK_PERIOD_DAYS: "30" (if stated) or "N/A"
 
-Hospitalization plan:
+Hospitalization plan (IBG product):
   PLAN_TYPE: "Insurance (Hospitalization)" | TARGET_GOAL: "Health"
   COVERAGE_AMOUNT: "Hospitalization (per annum): 150K-500K | Accident
     Hospitalization: 100K-250K"
   KEY_EXCLUSIONS: "War risks | Suicide within first year | AIDS |
     Pre-existing conditions | Congenital birth defects"
+  FINANCING_TYPE: "Conventional" (or "Takaful" if Islamic)
 
 ===DO NOT===
-× PLAN_TYPE without the word "Insurance" for ANY insurer/takaful-underwritten
-  product
-× FINANCING_TYPE="Takaful"/"Conventional" when PIA/unit-allocation language
-  is present (must be "Unit Linked" or "Hybrid ...")
-× CUSTOMER_TYPE as free text or a bank name — only enum values, "|"-joined
-× DEPOSIT_PROFIT_TYPE/FREQUENCY set for unit-linked or health/protection
-  plans
-× GENDER="Male"/"Female" without an explicit restriction
-× MAX_AGE = attained age when entry age is separately stated
-× MAX_TERM_YEARS duplicated from MIN_TERM_YEARS when no explicit max is given
-× TENURE_OPTIONS = payment frequency (→ PREMIUM_PAYMENT_FREQUENCY instead)
-× FREE_LOOK_PERIOD_DAYS = 14 by default
-× Reusing formula wording (PIA/Surplus/Wakalah) from a different product's
-  structure when THIS product doesn't mention it (G11)
-× KEY_EXCLUSIONS/TAX_ZAKAT_TREATMENT copied from another product
-× PRODUCT_NAME in ALL CAPS or a name recalled from outside this document
-× Numeric single-value fields with .0/PKR/commas
-× Using ";" as a list separator anywhere (use " | ")
-× Skipping trailing products in multi-product documents
-× Filling character budget with narrative filler instead of facts
+× LEAD_MARKER="IBG" for ANY bank loan product (financing, overdraft, credit
+  facility). Loans are BNK only.
+× PLAN_TYPE="Insurance" for a loan. Use "Loan", not "Insurance".
+× FINANCING_TYPE="Unit Linked" or "Hybrid" for a loan product. Bank loans are
+  "Conventional" or "Islamic" only.
+× Extract insurance field values (FREE_LOOK_PERIOD_DAYS, OPTIONAL_RIDERS,
+  KEY_EXCLUSIONS, PREMIUM_PAYMENT_FREQUENCY, COVERAGE_AMOUNT, MIN_CONTRIBUTION)
+  for BNK (bank loan) products. These must be "N/A".
+× CUSTOMER_TYPE with all possible enum values. Extract ONLY what the document
+  explicitly states for THIS product.
+× EMPLOYMENT_TYPE as a full employment paragraph. Keep to short form.
+× DEPOSIT_PROFIT_TYPE/FREQUENCY for unit-linked, loans, or health plans.
+× GENDER="Male"/"Female" without an explicit restriction in the document.
+× MAX_AGE = attained age when entry age is separately stated.
+× MAX_TERM_YEARS duplicated from MIN_TERM_YEARS when no explicit max is given.
+× TENURE_OPTIONS = payment frequency (use PREMIUM_PAYMENT_FREQUENCY instead).
+× FREE_LOOK_PERIOD_DAYS = 14 by default (extract ONLY if stated).
+× Reusing boilerplate wording from examples when THIS product doesn't state it.
+× KEY_EXCLUSIONS/PREMIUM_PAYMENT_FREQUENCY for non-insurance products.
+× PRODUCT_NAME in ALL CAPS or from outside this document.
+× Numeric fields with .0/PKR/commas (except tiered values).
+× Using ";" as a list separator (use " | " everywhere).
+× Skipping trailing products in multi-product documents.
+× COVERAGE_AMOUNT for non-insurance products.
+× Confusing PRICING_RATE with LOAN_AMOUNT_RANGE or EQUITY_REQUIREMENT.
