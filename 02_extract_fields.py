@@ -734,9 +734,9 @@ field_max_lengths = {
     "FEES_AND_CHARGES": 300,       # detailed fee schedules up to ~256 chars
     "KEY_BENEFITS": 280,           # widened: full core-benefit lists observed >250 chars
     "OPTIONAL_RIDERS": 300,        # rider lists up to ~253 chars
-    "REQUIRED_DOCUMENTS": 220,     # widened slightly for full doc lists
-    "CLAIMS_SERVICE_CONTACT": 200,
-    "KEY_EXCLUSIONS": 200,
+    "REQUIRED_DOCUMENTS": 280,     # FIXED: widened from 220 to accommodate full document lists
+    "CLAIMS_SERVICE_CONTACT": 220, # FIXED: widened from 200 for insurance contact details
+    "KEY_EXCLUSIONS": 250,         # FIXED: widened from 200 for comprehensive exclusion lists
     "TAX_ZAKAT_TREATMENT": 100,
     "PLAN_TYPE": 30,                # widened: descriptive category, not single word
     "TARGET_GOAL": 50,             # "Children's Education Planning" style values
@@ -745,25 +745,28 @@ field_max_lengths = {
     "ACCOUNT_TYPE": 20,
     "CARD_TYPE": 25,
     "CHANNEL": 30,
-    "ELIGIBILITY_TYPE": 100,       # brief eligibility summaries up to ~52 chars
+    "ELIGIBILITY_TYPE": 120,       # FIXED: widened from 100 for detailed eligibility rules
     "SERVICE_TYPE": 25,
     "REWARD_TYPE": 25,
     "CURRENCY": 30,
     "CURRENCY_TYPE": 15,
-    "LOAN_AMOUNT_RANGE": 50,
-    "COVERAGE_AMOUNT": 300,        # widened: full multi-category coverage lists observed
+    "LOAN_AMOUNT_RANGE": 60,       # FIXED: widened from 50 for capacity range descriptions
+    "COVERAGE_AMOUNT": 350,        # FIXED: widened from 300 for full 9-tier coverage tables
     "FINANCING_TYPE": 50,          # "Hybrid (Bonus Based and Unit Linked)" = 36 chars
     "DEPOSIT_PROFIT_TYPE": 30,
     "DEPOSIT_PROFIT_FREQUENCY": 20,
-    "TENURE": 50,                  # "10-67 years (up to attained age of 85)" = 38 chars
-    "TENURE_OPTIONS": 50,
+    "TENURE": 60,                  # FIXED: widened from 50 for complex tenor descriptions
+    "TENURE_OPTIONS": 60,          # FIXED: widened from 50 for multiple tenor options
     "BUSINESS_TENURE": 100,        # widened: may contain tiered tenure like "2 years SEP | 3 years SEB"
-    "COLLATERAL_TYPE": 50,
-    "EQUITY_REQUIREMENT": 20,
+    "COLLATERAL_TYPE": 80,         # FIXED: widened from 50 for multiple property types
+    "EQUITY_REQUIREMENT": 25,      # FIXED: widened from 20 to handle percentage + qualifiers
     "DBR_LIMIT": 20,
-    "TRANSACTION_LIMIT": 50,
-    "SPECIAL_CONDITIONS": 250,     # widened: multi-condition " | " lists observed >200 chars
+    "TRANSACTION_LIMIT": 60,       # FIXED: widened from 50
+    "SPECIAL_CONDITIONS": 280,     # FIXED: widened from 250 for detailed multi-condition rules
     "PREMIUM_PAYMENT_FREQUENCY": 50,
+    "PRODUCT_DESCRIPTION": 300,    # FIXED: widened from 250 for full feature descriptions
+    "KEY_BENEFITS": 320,           # FIXED: widened from 280 for complete benefit lists
+
 }
 
 # Fields where a comma is *always* a list separator (never a monetary or
@@ -1034,6 +1037,37 @@ def _normalize_customer_type(value: str) -> str:
     allowed = {
         "Salaried", "Self-Employed", "SME",
         "Corporate", "Retail", "Government",
+    }
+    stripped = value.strip()
+    if not stripped or stripped.upper() == DEFAULT_VALUE:
+        return DEFAULT_VALUE
+
+    segments = re.split(r"[|,;]+", stripped)
+    kept = []
+    for seg in segments:
+        seg_clean = seg.strip()
+        if not seg_clean:
+            continue
+        for vt in allowed:
+            if seg_clean.lower() == vt.lower() and vt not in kept:
+                kept.append(vt)
+                break
+    if kept:
+        return " | ".join(kept)
+    return DEFAULT_VALUE
+
+
+
+def _normalize_employment_type(value: str) -> str:
+    """
+    EMPLOYMENT_TYPE may hold MULTIPLE enum values (Salaried|Self-Employed|
+    Contract|Permanent|Proprietor|Partner|Director), so we preserve all valid
+    matches separated by " | ". This fixes the previous behavior of collapsing
+    to a single value, which lost employment eligibility information.
+    """
+    allowed = {
+        "Salaried", "Self-Employed", "Contract", "Permanent",
+        "Proprietor", "Partner", "Director", "Business Owner",
     }
     stripped = value.strip()
     if not stripped or stripped.upper() == DEFAULT_VALUE:
