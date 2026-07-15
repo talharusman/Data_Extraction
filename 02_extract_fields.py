@@ -757,7 +757,7 @@ field_max_lengths = {
     "DEPOSIT_PROFIT_FREQUENCY": 20,
     "TENURE": 50,                  # "10-67 years (up to attained age of 85)" = 38 chars
     "TENURE_OPTIONS": 50,
-    "BUSINESS_TENURE": 30,
+    "BUSINESS_TENURE": 100,        # widened: may contain tiered tenure like "2 years SEP | 3 years SEB"
     "COLLATERAL_TYPE": 50,
     "EQUITY_REQUIREMENT": 20,
     "DBR_LIMIT": 20,
@@ -1092,6 +1092,149 @@ def _normalize_equity_requirement(value: str) -> str:
     return truncate_to_boundary(cleaned, 20)
 
 
+def _extract_tenure_years(tenure_text: str) -> tuple[int | None, int | None]:
+    """
+    Extract MIN_TERM_YEARS and MAX_TERM_YEARS from tenure description text.
+    
+    Examples:
+      "Up to 10 years" → (1, 10)
+      "5-10 years" → (5, 10)
+      "1 Year" → (1, 1)
+      "10-67 years" → (10, 67)
+    
+    Returns: (min_years, max_years) or (None, None) if extraction fails.
+    """
+    if not tenure_text or tenure_text == "N/A":
+        return None, None
+    
+    text = tenure_text.lower().strip()
+    
+    # Pattern 1: "Up to X years" or "Up to X year"
+    match = re.search(r"up\s+to\s+(\d+)\s+years?", text)
+    if match:
+        max_year = int(match.group(1))
+        return 1, max_year
+    
+    # Pattern 2: "X-Y years" or "X to Y years"
+    match = re.search(r"(\d+)\s*[-to\s]+\s*(\d+)\s+years?", text)
+    if match:
+        min_year = int(match.group(1))
+        max_year = int(match.group(2))
+        return min_year, max_year
+    
+    # Pattern 3: Single value "X year" or "X years"
+    match = re.search(r"^(\d+)\s+years?$", text)
+    if match:
+        year = int(match.group(1))
+        return year, year
+    
+    return None, None
+
+
+def _normalize_premium_payment_frequency(value: str) -> str:
+    """
+    Normalize PREMIUM_PAYMENT_FREQUENCY for insurance products.
+    
+    Valid values: Annual, Semi-Annual, Quarterly, Monthly, Weekly, etc.
+    Multiple frequencies should be pipe-separated: "Annual | Semi-Annual | Monthly"
+    
+    This field should ONLY be populated for insurance products (LEAD_MARKER="IBG").
+    For loans/deposits → "N/A".
+    """
+    if not value or value == "N/A":
+        return "N/A"
+    
+    stripped = value.strip()
+    if not stripped or stripped.upper() == "N/A":
+        return "N/A"
+    
+    # Normalize common frequency names
+    freq_map = {
+        "annual": "Annual",
+        "yearly": "Annual",
+        "semi-annual": "Semi-Annual",
+        "semi annual": "Semi-Annual",
+        "semiannual": "Semi-Annual",
+        "bi-annual": "Semi-Annual",
+        "half-yearly": "Semi-Annual",
+        "quarterly": "Quarterly",
+        "monthly": "Monthly",
+        "weekly": "Weekly",
+        "daily": "Daily",
+        "monthly": "Monthly",
+        "fortnightly": "Fortnightly",
+        "maturity": "At Maturity",
+    }
+    
+    lower = stripped.lower()
+    
+    # If it's a single frequency, map it
+    for key, canonical in freq_map.items():
+        if lower == key or (len(lower) > 5 and key in lower):
+            return canonical
+    
+    # If it contains multiple frequencies separated by comma or pipe, normalize each
+    if "|" in stripped or "," in stripped:
+        parts = re.split(r"[|,]", stripped)
+        normalized_parts = []
+        for part in parts:
+            part_clean = part.strip().lower()
+            found = False
+            for key, canonical in freq_map.items():
+                if part_clean == key or (key in part_clean and len(key) > 3):
+                    if canonical not in normalized_parts:
+                        normalized_parts.append(canonical)
+                    found = True
+                    break
+            if not found and part.strip():
+                # Keep unrecognized part as-is (title case)
+                normalized_parts.append(part.strip())
+        if normalized_parts:
+            return " | ".join(normalized_parts)
+    
+    # Return as-is if already looks canonical
+    return stripped
+
+
+def _validate_and_fix_product_name(extracted_name: str, doc_text: str) -> str:
+    """
+    Validate PRODUCT_NAME against document content. If the extracted name doesn't
+    appear in the document, it's likely hallucinated — return "N/A" instead.
+    
+    This prevents completely fictional product names from slipping through.
+    """
+    if not extracted_name or extracted_name == "N/A":
+        return "N/A"
+    
+    name = extracted_name.strip()
+    if not name or name.upper() == "N/A":
+        return "N/A"
+    
+    text_lower = doc_text.lower()
+    name_lower = name.lower()
+    
+    # Exact match
+    if name_lower in text_lower:
+        return name
+    
+    # Check if at least the first 2+ significant words appear together
+    words = name_lower.split()
+    if len(words) >= 2:
+        # Look for the first two words together
+        first_two = f"{words[0]} {words[1]}"
+        if first_two in text_lower:
+            return name
+        
+        # Check if major words (len > 3) appear in the document even separately
+        major_words = [w for w in words if len(w) > 3]
+        if len(major_words) >= 2:
+            if all(mw in text_lower for mw in major_words[:2]):
+                return name
+    
+    # If none of the checks pass, the name is likely hallucinated
+    return "N/A"
+
+
 def _crossfield_validate(normalized: dict) -> dict:
     """
     Apply cross-field consistency rules that cannot be enforced on a
@@ -1134,6 +1277,16 @@ def _crossfield_validate(normalized: dict) -> dict:
                     # This is a bank product but has an insurance-specific field populated
                     # Set it to N/A per spec
                     normalized[field] = "N/A"
+        
+        # CRITICAL FIX: For loan products, PRICING_RATE should contain rate info
+        # (e.g. "1 Year KIBOR + 3%"), NOT premium amounts. If MIN_CONTRIBUTION
+        # has numeric-only values that look like loan amounts, it's probably
+        # misplaced — clear it for bank products
+        min_contrib = normalized.get("MIN_CONTRIBUTION", "")
+        if isinstance(min_contrib, str) and min_contrib not in ("N/A", ""):
+            # If it looks like a premium (e.g. "5000 | 10000 | 15000"), clear it for loans
+            if re.search(r"^\d+(\s*\|\s*\d+)*$", min_contrib.strip()):
+                normalized["MIN_CONTRIBUTION"] = "N/A"
 
     # ================================================================
     # IBG (Insurance/Takaful-Underwritten Product) Rules
@@ -1153,6 +1306,20 @@ def _crossfield_validate(normalized: dict) -> dict:
                 if isinstance(current, str) and current not in ("N/A", "") and \
                    any(kw in current.lower() for kw in ["million", "thousand", "k", "m", "pkr", "usd", "million", "lending"]):
                     normalized[field] = "N/A"
+        
+        # CRITICAL FIX: For insurance products, PRICING_RATE should be N/A
+        # (insurance premiums go in MIN_CONTRIBUTION, not PRICING_RATE).
+        # If PRICING_RATE has premium-like values, move them to MIN_CONTRIBUTION.
+        pricing = normalized.get("PRICING_RATE", "")
+        if isinstance(pricing, str) and pricing not in ("N/A", ""):
+            # If PRICING_RATE looks like premiums (numeric tiers), move to MIN_CONTRIBUTION
+            if re.search(r"^\d+(\s*\|\s*\d+)*$", pricing.strip()) or \
+               re.search(r"(bronze|silver|gold|platinum).*\d+", pricing.lower()):
+                # These look like insurance premium tiers
+                min_contrib = normalized.get("MIN_CONTRIBUTION", "N/A")
+                if min_contrib == "N/A" or not min_contrib:
+                    normalized["MIN_CONTRIBUTION"] = pricing
+                normalized["PRICING_RATE"] = "N/A"
 
     return normalized
 
@@ -1516,6 +1683,31 @@ def normalize_record(record, entry, doc_text=""):
         # ----------------------------------------------------------------
         if col in ("TENURE", "TENURE_OPTIONS") and isinstance(value, str):
             value = truncate_to_boundary(value.strip(), field_max_lengths.get(col, 50))
+        
+        # ----------------------------------------------------------------
+        # Extract MIN_TERM_YEARS and MAX_TERM_YEARS from TENURE text if not provided
+        # ----------------------------------------------------------------
+        if col == "MIN_TERM_YEARS" and (value == DEFAULT_VALUE or not value):
+            # Try to extract from TENURE if it exists
+            tenure_value = record.get("TENURE") or normalized.get("TENURE")
+            if tenure_value and tenure_value != DEFAULT_VALUE:
+                min_y, max_y = _extract_tenure_years(tenure_value)
+                if min_y is not None:
+                    value = str(min_y)
+        
+        if col == "MAX_TERM_YEARS" and (value == DEFAULT_VALUE or not value):
+            # Try to extract from TENURE if it exists
+            tenure_value = record.get("TENURE") or normalized.get("TENURE")
+            if tenure_value and tenure_value != DEFAULT_VALUE:
+                min_y, max_y = _extract_tenure_years(tenure_value)
+                if max_y is not None:
+                    value = str(max_y)
+        
+        # ----------------------------------------------------------------
+        # PREMIUM_PAYMENT_FREQUENCY normalization (insurance products only)
+        # ----------------------------------------------------------------
+        if col == "PREMIUM_PAYMENT_FREQUENCY" and isinstance(value, str):
+            value = _normalize_premium_payment_frequency(value)
 
         # ----------------------------------------------------------------
         # Truncate verbose text fields to max length
@@ -1535,6 +1727,11 @@ def normalize_record(record, entry, doc_text=""):
                 and raw_name.strip() == raw_name.strip().upper()
                 and len(raw_name.strip().split()) > 1):
             raw_name = raw_name.strip().title()
+    
+    # CRITICAL FIX: Validate product name against document to catch hallucinations
+    if doc_text and isinstance(raw_name, str) and raw_name != "N/A":
+        raw_name = _validate_and_fix_product_name(raw_name, doc_text)
+    
     normalized["PRODUCT_NAME"] = raw_name
     normalized["SOURCE_FILE_PRODUCT"] = get_source_filename(entry)
 

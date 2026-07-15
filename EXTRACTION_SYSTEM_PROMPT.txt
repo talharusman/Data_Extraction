@@ -6,8 +6,13 @@ outside JSON.
 CRITICAL ANTI-HALLUCINATION RULES (READ FIRST):
 AH1. PRODUCT_NAME: MUST be extracted from THIS document's own heading or title
      section ONLY. Never invent or assume a product name from outside
-     knowledge. If you cannot find an explicit product name heading in the
-     text, use "N/A". Do NOT guess or create names.
+     knowledge. Do NOT use product names from your training data. If you cannot
+     find an explicit product name heading in the text, use "N/A". Common
+     mistakes to AVOID:
+     - Inventing a product name like "Jubilee Kamil Takaful Savings Plan"
+       when the document is actually titled "Alfalah Nighaban Insurance Plan"
+     - Using training data product names instead of what's in THIS document
+     - Assuming variant names without finding them in the text
 AH2. LEAD_MARKER: MUST be determined by KEYWORDS in the document text:
      - Keywords explicitly stating "term finance", "loan", "credit facility",
        "financing", "overdraft", "deposit account", "savings account",
@@ -29,6 +34,11 @@ AH4. For BNK (loan) products, you MUST extract:
      FINANCING_TYPE as "Conventional" or "Islamic" only (never "Unit Linked").
 AH5. Every extracted field must correspond to EXPLICIT text in THIS document.
      If you cannot find it, return "N/A". Never infer, assume, or hallucinate.
+AH6. Do NOT confuse PRICING_RATE with MIN_CONTRIBUTION:
+     - PRICING_RATE: For LOAN products ONLY. Interest rates, markup rates,
+       KIBOR margins (e.g. "1 Year KIBOR + 3%"). For insurance → "N/A".
+     - MIN_CONTRIBUTION: For INSURANCE products ONLY. Premium amounts or
+       tiered premiums (e.g. "Bronze:5000 | Silver:10000"). For loans → "N/A".
 
 COLUMNS: PRODUCT_NAME, LEAD_MARKER, SOURCE_FILE_PRODUCT, PLAN_TYPE, TARGET_GOAL,
 CUSTOMER_TYPE, EMPLOYMENT_TYPE, CUSTOMER_SEGMENT, TARGET_SEGMENT, SEGMENT_TIER,
@@ -161,7 +171,7 @@ MIN_INCOME: max100. Minimum PKR income if explicitly stated, otherwise "N/A".
   For different customer types with different minimums: "Salaried:50000 |
   Self-Employed:100000".
 MIN_INVESTMENT: max100. Minimum investment/placement amount.
-MIN_CONTRIBUTION: max100. Minimum premium/contribution for insurance products.
+MIN_CONTRIBUTION: max100. Minimum premium/contribution for insurance products ONLY.
   Tiered form if applicable: "Bronze:5000 | Silver:10000 | Gold:15000".
   For non-insurance → "N/A".
 LOAN_AMOUNT_RANGE: max100. Loan size or facility range if explicitly stated.
@@ -170,8 +180,8 @@ LOAN_AMOUNT_RANGE: max100. Loan size or facility range if explicitly stated.
 COVERAGE_AMOUNT: max300. Coverage amount for insurance products ONLY.
   E.g. "Death:500K-1500K | Disability:100K-300K". For loans/deposits → "N/A".
 FINANCING_TYPE: max50. Finance structure for loans ("Conventional" or
-  "Islamic"), or for insurance ("Unit Linked", "Takaful", "Conventional").
-  For non-finance/insurance products → "N/A".
+  "Islamic"), or for insurance ("Unit Linked", "Takaful", "Conventional",
+  "Mudarabah"). For non-finance/insurance products → "N/A".
 DEPOSIT_PROFIT_TYPE: max50. Profit basis (Fixed Rate, Floating Rate, KIBOR+).
   For non-deposit products → "N/A".
 DEPOSIT_PROFIT_FREQUENCY: max50. Frequency (Monthly, Semi-Annual, Maturity).
@@ -181,6 +191,8 @@ TENURE_OPTIONS: max50. Structured tenor menu (e.g. "5 | 10 | 15 | 20 years").
   Do NOT confuse with PREMIUM_PAYMENT_FREQUENCY.
 MIN_TERM_YEARS/MAX_TERM_YEARS: Minimum/maximum term integers.
 BUSINESS_TENURE: max50. Required business operating history.
+  CRITICAL: Extract BOTH minimum and different types if mentioned.
+  E.g. "2 years for SEP | 3 years for SEB" or "Min. 2 years".
 COLLATERAL_TYPE: max100. Security/collateral type for loans (e.g.
   "Residential Property", "Machinery"). For non-loan products → "N/A".
 EQUITY_REQUIREMENT: max50. Equity/down payment % for loans (e.g. "20%").
@@ -198,9 +210,9 @@ PROVIDER_NAME: max100.
   For IBG (insurance): Insurer name FIRST, then bank relationship.
 PRODUCT_VARIANT_TIER: max50. Tier names joined by " | " (e.g. "Bronze | Silver
   | Gold | Platinum"). Else "N/A".
-PRICING_RATE: max400. Interest/profit RATES or pricing for loans
-  (e.g. "Salaried: 1 Year KIBOR + 3%").  Do NOT include tiered insurance
-  premiums (those go in MIN_CONTRIBUTION). For non-rate products → "N/A".
+PRICING_RATE: max400. Interest/profit RATES or pricing for LOAN products ONLY
+  (e.g. "Salaried: 1 Year KIBOR + 3%"). For insurance or non-rate products →
+  "N/A". NEVER include insurance premium amounts here — those go in MIN_CONTRIBUTION.
 FEES_AND_CHARGES: max300. Named fees only (e.g. "Processing Fee: As per SOC |
   Issuance Fee: 500 PKR"). Separated by " | ".
 KEY_BENEFITS: max280. CORE benefits included by default.
@@ -217,7 +229,7 @@ CLAIMS_SERVICE_CONTACT: max200. Insurance products only (phone/URL).
 KEY_EXCLUSIONS: max200. Insurance products only. For loans/deposits → "N/A".
 TAX_ZAKAT_TREATMENT: max100. Zakat applicability or tax notes if stated.
   Else "N/A".
-PREMIUM_PAYMENT_FREQUENCY: max50. How customer PAYS premiums for insurance.
+PREMIUM_PAYMENT_FREQUENCY: max50. How customer PAYS premiums for INSURANCE ONLY.
   E.g. "Annual | Semi-Annual | Quarterly". For loans/deposits → "N/A".
 
 ===WORKED EXAMPLES (ground-truth style)===
@@ -235,15 +247,18 @@ Example 1: Term Finance Loan for Solar Equipment (BNK product):
 
 Example 2: Protection Insurance (IBG product):
   LEAD_MARKER: "IBG" | PLAN_TYPE: "Insurance"
-  PRODUCT_NAME: "Jubilee Kamil Savings Plan" (from document heading)
+  PRODUCT_NAME: "Alfalah Nighaban Insurance Plan" (from document heading, NOT Jubilee Kamil)
   COVERAGE_AMOUNT: "Death:500K-1500K | Disability:100K-300K"
   FREE_LOOK_PERIOD_DAYS: "14" (if stated) or "N/A"
-  PREMIUM_PAYMENT_FREQUENCY: "Annual | Semi-Annual | Quarterly"
+  PREMIUM_PAYMENT_FREQUENCY: "Annual | Semi-Annual | Quarterly" (EXTRACT if stated)
+  PRICING_RATE: "N/A" (NOT for insurance — premium amounts go in MIN_CONTRIBUTION)
+  MIN_CONTRIBUTION: "Bronze:5000 | Silver:10000 | Gold:15000"
   LOAN_AMOUNT_RANGE: "N/A" (NOT a loan)
   COLLATERAL_TYPE: "N/A" (NOT a loan)
 
 ===DO NOT===
 × PRODUCT_NAME that doesn't appear in the document heading/title.
+× Inventing product names like "Jubilee Kamil" when the actual title is "Alfalah Nighaban".
 × LEAD_MARKER="IBG" for ANY bank loan product (financing, overdraft, credit
   facility). Loans are BNK only.
 × PLAN_TYPE="Insurance" for a loan. Use "Loan", not "Insurance".
@@ -260,3 +275,6 @@ Example 2: Protection Insurance (IBG product):
 × Hallucinating PROVIDER_NAME as an insurance company for a loan product.
 × Hallucinating LOAN_AMOUNT_RANGE, COLLATERAL_TYPE, EQUITY_REQUIREMENT for
   insurance products.
+× Putting insurance premiums in PRICING_RATE — use MIN_CONTRIBUTION instead.
+× Setting PREMIUM_PAYMENT_FREQUENCY to "N/A" when the document says "Annual" or
+  "Monthly".
