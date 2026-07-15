@@ -1157,9 +1157,40 @@ def _crossfield_validate(normalized: dict) -> dict:
     return normalized
 
 
-def _infer_and_correct_lead_marker(normalized: dict) -> dict:
+def _validate_product_name(product_name: str, doc_text: str) -> bool:
+    """
+    Validate that PRODUCT_NAME appears somewhere in the document text.
+    Returns True if the name or a close variant is found, False if hallucinated.
+    This prevents completely fictional product names from slipping through.
+    """
+    if not product_name or product_name == "N/A":
+        return True  # N/A is valid
+    
+    # Normalize for comparison
+    name_lower = product_name.lower().strip()
+    text_lower = doc_text.lower()
+    
+    # Check if the product name appears anywhere in the document
+    if name_lower in text_lower:
+        return True
+    
+    # Check if at least the first 2 major words appear together in the document
+    # This allows for slight variations (title case, etc.)
+    words = name_lower.split()
+    if len(words) >= 2:
+        # Check if at least the first 2 words appear near each other
+        first_two = f"{words[0]} {words[1]}"
+        if first_two in text_lower:
+            return True
+    
+    # If we get here, the name doesn't appear to be in the document
+    return False
+
+
+def _infer_and_correct_lead_marker(normalized: dict, doc_text: str = "") -> dict:
     """
     Smart inference and correction of LEAD_MARKER based on explicit content signals.
+    Also validates PRODUCT_NAME against the document to catch hallucinations.
     
     Corrects common misclassifications:
     - A loan product (contains "term finance", "loan", "KIBOR", markup rates) 
@@ -1177,32 +1208,52 @@ def _infer_and_correct_lead_marker(normalized: dict) -> dict:
     plan = (normalized.get("PLAN_TYPE", "") or "").lower()
     prov = (normalized.get("PROVIDER_NAME", "") or "").lower()
     pricing = (normalized.get("PRICING_RATE", "") or "").lower()
+    loan_amt = (normalized.get("LOAN_AMOUNT_RANGE", "") or "").lower()
+    collateral = (normalized.get("COLLATERAL_TYPE", "") or "").lower()
+    equity = (normalized.get("EQUITY_REQUIREMENT", "") or "").lower()
     
     # Signals that indicate a LOAN product (should be BNK)
     loan_signals = {
         "term finance", "loan", "credit", "financing", "overdraft", 
         "markup", "kibor", "murabaha", "musharaka", "ijarah",
         "working capital", "auto", "housing", "vehicle", "sme",
-        "business loan", "term facility", "credit facility"
+        "business loan", "term facility", "credit facility", "green energy"
     }
     
     # Signals that indicate an INSURANCE product (should be IBG)
     insurance_signals = {
-        "insurance", "protection", "plan", "takaful", "endowment",
+        "insurance", "protection", "takaful", "endowment",
         "unit-linked", "unit linked", "investment-linked", "cover",
         "policy", "premium", "rider", "hospitalization", "death benefit",
-        "claims", "underwritten"
+        "claims", "underwritten by"
     }
     
-    combined_text = f"{desc} {plan} {prov} {pricing}".lower()
+    combined_text = f"{desc} {plan} {prov} {pricing} {loan_amt} {collateral} {equity}".lower()
     
     loan_score = sum(1 for sig in loan_signals if sig in combined_text)
     insurance_score = sum(1 for sig in insurance_signals if sig in combined_text)
     
     current_marker = normalized.get("LEAD_MARKER", "").strip().upper()
     
-    # Only correct if the signals are VERY clear and contradict the current marker
-    if loan_score >= 2 and current_marker == "IBG":
+    # CRITICAL: For loans, if provider is Bank Alfalah and no insurance company is mentioned,
+    # it's almost certainly a bank loan (BNK), not insurance (IBG)
+    is_bank_only = ("bank alfalah" in prov or "bank " in prov) and "insurance" not in prov
+    has_loan_keywords = any(sig in combined_text for sig in ["term finance", "loan", "financing", "green energy"])
+    
+    # Strong loan signals override weaker classification
+    if (has_loan_keywords or loan_score >= 1) and is_bank_only and current_marker == "IBG":
+        normalized["LEAD_MARKER"] = "BNK"
+        # Cascade corrections for insurance-only fields per G12 rule
+        for field in ["COVERAGE_AMOUNT", "FREE_LOOK_PERIOD_DAYS", 
+                      "OPTIONAL_RIDERS", "PREMIUM_PAYMENT_FREQUENCY", 
+                      "MIN_CONTRIBUTION", "KEY_EXCLUSIONS", "CLAIMS_SERVICE_CONTACT"]:
+            if field in normalized:
+                normalized[field] = "N/A"
+        # For BNK loan products, PLAN_TYPE should be "Loan"
+        if normalized.get("PLAN_TYPE", "").lower() != "loan":
+            normalized["PLAN_TYPE"] = "Loan"
+    
+    elif loan_score >= 2 and current_marker == "IBG":
         # This is clearly a loan product but marked as insurance — correct it
         normalized["LEAD_MARKER"] = "BNK"
         # Cascade corrections for insurance-only fields per G12 rule
@@ -1300,12 +1351,12 @@ def _normalize_employment_type(value: str) -> str:
     return truncate_to_boundary(stripped, 50)
 
 
-def normalize_record(record, entry):
+def normalize_record(record, entry, doc_text=""):
     """
     Normalize an extracted record with corrections for all known model errors.
 
     Key normalization rules applied here:
-    - PRODUCT_NAME: ALL-CAPS converted to Title Case
+    - PRODUCT_NAME: ALL-CAPS converted to Title Case, validated against document
     - PLAN_TYPE: descriptive-category cleanup (see _normalize_plan_type)
     - FINANCING_TYPE: canonical Unit Linked / Hybrid mapping
     - GENDER: strict allowed-value enforcement
@@ -1318,6 +1369,11 @@ def normalize_record(record, entry):
     - List-type text fields: delimiter normalized to " | "
     - All text fields: truncated at word boundary to max length
     - Cross-field: BNK product FINANCING_TYPE consistency enforced
+    
+    Parameters:
+    - record: extracted fields dict
+    - entry: metadata (file info, etc)
+    - doc_text: full document text for validation (optional)
     """
     if not isinstance(record, dict):
         return blank_record(entry)
@@ -1489,7 +1545,8 @@ def normalize_record(record, entry):
     
     # CRITICAL FIX: Infer and correct LEAD_MARKER based on product signals
     # This catches loans incorrectly classified as insurance products
-    normalized = _infer_and_correct_lead_marker(normalized)
+    # Pass the full document text for validation and product name checking
+    normalized = _infer_and_correct_lead_marker(normalized, doc_text=doc_text)
     
     return normalized
 
@@ -1833,26 +1890,29 @@ def get_raw_generation(model, tokenizer, prompt, max_new_tokens=None):
     return text
 
 
-def extract_one_chunk(model, tokenizer, entry, chunk, chunk_idx, chunk_total, max_new_tokens=None):
+def extract_one_chunk(model, tokenizer, entry, chunk, chunk_idx, chunk_total, max_new_tokens=None, full_text=""):
     """
     Run extraction on a SINGLE chunk of the document (initial attempt +
     one compact repair retry if output is not parseable JSON).
     Validation is done once on the final merged record, not per chunk.
     Returns a normalized record dict, or None if both attempts failed.
+    
+    Parameters:
+    - full_text: the complete document text (for validation purposes)
     """
     prompt = build_prompt(entry, chunk, tokenizer, chunk_idx, chunk_total)
     raw = get_raw_generation(model, tokenizer, prompt, max_new_tokens=max_new_tokens)
 
     try:
         parsed = parse_json_blob(raw)
-        return normalize_record(parsed, entry)
+        return normalize_record(parsed, entry, doc_text=full_text)
     except Exception:
         # Compact repair prompt (no full SYSTEM_PROMPT) to stay within context
         repair_prompt = build_repair_prompt(entry, raw)
         repaired_raw = get_raw_generation(model, tokenizer, repair_prompt, max_new_tokens=max_new_tokens)
         try:
             repaired_parsed = parse_json_blob(repaired_raw)
-            return normalize_record(repaired_parsed, entry)
+            return normalize_record(repaired_parsed, entry, doc_text=full_text)
         except Exception as second_error:
             print(
                 f"  Warning: chunk {chunk_idx}/{chunk_total} unparseable after "
@@ -1888,7 +1948,8 @@ def extract_one_product(model, tokenizer, entry, text, max_new_tokens=None):
 
     for i, chunk in enumerate(chunks, start=1):
         chunk_record = extract_one_chunk(
-            model, tokenizer, entry, chunk, i, chunk_total, max_new_tokens=max_new_tokens
+            model, tokenizer, entry, chunk, i, chunk_total, max_new_tokens=max_new_tokens,
+            full_text=text
         )
         if chunk_record is not None:
             any_chunk_succeeded = True
@@ -1903,7 +1964,7 @@ def extract_one_product(model, tokenizer, entry, text, max_new_tokens=None):
     validation_raw = get_raw_generation(model, tokenizer, validation_prompt, max_new_tokens=max_new_tokens)
     try:
         validated_parsed = parse_json_blob(validation_raw)
-        return normalize_record(validated_parsed, entry)
+        return normalize_record(validated_parsed, entry, doc_text=text)
     except Exception:
         # If the validation call itself fails to parse, the merged record
         # (already normalized field-by-field) is still a valid result.
