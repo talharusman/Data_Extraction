@@ -762,7 +762,7 @@ field_max_lengths = {
     "EQUITY_REQUIREMENT": 25,      # FIXED: widened from 20 to handle percentage + qualifiers
     "DBR_LIMIT": 20,
     "TRANSACTION_LIMIT": 60,       # FIXED: widened from 50
-    "SPECIAL_CONDITIONS": 280,     # FIXED: widened from 250 for detailed multi-condition rules
+    "SPECIAL_CONDITIONS": 350,     # FIXED AGAIN: widened from 280 for multi-condition extraction for detailed multi-condition rules
     "PREMIUM_PAYMENT_FREQUENCY": 50,
     "PRODUCT_DESCRIPTION": 300,    # FIXED: widened from 250 for full feature descriptions
     "KEY_BENEFITS": 320,           # FIXED: widened from 280 for complete benefit lists
@@ -1006,13 +1006,57 @@ def _normalize_target_goal(value: str) -> str:
 
 
 def _normalize_channel(value: str) -> str:
-    """Standardize CHANNEL."""
+    """
+    Standardize CHANNEL. 
+    CRITICAL FIX: If multiple channels are mentioned (e.g. "Bank Branch | Call Center"),
+    preserve ALL of them separated by " | ", do NOT return only the first one.
+    """
     if not value or value == DEFAULT_VALUE:
         return DEFAULT_VALUE
+    
     val_lower = value.lower()
-    if "branch" in val_lower or "branches" in val_lower:
-        return "Bank Branch"
-    return value.strip()[:30]
+    
+    # Map common channel keywords to standard names
+    channel_map = {
+        "branch": "Bank Branch",
+        "branches": "Bank Branch",
+        "mobile": "Mobile App",
+        "app": "Mobile App",
+        "online": "Online",
+        "call": "Call Center",
+        "helpline": "Call Center",
+        "atm": "ATM",
+        "digital": "Digital",
+    }
+    
+    # Split by pipe/comma/semicolon to handle multi-channel inputs
+    segments = re.split(r'[|,;]', value)
+    channels = []
+    
+    for seg in segments:
+        seg_clean = seg.strip().lower()
+        if not seg_clean:
+            continue
+        
+        # Try to match against keywords
+        matched = False
+        for keyword, mapped_name in channel_map.items():
+            if keyword in seg_clean:
+                if mapped_name not in channels:
+                    channels.append(mapped_name)
+                matched = True
+                break
+        
+        # If no keyword match, keep the original if it looks reasonable
+        if not matched and seg.strip():
+            seg_title = seg.strip()[:30]
+            if seg_title not in channels:
+                channels.append(seg_title)
+    
+    if channels:
+        return " | ".join(channels)
+    
+    return DEFAULT_VALUE
 
 
 def _normalize_eligibility(value: str) -> str:
@@ -1269,6 +1313,94 @@ def _validate_and_fix_product_name(extracted_name: str, doc_text: str) -> str:
     
     # If none of the checks pass, the name is likely hallucinated
     return "N/A"
+
+
+def _extract_tenure_pattern(value: str) -> str:
+    """
+    Extract explicit TENURE patterns from text.
+    Recognizes phrases like:
+      - "yearly renewable", "annual renewable" → "Yearly renewable"
+      - "1 year", "one year" → "1 year"
+      - "Up to X years" → "Up to X years"
+      - "X-Y years" → "X-Y years"
+    Returns N/A if no explicit tenure phrase found.
+    """
+    if not value or value == DEFAULT_VALUE:
+        return DEFAULT_VALUE
+    
+    val_lower = value.lower().strip()
+    
+    # Pattern 1: "yearly renewable" or "annual" + "renewable"
+    if ("yearly" in val_lower or "annual" in val_lower) and "renewable" in val_lower:
+        return "Yearly renewable"
+    
+    # Pattern 2: "X year" or "X years" (explicit duration)
+    match = re.search(r"(\d+)\s*years?", val_lower)
+    if match:
+        years = match.group(1)
+        # Check if it's a range like "Up to 10 years"
+        if "up to" in val_lower:
+            return f"Up to {years} years"
+        elif "at least" in val_lower or "minimum" in val_lower:
+            return f"Minimum {years} years"
+        elif "-" in val_lower:  # Range like "5-10 years"
+            range_match = re.search(r"(\d+)\s*-\s*(\d+)\s*years?", val_lower)
+            if range_match:
+                return f"{range_match.group(1)}-{range_match.group(2)} years"
+        return f"{years} year" + ("s" if int(years) > 1 else "")
+    
+    # Pattern 3: "1 year renewable"
+    if "1 year" in val_lower and "renewable" in val_lower:
+        return "1 year renewable"
+    
+    # If explicit tenure not found, return N/A
+    return DEFAULT_VALUE
+
+
+def _extract_special_conditions_patterns(value: str) -> str:
+    """
+    Extract SPECIAL_CONDITIONS patterns from text.
+    Looks for:
+      - "only one policy per CNIC" / "one policy per unique CNIC"
+      - "maximum X balloon payments per year"
+      - "no balloon payment in first year"
+      - "free look period" + days
+    Concatenates multiple conditions found with " | ".
+    """
+    if not value or value == DEFAULT_VALUE:
+        return DEFAULT_VALUE
+    
+    val_lower = value.lower().strip()
+    conditions = []
+    
+    # Pattern 1: One policy per CNIC restriction
+    if "one policy" in val_lower and "cnic" in val_lower:
+        conditions.append("Only one policy per CNIC")
+    
+    # Pattern 2: Balloon payment restrictions
+    balloon_match = re.search(r"(\d+)\s*balloon", val_lower)
+    if balloon_match:
+        count = balloon_match.group(1)
+        if "no" in val_lower[:balloon_match.start()]:  # "no balloon"
+            conditions.append("No balloon payment allowed")
+        else:
+            conditions.append(f"Maximum {count} balloon payments per year")
+    
+    # Pattern 3: No balloon in first year
+    if "no balloon" in val_lower and ("first year" in val_lower or "1st year" in val_lower):
+        if "No balloon payment in first year" not in conditions:
+            conditions.append("No balloon payment in first year")
+    
+    # Pattern 4: Free look period
+    look_match = re.search(r"free\s*look\s*(?:period)?\s*(?:of)?\s*(\d+)\s*days?", val_lower)
+    if look_match:
+        days = look_match.group(1)
+        conditions.append(f"Free look period: {days} days")
+    
+    if conditions:
+        return " | ".join(conditions)
+    
+    return DEFAULT_VALUE
 
 
 def _crossfield_validate(normalized: dict) -> dict:
