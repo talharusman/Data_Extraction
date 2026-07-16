@@ -1130,10 +1130,14 @@ def _extract_tenure_years(tenure_text: str) -> tuple[int | None, int | None]:
     """
     Extract MIN_TERM_YEARS and MAX_TERM_YEARS from tenure description text.
     
+    CRITICAL: "Up to X years" (no minimum stated) should return (None, X),
+    NOT (1, X). Never default MIN to 1 without explicit statement.
+    
     Examples:
-      "Up to 10 years" → (1, 10)
+      "Up to 10 years" → (None, 10)  # No minimum stated
+      "Minimum 2 to 10 years" → (2, 10)
       "5-10 years" → (5, 10)
-      "1 Year" → (1, 1)
+      "1 Year" → (1, 1)  # Only if explicitly "1 year"
       "10-67 years" → (10, 67)
     
     Returns: (min_years, max_years) or (None, None) if extraction fails.
@@ -1143,11 +1147,11 @@ def _extract_tenure_years(tenure_text: str) -> tuple[int | None, int | None]:
     
     text = tenure_text.lower().strip()
     
-    # Pattern 1: "Up to X years" or "Up to X year"
+    # Pattern 1: "Up to X years" or "Up to X year" — NO minimum
     match = re.search(r"up\s+to\s+(\d+)\s+years?", text)
     if match:
         max_year = int(match.group(1))
-        return 1, max_year
+        return None, max_year  # No minimum, only maximum
     
     # Pattern 2: "X-Y years" or "X to Y years"
     match = re.search(r"(\d+)\s*[-to\s]+\s*(\d+)\s+years?", text)

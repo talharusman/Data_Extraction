@@ -13,6 +13,7 @@ AH1. PRODUCT_NAME: MUST be extracted from THIS document's own heading or title
        when the document is actually titled "Alfalah Nighaban Insurance Plan"
      - Using training data product names instead of what's in THIS document
      - Assuming variant names without finding them in the text
+
 AH2. LEAD_MARKER: MUST be determined by KEYWORDS in the document text:
      - Keywords explicitly stating "term finance", "loan", "credit facility",
        "financing", "overdraft", "deposit account", "savings account",
@@ -23,35 +24,54 @@ AH2. LEAD_MARKER: MUST be determined by KEYWORDS in the document text:
      - When in doubt, check WHO UNDERWRITES: if document mentions bank name
        only (Bank Alfalah, HBL, UBL, etc.) → BNK. If document mentions
        insurance company (IGI, EFU, Alfalah Insurance, etc.) → IBG.
+
 AH3. Never extract insurance-specific fields (FREE_LOOK_PERIOD_DAYS,
      COVERAGE_AMOUNT, OPTIONAL_RIDERS, PREMIUM_PAYMENT_FREQUENCY,
      KEY_EXCLUSIONS, MIN_CONTRIBUTION) for BNK (loan/account/card) products.
      ALL of these must be "N/A" for loans.
+
 AH4. For BNK (loan) products, you MUST extract:
      LOAN_AMOUNT_RANGE if any loan/financing limit is mentioned.
      COLLATERAL_TYPE if collateral is mentioned.
      EQUITY_REQUIREMENT if equity/down payment % is mentioned.
      FINANCING_TYPE as "Conventional" or "Islamic" only (never "Unit Linked").
+
 AH5. Every extracted field must correspond to EXPLICIT text in THIS document.
      If you cannot find it, return "N/A". Never infer, assume, or hallucinate.
+
 AH6. Do NOT confuse PRICING_RATE with MIN_CONTRIBUTION:
      - PRICING_RATE: For LOAN products ONLY. Interest rates, markup rates,
        KIBOR margins (e.g. "1 Year KIBOR + 3%"). For insurance → "N/A".
      - MIN_CONTRIBUTION: For INSURANCE products ONLY. Premium amounts or
        tiered premiums (e.g. "Bronze:5000 | Silver:10000"). For loans → "N/A".
-AH7. KEY_EXCLUSIONS ANTI-HALLUCINATION RULE:
-     Key_Exclusions must be EXPLICITLY found in the document's "Exclusions"
-     or "Excluded Coverage" section. Do NOT invent common exclusions like
-     "pre-existing conditions", "hazardous occupations", "war", "terrorism"
-     unless they are EXPLICITLY stated in THIS document's text. If no
-     exclusions section exists or is found, RETURN "N/A" (not a guess).
-AH8. REQUIRED_DOCUMENTS ANTI-CONTAMINATION RULE:
-     For IBG (insurance) products, REQUIRED_DOCUMENTS must NOT contain
-     loan-specific keywords: "salary slip", "employment certificate",
-     "bank statement", "tax return", "proprietorship", "processing fee",
-     "property documents", "collateral". These indicate incorrect extraction
-     from a loan product section. If extraction contains these keywords for
-     an IBG product, CLEAR and return "N/A".
+
+AH7. REQUIRED_DOCUMENTS: MUST extract EVERY document type mentioned in the 
+     "Documentation Required" or "Documents Required" or similar sections. 
+     Never omit items from a list. If a list appears in the source:
+     - Count every item carefully
+     - Extract all items with " | " delimiter
+     - Do NOT abbreviate or summarize the list
+     - If multiple customer segments have different docs, merge all with segment labels
+       (e.g., "CNIC | Salary Slips (Salaried) | Business Registration (Self-Employed)")
+     If NO document list exists in source document, return "N/A" — do NOT use a 
+     default template or copy from another product. This is critical.
+
+AH8. KEY_BENEFITS (Insurance): List EVERY named benefit/coverage explicitly mentioned.
+     Do NOT add benefits from training data, boilerplate, or other products. 
+     If the document says "Accidental Death, ATM Theft, Medical", extract exactly 
+     those. Do NOT add "plus standard life insurance" or other assumed coverages.
+     For BNK (loan) products: Extract only benefits explicitly stated in THIS 
+     document's benefits section. Never add "life insurance" or "protection coverage"
+     if not explicitly mentioned.
+
+AH9. KEY_EXCLUSIONS (Insurance): Extract ONLY if a formal "Exclusions", "Not Covered",
+     or "Limitations" section exists in the document. Never infer exclusions from
+     benefit descriptions. If not formally stated, return "N/A".
+
+AH10. CUSTOMER_TYPE: Extract the EXACT customer categories mentioned in eligibility
+      sections. Never expand to enum defaults. If doc says "SMEs and Individuals",
+      extract "SME | Individual", NOT "SME | Corporate | Retail | Entrepreneur".
+      Extract only what is explicitly stated, separated by " | ".
 
 COLUMNS: PRODUCT_NAME, LEAD_MARKER, SOURCE_FILE_PRODUCT, PLAN_TYPE, TARGET_GOAL,
 CUSTOMER_TYPE, EMPLOYMENT_TYPE, CUSTOMER_SEGMENT, TARGET_SEGMENT, SEGMENT_TIER,
@@ -66,6 +86,38 @@ SPECIAL_CONDITIONS, PRODUCT_DESCRIPTION, PROVIDER_NAME, PRODUCT_VARIANT_TIER,
 PRICING_RATE, FEES_AND_CHARGES, KEY_BENEFITS, OPTIONAL_RIDERS,
 FREE_LOOK_PERIOD_DAYS, REQUIRED_DOCUMENTS, CLAIMS_SERVICE_CONTACT,
 KEY_EXCLUSIONS, TAX_ZAKAT_TREATMENT, PREMIUM_PAYMENT_FREQUENCY
+
+===VALIDATION RULES===
+V1. If LEAD_MARKER = "BNK" (bank-direct loan/account/card):
+    - MUST set these to "N/A": COVERAGE_AMOUNT, MIN_CONTRIBUTION, FREE_LOOK_PERIOD_DAYS,
+      OPTIONAL_RIDERS, PREMIUM_PAYMENT_FREQUENCY, KEY_EXCLUSIONS
+    - MUST set: LOAN_AMOUNT_RANGE (if loan mentioned), FINANCING_TYPE (Conventional/Islamic), 
+      PRICING_RATE (if interest rates stated)
+    - If any insurance field is non-N/A for BNK, reject and re-extract
+
+V2. If LEAD_MARKER = "IBG" (insurance/takaful):
+    - MUST set: COVERAGE_AMOUNT, MIN_CONTRIBUTION, PREMIUM_PAYMENT_FREQUENCY
+    - MUST set: FREE_LOOK_PERIOD_DAYS (or "N/A" if not stated)
+    - If LOAN_AMOUNT_RANGE is non-N/A, reject — insurance products don't have loan amounts
+
+V3. MIN_TERM_YEARS and MAX_TERM_YEARS:
+    - Extract ONLY if document explicitly states minimum/maximum tenure
+    - "Up to 10 years" means MAX_TERM_YEARS=10, MIN_TERM_YEARS="N/A" (not 1)
+    - Never default to 1 or 0 without explicit statement
+    - For yearly-renewable insurance, MAX_TERM_YEARS=1 is correct (single annual term)
+
+V4. PRODUCT_VARIANT_TIER and MIN_CONTRIBUTION:
+    - These MUST have the SAME number of pipe-separated items when BOTH are present
+    - If tier table has 4 tiers (Bronze|Silver|Gold|Platinum), 
+      MIN_CONTRIBUTION must have exactly 4 amounts (5K|10K|15K|20K)
+    - If table shows 4 rows, extract all 4 tiers (never skip the last one like Platinum)
+
+V5. PRICING_RATE (Loans) vs MIN_CONTRIBUTION (Insurance):
+    - For loans: PRICING_RATE holds interest/markup rates (e.g. "KIBOR+3%")
+    - For insurance: MIN_CONTRIBUTION holds premium amounts (e.g. "5000")
+    - These are MUTUALLY EXCLUSIVE per product type
+    - BNK products should never have MIN_CONTRIBUTION non-N/A
+    - IBG products should never have PRICING_RATE non-N/A
 
 ===GLOBAL RULES===
 G1. Missing value → "N/A". Never null/None/""/NaN.
@@ -95,11 +147,19 @@ G7. DO NOT DERIVE fields that aren't explicitly supported by the text:
     Use "N/A" only when the document gives no eligibility/customer
     information at all.
 G8. PRODUCT_NAME: Title Case always ("Alfalah Green Energy" not "ALFALAH GREEN
-    ENERGY"). MUST be taken from THIS document's own heading only. If no
-    clear heading exists, return "N/A".
+    ENERGY"). MUST be taken from THIS document's own heading only. Match the
+    exact word order from the heading. If no clear heading exists, return "N/A".
 G9. CHARACTER LIMITS ARE HARD (see max-length per field). Lead with the most
     important concrete facts (amounts, ages, %, tier names) FIRST in
     compact form; avoid filler phrases like "This plan offers...".
+G9b. If a field's value exceeds its max-length limit and truncation would lose
+    critical information, use tiered/abbreviated format:
+    - For REQUIRED_DOCUMENTS: "CNIC | Salary slips | Bank statements | ..." 
+      (short names, not full descriptions)
+    - For COVERAGE_AMOUNT: "AccidentalDeath:500K-1.75M | ATM:100K-200K | ..."
+      (abbreviate field names if needed)
+    - For PRICING_RATE: "Salaried:KIBOR+3% | Self-Emp:KIBOR+4%" (short labels)
+    Never skip list items due to length; prioritize completeness over verbosity.
 G10. DELIMITER STANDARD for every multi-value / list-type field: separate
     items with " | " (space-pipe-space). Never use semicolons as a list
     separator. Commas are allowed ONLY inside a number ("500,000") or
@@ -124,8 +184,9 @@ G12. PRODUCT TYPE CLASSIFICATION (Loan vs Insurance vs Deposit vs other):
 
 ===COLUMN RULES===
 PRODUCT_NAME: max50. Title Case from heading, this document only. MUST find
-    an explicit heading or section title in the document. If no clear heading,
-    return "N/A". NEVER invent product names.
+    an explicit heading or section title in the document. Match the exact
+    word order from the heading. If no clear heading, return "N/A". 
+    NEVER invent product names.
 LEAD_MARKER: Classify FIRST based on document keywords.
   "BNK" = loan/account/card/deposit/service sold by bank, no insurance.
     Keywords: "term finance", "loan", "credit", "financing facility",
@@ -137,128 +198,155 @@ LEAD_MARKER: Classify FIRST based on document keywords.
     "endowment", "unit-linked", "fund".
     Provider: Insurer name (IGI, EFU, Alfalah Insurance, etc).
 SOURCE_FILE_PRODUCT: filename only. Same for all products from one file.
-PLAN_TYPE: max50. Loan | Deposit | Savings | Card | Investment | Insurance |
-  Service | Loyalty. Short form only. For IBG products, say "Insurance".
-TARGET_GOAL: max50. Use corrected style (e.g. "Green Energy Financing", "Health",
-  "Savings", "Protection"). Map from document to intent, never invent.
-CUSTOMER_TYPE: max100. Multiple enum values separated by " | " (Salaried |
-  Self-Employed | SME | Corporate | Retail | Government). Include all
-  customer types mentioned in document, do NOT guess. Return "N/A" if no
-  explicit customer type segments.
-EMPLOYMENT_TYPE: max100. Explicit employment eligibility (Salaried | Self-Employed |
-  Contract | Permanent | Proprietor | Partner | Director | Business Owner).
-  For insurance products with no employment clause → "N/A". For multi-option
-  products, include all types: "Salaried | Self-Employed".
-CUSTOMER_SEGMENT: max50. Behavioral segment if explicitly identified (e.g. "NRP",
-  "Financial Inclusion", "Underserved"). Else "N/A".
-TARGET_SEGMENT: max50. More specific positioning segment, e.g. "SME Entrepreneurs".
-  Else "N/A".
-SEGMENT_TIER: max50. Explicit HNW/Premium tier if mentioned. E.g. "Premium (HNW)".
-  Else "N/A".
-MIN_AGE: Numeric. Minimum eligible age. CRITICAL: Only extract if document
-  EXPLICITLY states minimum (e.g. "minimum 18 years"). Never default.
-  Never assume a value. If not stated, "N/A".
-MAX_AGE: Numeric. Maximum eligible age. Extract from explicit statements.
-  Never default to "65" unless the document says so.
-GENDER: All | Male | Female | N/A. Return "All" if document says product
-  available to all genders / no restrictions. Return "N/A" only if document
-  contains no gender/eligibility information whatsoever.
-IS_BANK_OFFERED: 1 if sold/distributed through bank, N/A otherwise.
-ACCOUNT_TYPE: max30. Current | Savings | Wallet | Digital | etc. Else "N/A".
-CARD_TYPE: max30. Debit | Credit | Virtual Debit | Premium | etc. Else "N/A".
-CHANNEL: max30. Bank Branch | Mobile App | Online | Call Center | etc. Else "N/A".
-ELIGIBILITY_TYPE: max100. Short eligibility logic text (e.g. "CNIC + Biometric").
-SERVICE_TYPE: max50. Descriptive service category. Else "N/A".
-REWARD_TYPE: max50. Cashback | Points | Miles | Discounts | etc. Else "N/A".
-CURRENCY: max20. PKR | USD | etc. Default to PKR for Pakistan products.
-CURRENCY_TYPE: max50. Descriptive (e.g. "Foreign Exchange"). Else "N/A".
-MIN_BALANCE: Numeric with tier support. Minimum required balance or tiered
-  (e.g. "Basic:10000 | Premium:100000"). Else "N/A".
-AVG_BALANCE_REQUIREMENT: Numeric. Average balance required. Else "N/A".
-MIN_INCOME: Numeric. Minimum monthly income in home currency. Extract numbers
-  only (e.g. "PKR 50,000/month" → 50000).
-MIN_INCOME_USD: Numeric. Minimum income in USD if stated. Else "N/A".
-MIN_INVESTMENT: Numeric with tier support. Minimum investment amount or tiered.
-  Else "N/A".
-MIN_CONTRIBUTION: max300. INSURANCE ONLY. Premium amounts, tiered by plan variant.
-  E.g. "Bronze:5000 | Silver:10000 | Gold:15000 | Platinum:20000".
-  Include ALL tiers. For non-insurance → "N/A".
-LOAN_AMOUNT_RANGE: max100. BNK (loan) ONLY. Range or limit, e.g. "Up to PKR 5 Million".
-  For insurance/other → "N/A".
-COVERAGE_AMOUNT: max300. INSURANCE ONLY. Per-coverage limits, e.g.
-  "Accidental Death:500K-1750K | ATM Withdrawal:100K-200K". For non-insurance → "N/A".
-FINANCING_TYPE: Conventional | Islamic | Takaful | Mudarabah | Unit Linked |
-  Hybrid (Bonus Based and Unit Linked) | N/A. BNK loans = Conventional/Islamic
-  only. IBG products = may be Unit Linked, Hybrid, Takaful, Mudarabah.
-DEPOSIT_PROFIT_TYPE: max50. Monthly | Annual | Quarterly | etc. Else "N/A".
-DEPOSIT_PROFIT_FREQUENCY: max50. Explicit profit/dividend payout frequency.
-  Else "N/A".
-TENURE: max50. Descriptive tenure (e.g. "Up to 10 years" or "1 year renewable").
-  CRITICAL: Always include full phrase from document, not collapsed to number.
-TENURE_OPTIONS: max100. If multiple tenure options exist, list them separated by " | ".
-  Else "N/A".
-MIN_TERM_YEARS: Numeric. CRITICAL ANTI-HALLUCINATION RULE: Extract ONLY if
-  document EXPLICITLY states a minimum term (e.g. "minimum 2 years term",
-  "tenure of at least 3 years"). Do NOT default to 1. Do NOT infer from
-  "Up to X years" (which only sets MAX). If document says ONLY "Up to 10 years"
-  with no minimum, return "N/A". Never assume a value.
-MAX_TERM_YEARS: Numeric. Maximum term from explicit statements. For yearly
-  renewable insurance, use "1" (not N/A). For time-unlimited products, "N/A".
-BUSINESS_TENURE: max50. Required business operating history. Include BOTH
-  minimum AND different types if mentioned (e.g. "2 years for SEP | 3 years
-  for SEB"). Else "N/A".
+PLAN_TYPE: max50. Loan, Savings, Current Account, Card, Insurance, Deposit,
+  Investment, Service, etc. Based on document classification.
+TARGET_GOAL: max50. Primary customer need/use case (e.g. "Housing", "Working
+  Capital", "Green Energy Financing", "Protection", "Wealth Creation").
+CUSTOMER_TYPE: max100. Eligible customer classes. Examples: Salaried |
+  Self-Employed | SME | Corporate | Individual | Retail. Separate multiple
+  with " | ". Extract ONLY categories explicitly mentioned in document.
+EMPLOYMENT_TYPE: max100. Employment eligibility. Examples: Salaried | 
+  Self-Employed | Contractual. CRITICAL: Extract ALL employment types 
+  mentioned in eligibility sections, not just the first. Use " | " delimiter.
+CUSTOMER_SEGMENT: max50. Behavioral/demographic segment IF explicitly labeled
+  (e.g. "HNW", "NRP", "Financial Inclusion", "Youth"). Else "N/A".
+TARGET_SEGMENT: max50. More specific positioning segment where stated. Else "N/A".
+SEGMENT_TIER: max50. Priority/premium/standard tier label if stated. Else "N/A".
+MIN_AGE: Minimum eligible age integer only. "18" not "18 years". If not
+  stated, "N/A". When multiple segments have different ages, use the most
+  restrictive (minimum) for general applicability.
+MAX_AGE: Maximum eligible age integer only. Extract ONLY if document explicitly
+  states it. Do NOT infer from one segment only. If unclear, "N/A".
+GENDER: Gender eligibility. "Male", "Female", or "All" (if no restriction
+  and product is offered broadly to bank customers). Use "N/A" only if
+  document provides no eligibility information at all.
+IS_BANK_OFFERED: 1 if product sold through bank, else "N/A". Always numeric.
+ACCOUNT_TYPE: max50. Current, Savings, Wallet, Digital, etc. For non-account
+  products → "N/A".
+CARD_TYPE: max50. Debit, Credit, Virtual Debit, Premium, Classic, etc.
+  For non-card products → "N/A".
+CHANNEL: max50. Primary servicing/onboarding channel (e.g. "Mobile App",
+  "Bank Branch", "Online Portal", "Call Center"). Else "N/A".
+ELIGIBILITY_TYPE: max250. Eligibility criteria summary describing WHO qualifies.
+  Format: describe age range, employment type, business tenure, and other 
+  restrictions per customer segment in concise prose. Examples:
+  - "Salaried: 25-62 years, permanent employment"
+  - "Self-Employed: 25-65 years, 2+ years business history"
+  - "SME: 3+ years business tenure"
+  Do NOT mix with benefits or product features. Keep to eligibility facts only.
+  Do NOT combine multiple fields into one (keep age/tenure separate). Extract
+  eligibility narrative only if necessary for clarity.
+SERVICE_TYPE: max50. Operational/service type for non-core products (e.g.
+  "Payments", "Remittance", "Trade Finance"). Else "N/A".
+REWARD_TYPE: max50. Reward mechanism (e.g. "Points", "Cashback", "Miles",
+  "Discounts"). Else "N/A".
+CURRENCY: max50. Currency or set of currencies (e.g. "PKR", "PKR + FCY",
+  "USD"). Extract only what is explicitly stated.
+CURRENCY_TYPE: max50. PKR/FCY style label ONLY if document explicitly uses
+  such labeling (e.g. document says "available in FCY"). Else "N/A".
+MIN_BALANCE: Minimum opening or operating balance. Numeric (no units).
+  For tiered balances: keep full tier text (e.g. "Basic:1000|Gold:50000").
+  For non-account products → "N/A".
+AVG_BALANCE_REQUIREMENT: Average balance requirement. Numeric (no units).
+  Tiered format allowed. Else "N/A".
+MIN_INCOME: Minimum PKR income integer (no units). If multiple tiers,
+  use tiered format. Extract only if explicitly stated in document.
+MIN_INCOME_USD: Minimum USD income integer (no units). Extract only if
+  explicitly stated. Else "N/A".
+MIN_INVESTMENT: Minimum investment/placement amount. For tiered amounts,
+  keep tier text (e.g. "100K|250K|500K"). Else "N/A".
+MIN_CONTRIBUTION: max200. INSURANCE ONLY. Minimum premium/contribution.
+  For tiered: "Bronze:5000 | Silver:10000 | Gold:15000 | Platinum:20000"
+  CRITICAL: Extract ALL tiers including the last one. If table shows 4 tiers,
+  extract exactly 4. For BNK products → "N/A".
+LOAN_AMOUNT_RANGE: max50. Loan size or facility range (e.g. "Up to PKR 5 Million",
+  "200K-3M"). Extract only for loan products. For insurance → "N/A".
+COVERAGE_AMOUNT: max400. Coverage amount or insured amount per event/tier.
+  For tiered: "Accidental Death:500K-1.75M | ATM:100K-200K | ..."
+  Include ALL coverage types listed in document. For BNK products → "N/A".
+FINANCING_TYPE: max50. Financing structure. For LOANS: "Conventional" or
+  "Islamic" only (NOT "Unit Linked"). For DEPOSITS: "Mudarabah", "Wakalah",
+  etc. For INSURANCE: leave "N/A" (insurance doesn't use financing types).
+DEPOSIT_PROFIT_TYPE: max50. Profit basis or mode (e.g. "Tier-based",
+  "Fixed", "Variable", "Compound"). For non-deposit products → "N/A".
+DEPOSIT_PROFIT_FREQUENCY: max50. Payout frequency (e.g. "Monthly",
+  "Semi-Annual", "Maturity", "On Demand"). For non-deposit products → "N/A".
+TENURE: max50. Readable tenor text (e.g. "1-5 years", "Up to 10 years",
+  "1 year"). Extract as stated in document.
+TENURE_OPTIONS: max50. Structured tenor menu IF a menu exists (e.g. "1M -> 3M -> 
+  6M -> 1Y -> 2Y -> 5Y"). If only fixed tenure, "N/A". Do NOT confuse with
+  TENURE (which is readable text); this is a structured menu if offered.
+MIN_TERM_YEARS: Minimum term integer. Extract ONLY if document explicitly
+  states "minimum X years" or similar. Do NOT default to 1. If document says
+  "Up to 10 years" only (no minimum), use "N/A". For yearly renewable
+  insurance, use "N/A" unless explicitly stated otherwise.
+MAX_TERM_YEARS: Maximum term integer. Extract from explicit statements like
+  "Financing Tenure: Up to 10 years" or table max. For yearly renewable
+  insurance, "1" is correct (single annual term, annually renewable).
+BUSINESS_TENURE: max50. Required business operating history.
+  CRITICAL: Extract BOTH minimum and different types if mentioned.
+  E.g. "2 years for SEP | 3 years for SEB" or "Min. 2 years".
+  Include all variants mentioned per customer segment.
 COLLATERAL_TYPE: max100. Security/collateral type for loans (e.g.
   "Residential Property", "Machinery"). For non-loan products → "N/A".
 EQUITY_REQUIREMENT: max50. Equity/down payment % for loans (e.g. "20%").
   For non-loan products → "N/A".
 DBR_LIMIT: max50. Debt-to-income ratio limit for loans (e.g. "<=40%").
   For non-loan products → "N/A".
-TRANSACTION_LIMIT: max50. Usage/balance/transaction cap if stated. Else "N/A".
-SPECIAL_CONDITIONS: max250. Concrete restrictions ONLY (one-policy-per-CNIC,
+TRANSACTION_LIMIT: max50. Usage/balance/transaction cap if stated.
+  For multiple limits (daily/monthly), use tiered format (e.g. "Daily:100K|Monthly:1M").
+SPECIAL_CONDITIONS: max300. Concrete restrictions ONLY (one-policy-per-CNIC,
   free look windows, no balloon payment in 1st year). Separated by " | ".
-  Do NOT include insurance claims terms, underwriting exclusions.
+  Do NOT include insurance claims terms or detailed underwriting exclusions
+  (those go in KEY_EXCLUSIONS). Keep conditions concise and specific.
 PRODUCT_DESCRIPTION: max250. One compact sentence: what it is, who provides it,
-  core mechanism/purpose. Skip marketing language.
+  core mechanism/purpose. Skip marketing language. Example: "Term finance facility
+  for green energy equipment offering customized financing with attractive rates."
 PROVIDER_NAME: max100.
   For BNK (loans/accounts): Bank name only (e.g. "Bank Alfalah Limited").
-  For IBG (insurance): Insurer name FIRST, then bank relationship.
+  For IBG (insurance): Insurer name FIRST, then bank relationship if relevant
+  (e.g. "Alfalah Insurance Company Limited" or "Alfalah Insurance / Bank Alfalah").
 PRODUCT_VARIANT_TIER: max50. Tier names joined by " | " (e.g. "Bronze | Silver
-  | Gold | Platinum"). CRITICAL FIX: Include ALL tiers from the document table,
-  including the last one. If table shows 4 tiers, extract all 4. Else "N/A".
+  | Gold | Platinum"). CRITICAL: Include ALL tiers from the document table,
+  including the last one. If table shows 4 tiers, extract all 4. If document
+  has no tiers, "N/A".
 PRICING_RATE: max400. Interest/profit RATES or pricing for LOAN products ONLY
-  (e.g. "Salaried: 1 Year KIBOR + 3%"). For insurance or non-rate products →
-  "N/A". NEVER include insurance premium amounts here — those go in MIN_CONTRIBUTION.
+  (e.g. "Salaried: 1 Year KIBOR + 3% | Businessman: KIBOR + 4%"). For insurance 
+  or non-rate products → "N/A". NEVER include insurance premium amounts here — 
+  those go in MIN_CONTRIBUTION. NEVER include loan amount ranges here.
 FEES_AND_CHARGES: max300. Named fees only (e.g. "Processing Fee: As per SOC |
-  Issuance Fee: 500 PKR"). Separated by " | ".
-KEY_BENEFITS: max280. CORE benefits INCLUDED BY DEFAULT (not optional riders).
+  Issuance Fee: 500 PKR | Annual Renewal: 1000 PKR"). Separated by " | ".
+  Extract exact amounts if stated; else use "As per SOC" or similar.
+KEY_BENEFITS: max350. CORE benefits INCLUDED BY DEFAULT (not optional riders).
   For loans: rate, tenure, loan amount limits, early settlement options,
-  insurance coverage included (asset, life). Format: "Benefit 1 | Benefit 2".
+  insurance coverage included (asset, life only if explicitly stated).
   For insurance: Narrative description of what's covered (e.g., "Accidental
-  death protection | Medical expense coverage"). Do NOT duplicate COVERAGE_AMOUNT
-  (which is the table of limits). Separated by " | ".
-OPTIONAL_RIDERS: max300. Benefits doc labels as "optional" or "add-on" rider.
-  For non-insurance products → "N/A".
+  death protection | Medical expense coverage | ATM theft protection").
+  Format: "Benefit 1 | Benefit 2". Do NOT duplicate COVERAGE_AMOUNT
+  (which is the table of limits). Extract ONLY benefits explicitly mentioned
+  in THIS product's benefits section. Never add "life insurance" or standard
+  coverages not mentioned.
+OPTIONAL_RIDERS: max300. Benefits labeled as "optional", "add-on", or "rider"
+  in the document. For non-insurance products → "N/A". Extract only if 
+  explicitly offered as add-ons.
 FREE_LOOK_PERIOD_DAYS: Insurance only. Integer if EXPLICITLY stated (e.g. "14").
   Never default to 14. If document says "no free look" or doesn't mention,
   use "N/A". Bank loans/deposits → "N/A".
-REQUIRED_DOCUMENTS: max250. Short names only, separated by " | ". CRITICAL:
-  Include all document types listed (e.g. "CNIC | Passport | Employment
-  certificate | Salary slips | Bank statements | Property documents").
-  For IBG (insurance) products, NEVER include loan-specific keywords:
-  "salary slip", "employment certificate", "bank statement", "tax return",
-  "proprietorship", "processing fee", "property documents", "collateral".
-  If extracted list contains these for insurance, CLEAR to "N/A".
+REQUIRED_DOCUMENTS: max350. Short names only, separated by " | ". FIXED:
+  Field length increased to accommodate full document lists. Include all
+  document types listed (e.g. "CNIC | Passport | Employment certificate |
+  Salary slips | Bank statements | Property documents | Processing fee cheque |
+  Photographs"). CRITICAL: Extract EVERY document mentioned. If no document
+  list in source, return "N/A" (do NOT use default template).
 CLAIMS_SERVICE_CONTACT: max200. Insurance products only. Extract phone number
   or URL for claims (e.g. "042-111-786234" or "claims@insurer.com").
-  CRITICAL FIX: Must EXPLICITLY appear in document's claims or contact section.
-  If not found in document, return "N/A" (do NOT guess or use bank main line).
-  For loans/deposits → "N/A".
-KEY_EXCLUSIONS: max200. Insurance products only. ANTI-HALLUCINATION CRITICAL:
-  Key_Exclusions must be EXPLICITLY found in the document's "Exclusions" section.
-  Do NOT invent common exclusions like "pre-existing conditions", "hazardous
-  occupations", "war", "terrorism" unless they are explicitly written in THIS
-  document. If NO exclusions section or content found, return "N/A" (never guess).
-  For loans/deposits → "N/A".
+  CRITICAL: This field is HIGH PRIORITY for insurance; search document
+  for claims contact, phone, support contact, or claims process section.
+  Extract the contact information explicitly provided. For loans/deposits → "N/A".
+KEY_EXCLUSIONS: max200. Insurance products only. Explicit coverage exclusions
+  if stated in a formal "Exclusions", "Not Covered", or "Limitations" section
+  (e.g., "Pre-existing conditions", "Hazardous occupations"). Extract ONLY
+  if formally listed. Never infer from benefit descriptions. For loans/deposits → "N/A".
 TAX_ZAKAT_TREATMENT: max100. Zakat applicability or tax notes if stated.
   Else "N/A".
 PREMIUM_PAYMENT_FREQUENCY: max50. For INSURANCE ONLY: how customer PAYS premiums.
@@ -274,38 +362,38 @@ Example 1: Term Finance Loan for Solar Equipment (BNK product):
   TARGET_GOAL: "Green Energy Financing"
   LOAN_AMOUNT_RANGE: "Up to PKR 5 Million"
   COLLATERAL_TYPE: "Residential Property" | EQUITY_REQUIREMENT: "20%"
-  MIN_AGE: 25 (not 18, because Salaried minimum is 25) | MAX_AGE: 62 (not 65)
-  MIN_TERM_YEARS: "N/A" (document says only "Up to 10 years", NO minimum stated)
+  MIN_AGE: 25 (not 18, because Salaried minimum is 25) | MAX_AGE: 65
+  MIN_TERM_YEARS: "N/A" (no minimum stated, only "Up to 10 years")
   MAX_TERM_YEARS: 10
+  EMPLOYMENT_TYPE: "Salaried | Self-Employed" (extract ALL employment types)
   PRICING_RATE: "Salaried: 1 Year KIBOR + 3% | Businessman: KIBOR + 4%"
   COVERAGE_AMOUNT: "N/A" (NOT insurance)
   FREE_LOOK_PERIOD_DAYS: "N/A" (NOT insurance)
   OPTIONAL_RIDERS: "N/A" (NOT insurance)
   PREMIUM_PAYMENT_FREQUENCY: "N/A" (NOT insurance)
   KEY_BENEFITS: "Customized financing | Attractive markup rates | Asset insurance |
-    Life insurance | Balloon payment flexibility"
+    Balloon payment flexibility" (extract only if explicitly mentioned in THIS doc)
   MIN_CONTRIBUTION: "N/A" (NOT insurance)
-  KEY_EXCLUSIONS: "N/A" (NOT insurance)
   REQUIRED_DOCUMENTS: "CNIC | Employment certificate | Salary slips | Bank statements |
-    Property documents | Processing fee cheque | Photographs"
+    Property documents | Processing fee cheque | Photographs" (ALL documents listed)
 
 Example 2: Protection Insurance (IBG product):
   LEAD_MARKER: "IBG" | PLAN_TYPE: "Insurance"
-  PRODUCT_NAME: "Alfalah Nighaban Insurance Plan" (from document heading, NOT Jubilee Kamil)
+  PRODUCT_NAME: "Alfalah Nighaban Insurance Plan" (exact heading match)
   COVERAGE_AMOUNT: "Accidental Death:500K-1750K | ATM Withdrawal:100K-200K | Fraudulent:50K-100K |
     Medical:10K-20K | Identity:10K-20K | Wallet:3K-7500 | Burglary:35K-75K | Mobile:30K-45K"
   PRODUCT_VARIANT_TIER: "Bronze | Silver | Gold | Platinum" (ALL 4 TIERS, NOT just 3)
   MIN_CONTRIBUTION: "Bronze:5000 | Silver:10000 | Gold:15000 | Platinum:20000" (ALL 4)
-  FREE_LOOK_PERIOD_DAYS: "14" (if stated in document) or "N/A"
+  FREE_LOOK_PERIOD_DAYS: "14" (if stated) or "N/A"
   PREMIUM_PAYMENT_FREQUENCY: "Annual" (from "yearly renewable plan")
   PRICING_RATE: "N/A" (NOT for insurance — premium amounts go in MIN_CONTRIBUTION)
   MIN_AGE: 18 | MAX_AGE: 60
-  CLAIMS_SERVICE_CONTACT: "(042) 111 786 234" (IF found in claims section of document, else "N/A")
+  CLAIMS_SERVICE_CONTACT: "(042) 111 786 234" (HIGH PRIORITY extraction)
   LOAN_AMOUNT_RANGE: "N/A" (NOT a loan)
   COLLATERAL_TYPE: "N/A" (NOT a loan)
-  KEY_EXCLUSIONS: "N/A" (or "Exclusion1 | Exclusion2" ONLY if explicitly in document)
   KEY_BENEFITS: "Accidental death protection | Medical expense coverage | ATM theft protection |
     Fraudulent transaction coverage | Identity document replacement"
+  REQUIRED_DOCUMENTS: "N/A" (if not listed in document — do NOT hallucinate)
 
 ===DO NOT===
 × PRODUCT_NAME that doesn't appear in the document heading/title.
@@ -332,7 +420,7 @@ Example 2: Protection Insurance (IBG product):
 × Skipping the last tier (Platinum, etc.) in PRODUCT_VARIANT_TIER or MIN_CONTRIBUTION.
 × Defaulting MIN_TERM_YEARS to "1" without explicit minimum stated in document.
 × Extracting CLAIMS_SERVICE_CONTACT as "N/A" when a phone or email is provided.
-× HALLUCINATING KEY_EXCLUSIONS like "pre-existing conditions" or "hazardous
-  occupations" for insurance products. If no exclusions section in document, return "N/A".
-× CONTAMINATING REQUIRED_DOCUMENTS with loan keywords (salary slip, employment cert,
-  tax return) for insurance products. Clear these if found for IBG products.
+× Copying REQUIRED_DOCUMENTS from other products. Extract from THIS document only.
+× Adding "life insurance" or "protection coverage" to KEY_BENEFITS if not explicitly
+  mentioned in THIS product's benefits section.
+× Hallucinating document lists for insurance products when no documentation section exists.
