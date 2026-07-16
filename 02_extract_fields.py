@@ -762,7 +762,7 @@ field_max_lengths = {
     "EQUITY_REQUIREMENT": 25,      # FIXED: widened from 20 to handle percentage + qualifiers
     "DBR_LIMIT": 20,
     "TRANSACTION_LIMIT": 60,       # FIXED: widened from 50
-    "SPECIAL_CONDITIONS": 350,     # FIXED AGAIN: widened from 280 for multi-condition extraction for detailed multi-condition rules
+    "SPECIAL_CONDITIONS": 280,     # FIXED: widened from 250 for detailed multi-condition rules
     "PREMIUM_PAYMENT_FREQUENCY": 50,
     "PRODUCT_DESCRIPTION": 300,    # FIXED: widened from 250 for full feature descriptions
     "KEY_BENEFITS": 320,           # FIXED: widened from 280 for complete benefit lists
@@ -1006,57 +1006,13 @@ def _normalize_target_goal(value: str) -> str:
 
 
 def _normalize_channel(value: str) -> str:
-    """
-    Standardize CHANNEL. 
-    CRITICAL FIX: If multiple channels are mentioned (e.g. "Bank Branch | Call Center"),
-    preserve ALL of them separated by " | ", do NOT return only the first one.
-    """
+    """Standardize CHANNEL."""
     if not value or value == DEFAULT_VALUE:
         return DEFAULT_VALUE
-    
     val_lower = value.lower()
-    
-    # Map common channel keywords to standard names
-    channel_map = {
-        "branch": "Bank Branch",
-        "branches": "Bank Branch",
-        "mobile": "Mobile App",
-        "app": "Mobile App",
-        "online": "Online",
-        "call": "Call Center",
-        "helpline": "Call Center",
-        "atm": "ATM",
-        "digital": "Digital",
-    }
-    
-    # Split by pipe/comma/semicolon to handle multi-channel inputs
-    segments = re.split(r'[|,;]', value)
-    channels = []
-    
-    for seg in segments:
-        seg_clean = seg.strip().lower()
-        if not seg_clean:
-            continue
-        
-        # Try to match against keywords
-        matched = False
-        for keyword, mapped_name in channel_map.items():
-            if keyword in seg_clean:
-                if mapped_name not in channels:
-                    channels.append(mapped_name)
-                matched = True
-                break
-        
-        # If no keyword match, keep the original if it looks reasonable
-        if not matched and seg.strip():
-            seg_title = seg.strip()[:30]
-            if seg_title not in channels:
-                channels.append(seg_title)
-    
-    if channels:
-        return " | ".join(channels)
-    
-    return DEFAULT_VALUE
+    if "branch" in val_lower or "branches" in val_lower:
+        return "Bank Branch"
+    return value.strip()[:30]
 
 
 def _normalize_eligibility(value: str) -> str:
@@ -1174,10 +1130,14 @@ def _extract_tenure_years(tenure_text: str) -> tuple[int | None, int | None]:
     """
     Extract MIN_TERM_YEARS and MAX_TERM_YEARS from tenure description text.
     
+    CRITICAL: "Up to X years" (no minimum stated) should return (None, X),
+    NOT (1, X). Never default MIN to 1 without explicit statement.
+    
     Examples:
-      "Up to 10 years" → (1, 10)
+      "Up to 10 years" → (None, 10)  # No minimum stated
+      "Minimum 2 to 10 years" → (2, 10)
       "5-10 years" → (5, 10)
-      "1 Year" → (1, 1)
+      "1 Year" → (1, 1)  # Only if explicitly "1 year"
       "10-67 years" → (10, 67)
     
     Returns: (min_years, max_years) or (None, None) if extraction fails.
@@ -1187,13 +1147,11 @@ def _extract_tenure_years(tenure_text: str) -> tuple[int | None, int | None]:
     
     text = tenure_text.lower().strip()
     
-    # Pattern 1: "Up to X years" or "Up to X year"
-    # CRITICAL FIX: Return None for MIN when only maximum is stated (rule AH5)
-    # Document "Up to 10 years" means max=10, min is not specified, NOT min=1
+    # Pattern 1: "Up to X years" or "Up to X year" — NO minimum
     match = re.search(r"up\s+to\s+(\d+)\s+years?", text)
     if match:
         max_year = int(match.group(1))
-        return None, max_year  # FIX: was hardcoded to 1, violating AH5 rule
+        return None, max_year  # No minimum, only maximum
     
     # Pattern 2: "X-Y years" or "X to Y years"
     match = re.search(r"(\d+)\s*[-to\s]+\s*(\d+)\s+years?", text)
@@ -1315,92 +1273,44 @@ def _validate_and_fix_product_name(extracted_name: str, doc_text: str) -> str:
     return "N/A"
 
 
-def _extract_tenure_pattern(value: str) -> str:
+def _clean_insurance_required_documents(required_docs: str) -> str:
     """
-    Extract explicit TENURE patterns from text.
-    Recognizes phrases like:
-      - "yearly renewable", "annual renewable" → "Yearly renewable"
-      - "1 year", "one year" → "1 year"
-      - "Up to X years" → "Up to X years"
-      - "X-Y years" → "X-Y years"
-    Returns N/A if no explicit tenure phrase found.
+    CRITICAL FIX: For insurance products (IBG), REQUIRED_DOCUMENTS must not
+    contain loan-specific keywords. If found, return "N/A" (do not hallucinate).
+    
+    Loan keywords to NEVER appear in insurance REQUIRED_DOCUMENTS:
+    "salary slip", "employment certificate", "bank statement", "tax return",
+    "proprietorship", "processing fee", "property documents", "collateral"
+    
+    These indicate incorrect extraction from a loan section rather than an
+    insurance-specific documentation section.
     """
-    if not value or value == DEFAULT_VALUE:
-        return DEFAULT_VALUE
+    if not required_docs or required_docs == "N/A":
+        return "N/A"
     
-    val_lower = value.lower().strip()
+    loan_contamination_keywords = {
+        "salary slip", "salary slips",
+        "employment certificate", "employment cert",
+        "bank statement", "bank statements",
+        "tax return", "tax returns", "income tax return",
+        "proprietorship", "proprietor",
+        "processing fee",
+        "property document", "property documents",
+        "collateral",
+        "title deed", "ownership certificate",
+        "noc",  # No Objection Certificate (used in loan collateral)
+    }
     
-    # Pattern 1: "yearly renewable" or "annual" + "renewable"
-    if ("yearly" in val_lower or "annual" in val_lower) and "renewable" in val_lower:
-        return "Yearly renewable"
+    docs_lower = required_docs.lower()
     
-    # Pattern 2: "X year" or "X years" (explicit duration)
-    match = re.search(r"(\d+)\s*years?", val_lower)
-    if match:
-        years = match.group(1)
-        # Check if it's a range like "Up to 10 years"
-        if "up to" in val_lower:
-            return f"Up to {years} years"
-        elif "at least" in val_lower or "minimum" in val_lower:
-            return f"Minimum {years} years"
-        elif "-" in val_lower:  # Range like "5-10 years"
-            range_match = re.search(r"(\d+)\s*-\s*(\d+)\s*years?", val_lower)
-            if range_match:
-                return f"{range_match.group(1)}-{range_match.group(2)} years"
-        return f"{years} year" + ("s" if int(years) > 1 else "")
+    # Check if ANY loan contamination keyword appears
+    for keyword in loan_contamination_keywords:
+        if keyword in docs_lower:
+            # This REQUIRED_DOCUMENTS field is contaminated with loan-specific docs
+            # For insurance, if explicit documentation section wasn't found, return N/A
+            return "N/A"
     
-    # Pattern 3: "1 year renewable"
-    if "1 year" in val_lower and "renewable" in val_lower:
-        return "1 year renewable"
-    
-    # If explicit tenure not found, return N/A
-    return DEFAULT_VALUE
-
-
-def _extract_special_conditions_patterns(value: str) -> str:
-    """
-    Extract SPECIAL_CONDITIONS patterns from text.
-    Looks for:
-      - "only one policy per CNIC" / "one policy per unique CNIC"
-      - "maximum X balloon payments per year"
-      - "no balloon payment in first year"
-      - "free look period" + days
-    Concatenates multiple conditions found with " | ".
-    """
-    if not value or value == DEFAULT_VALUE:
-        return DEFAULT_VALUE
-    
-    val_lower = value.lower().strip()
-    conditions = []
-    
-    # Pattern 1: One policy per CNIC restriction
-    if "one policy" in val_lower and "cnic" in val_lower:
-        conditions.append("Only one policy per CNIC")
-    
-    # Pattern 2: Balloon payment restrictions
-    balloon_match = re.search(r"(\d+)\s*balloon", val_lower)
-    if balloon_match:
-        count = balloon_match.group(1)
-        if "no" in val_lower[:balloon_match.start()]:  # "no balloon"
-            conditions.append("No balloon payment allowed")
-        else:
-            conditions.append(f"Maximum {count} balloon payments per year")
-    
-    # Pattern 3: No balloon in first year
-    if "no balloon" in val_lower and ("first year" in val_lower or "1st year" in val_lower):
-        if "No balloon payment in first year" not in conditions:
-            conditions.append("No balloon payment in first year")
-    
-    # Pattern 4: Free look period
-    look_match = re.search(r"free\s*look\s*(?:period)?\s*(?:of)?\s*(\d+)\s*days?", val_lower)
-    if look_match:
-        days = look_match.group(1)
-        conditions.append(f"Free look period: {days} days")
-    
-    if conditions:
-        return " | ".join(conditions)
-    
-    return DEFAULT_VALUE
+    return required_docs
 
 
 def _crossfield_validate(normalized: dict) -> dict:
@@ -1462,7 +1372,6 @@ def _crossfield_validate(normalized: dict) -> dict:
     elif lead == "IBG":
         # Insurance products should not have loan-specific fields populated
         # with actual values (these are for BNK products only)
-        # with actual values (these are for BNK products only)
         loan_fields = {
             "LOAN_AMOUNT_RANGE",    # Only loans have amount ranges
             "COLLATERAL_TYPE",      # Only loans have collateral
@@ -1479,29 +1388,7 @@ def _crossfield_validate(normalized: dict) -> dict:
         # CRITICAL FIX: For insurance products, PRICING_RATE should be N/A
         # (insurance premiums go in MIN_CONTRIBUTION, not PRICING_RATE).
         # If PRICING_RATE has premium-like values, move them to MIN_CONTRIBUTION.
-        
-        # CRITICAL FIX: Clear loan-specific TERM fields for insurance products
-        # MIN_TERM_YEARS and MAX_TERM_YEARS are loan concepts, not insurance concepts
-        # Insurance has MIN_AGE/MAX_AGE for customer age, not TERM_YEARS for loan duration
-        term_fields = {"MIN_TERM_YEARS", "MAX_TERM_YEARS"}
-        for field in term_fields:
-            if field in normalized:
-                normalized[field] = "N/A"
-
-        # CRITICAL FIX: Check for loan-keyword contamination in REQUIRED_DOCUMENTS
-        # for insurance products (rule AH8)
-        req_docs = normalized.get("REQUIRED_DOCUMENTS", "")
-        if isinstance(req_docs, str) and req_docs not in ("N/A", ""):
-            loan_keywords = {
-                "salary slip", "employment certificate", "bank statement",
-                "tax return", "proprietorship", "processing fee",
-                "property documents", "collateral"
-            }
-            doc_lower = req_docs.lower()
-            if any(kw in doc_lower for kw in loan_keywords):
-                # This looks like loan documents, not insurance
-                # Insurance shouldn't need employment/salary/property docs (rule AH8)
-                normalized["REQUIRED_DOCUMENTS"] = "N/A"
+        pricing = normalized.get("PRICING_RATE", "")
         if isinstance(pricing, str) and pricing not in ("N/A", ""):
             # If PRICING_RATE looks like premiums (numeric tiers), move to MIN_CONTRIBUTION
             if re.search(r"^\d+(\s*\|\s*\d+)*$", pricing.strip()) or \
@@ -1511,6 +1398,15 @@ def _crossfield_validate(normalized: dict) -> dict:
                 if min_contrib == "N/A" or not min_contrib:
                     normalized["MIN_CONTRIBUTION"] = pricing
                 normalized["PRICING_RATE"] = "N/A"
+        
+        # CRITICAL FIX: Insurance REQUIRED_DOCUMENTS contamination check (rule AH8)
+        # If REQUIRED_DOCUMENTS contains loan-specific keywords, it's hallucinated.
+        # Return "N/A" since no explicit "Documentation Required" section was found
+        # in the insurance document.
+        req_docs = normalized.get("REQUIRED_DOCUMENTS", "")
+        if isinstance(req_docs, str) and req_docs not in ("N/A", ""):
+            req_docs = _clean_insurance_required_documents(req_docs)
+            normalized["REQUIRED_DOCUMENTS"] = req_docs
 
     return normalized
 
