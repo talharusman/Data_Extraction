@@ -1130,10 +1130,14 @@ def _extract_tenure_years(tenure_text: str) -> tuple[int | None, int | None]:
     """
     Extract MIN_TERM_YEARS and MAX_TERM_YEARS from tenure description text.
     
+    CRITICAL: "Up to X years" (no minimum stated) should return (None, X),
+    NOT (1, X). Never default MIN to 1 without explicit statement.
+    
     Examples:
-      "Up to 10 years" → (1, 10)
+      "Up to 10 years" → (None, 10)  # No minimum stated
+      "Minimum 2 to 10 years" → (2, 10)
       "5-10 years" → (5, 10)
-      "1 Year" → (1, 1)
+      "1 Year" → (1, 1)  # Only if explicitly "1 year"
       "10-67 years" → (10, 67)
     
     Returns: (min_years, max_years) or (None, None) if extraction fails.
@@ -1143,13 +1147,11 @@ def _extract_tenure_years(tenure_text: str) -> tuple[int | None, int | None]:
     
     text = tenure_text.lower().strip()
     
-    # Pattern 1: "Up to X years" or "Up to X year"
-    # CRITICAL FIX: Return None for MIN when only maximum is stated (rule AH5)
-    # Document "Up to 10 years" means max=10, min is not specified, NOT min=1
+    # Pattern 1: "Up to X years" or "Up to X year" — NO minimum
     match = re.search(r"up\s+to\s+(\d+)\s+years?", text)
     if match:
         max_year = int(match.group(1))
-        return None, max_year  # FIX: was hardcoded to 1, violating AH5 rule
+        return None, max_year  # No minimum, only maximum
     
     # Pattern 2: "X-Y years" or "X to Y years"
     match = re.search(r"(\d+)\s*[-to\s]+\s*(\d+)\s+years?", text)
@@ -1330,7 +1332,6 @@ def _crossfield_validate(normalized: dict) -> dict:
     elif lead == "IBG":
         # Insurance products should not have loan-specific fields populated
         # with actual values (these are for BNK products only)
-        # with actual values (these are for BNK products only)
         loan_fields = {
             "LOAN_AMOUNT_RANGE",    # Only loans have amount ranges
             "COLLATERAL_TYPE",      # Only loans have collateral
@@ -1347,29 +1348,7 @@ def _crossfield_validate(normalized: dict) -> dict:
         # CRITICAL FIX: For insurance products, PRICING_RATE should be N/A
         # (insurance premiums go in MIN_CONTRIBUTION, not PRICING_RATE).
         # If PRICING_RATE has premium-like values, move them to MIN_CONTRIBUTION.
-        
-        # CRITICAL FIX: Clear loan-specific TERM fields for insurance products
-        # MIN_TERM_YEARS and MAX_TERM_YEARS are loan concepts, not insurance concepts
-        # Insurance has MIN_AGE/MAX_AGE for customer age, not TERM_YEARS for loan duration
-        term_fields = {"MIN_TERM_YEARS", "MAX_TERM_YEARS"}
-        for field in term_fields:
-            if field in normalized:
-                normalized[field] = "N/A"
-
-        # CRITICAL FIX: Check for loan-keyword contamination in REQUIRED_DOCUMENTS
-        # for insurance products (rule AH8)
-        req_docs = normalized.get("REQUIRED_DOCUMENTS", "")
-        if isinstance(req_docs, str) and req_docs not in ("N/A", ""):
-            loan_keywords = {
-                "salary slip", "employment certificate", "bank statement",
-                "tax return", "proprietorship", "processing fee",
-                "property documents", "collateral"
-            }
-            doc_lower = req_docs.lower()
-            if any(kw in doc_lower for kw in loan_keywords):
-                # This looks like loan documents, not insurance
-                # Insurance shouldn't need employment/salary/property docs (rule AH8)
-                normalized["REQUIRED_DOCUMENTS"] = "N/A"
+        pricing = normalized.get("PRICING_RATE", "")
         if isinstance(pricing, str) and pricing not in ("N/A", ""):
             # If PRICING_RATE looks like premiums (numeric tiers), move to MIN_CONTRIBUTION
             if re.search(r"^\d+(\s*\|\s*\d+)*$", pricing.strip()) or \
