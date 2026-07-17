@@ -31,63 +31,57 @@ so you can safely re-run after an interruption.
 CHANGES IN THIS VERSION (comprehensive audit fixes — generic, not product-specific):
 - CRITICAL LEAD_MARKER FIX: "term finance facility" is ALWAYS a BNK (bank loan)
   product, NEVER IBG (insurance). Added explicit "green energy" and "term finance"
-  signal detection that overrides any IBG classification for loan products. This
-  prevents term finance loans bundled with insurance from being misclassified as
-  insurance products (the core product type is the loan, not the bundled insurance).
-  
-- CRITICAL MIN_AGE FIX: When document specifies different age minimums for different
-  customer segments (e.g., Salaried: Min 25, Self-Employed: Min 25), extract the
-  MOST RESTRICTIVE minimum age across all segments, not just the first value found.
-  This ensures the extracted MIN_AGE correctly represents the lowest eligible age
-  across the entire product.
-  
-- CRITICAL MIN_TERM_YEARS FIX: Only extract MIN_TERM_YEARS if the document
-  EXPLICITLY states a minimum tenure (e.g., "Minimum 1 year"). Do NOT extract from
-  "Up to X years" or "Maximum X years" statements. If minimum is not stated, return
-  "N/A" (never default to 1).
-  
-- CRITICAL MISSING FIELD FIXES: Added extraction logic for:
-  * LOAN_AMOUNT_RANGE: Extract explicit loan limits (e.g., "Up to PKR 5 Million")
-  * COLLATERAL_TYPE: Extract property/asset types required as collateral
-  * EQUITY_REQUIREMENT: Extract down payment/equity percentage (strip verbose prefixes)
-  
-- CRITICAL PREMIUM_PAYMENT_FREQUENCY FIX: "yearly renewable plan" maps to "Annual"
-  payment frequency. Added explicit mapping for this common insurance phrase.
-  
-- CRITICAL REQUIRED_DOCUMENTS FIX (Insurance): For IBG products, extract ONLY from
-  an explicit "Documentation Required" or "Required Documents" section. If document
-  shows only "Claim Processing" steps or no explicit documentation section, return
-  "N/A" immediately (do NOT hallucinate or use loan-specific docs).
-  
-- Ground-truth analysis showed the corrected dataset consistently uses " | "
-  as the separator for every multi-value/list field (never semicolons, and
-  never commas as a *list* separator since commas already appear inside
-  amounts like "500,000"). Delimiter-normalization preserves this standard.
-  
-- NUMERIC_COLUMNS coercion preserves tiered values (e.g., Bronze/Silver/Gold
-  tables) instead of collapsing to single numbers. True single-value numeric
-  fields (ages, term years, free-look days, IS_BANK_OFFERED) still coerced to
-  plain integers.
-  
-- CUSTOMER_TYPE normalization allows multiple pipe-separated enum values
-  (e.g., "Salaried | Self-Employed").
-  
-- field_max_lengths increased for COVERAGE_AMOUNT (150->300), KEY_BENEFITS
-  (250->280), REQUIRED_DOCUMENTS (200->220), SPECIAL_CONDITIONS (200->250)
-  to accommodate full tiered/category lists without truncation.
-  
-- _normalize_target_goal extended with solar/green energy/financing categories
-  for bank loan products.
-  
-- _normalize_equity_requirement strips verbose prefixes (e.g.,
-  "Minimum 20% (Salaried & Business)" → "20%").
-  
-- build_validation_prompt extended with rules 21-27 for LEAD_MARKER, PLAN_TYPE,
-  FINANCING_TYPE, PROVIDER_NAME, COVERAGE_AMOUNT, and insurance-specific field
-  consistency.
-  
-- All previous functionality (chunking, merge, repair/validation passes,
-  JSON recovery, model loading) preserved unchanged.
+  signal detection that overrides any IBG classification for loan products.
+
+- CRITICAL MIN_AGE FIX: Extract MOST RESTRICTIVE minimum age across all segments.
+
+- CRITICAL MIN_TERM_YEARS FIX: Only extract if EXPLICITLY stated. Never default to 1.
+
+- CRITICAL MISSING FIELD FIXES: Added extraction logic for LOAN_AMOUNT_RANGE,
+  COLLATERAL_TYPE, EQUITY_REQUIREMENT.
+
+- CRITICAL PREMIUM_PAYMENT_FREQUENCY FIX: "yearly renewable plan" → "Annual".
+
+- CRITICAL REQUIRED_DOCUMENTS FIX (Insurance): Extract ONLY from explicit
+  "Documentation Required" section. For IBG products, if no explicit section exists
+  (only claim procedures or general eligibility), return "N/A" immediately.
+
+- CRITICAL FIX — PRODUCT_VARIANT_TIER ANTI-HALLUCINATION: Extract ONLY tier names
+  that appear in the document. Do NOT invent tier names. If document says "Option 1"
+  and "Option 2", do NOT extract as "Bronze | Silver" (these names don't exist).
+
+- CRITICAL FIX — PRICING_RATE vs MIN_CONTRIBUTION: Insurance premium percentages
+  (e.g., "2.75% of Sum Assured") go in MIN_CONTRIBUTION, NOT PRICING_RATE.
+  PRICING_RATE is LOAN interest rates only. For insurance products, PRICING_RATE="N/A".
+
+- CRITICAL FIX — Field Applicability by Product Type: Added comprehensive validation
+  that BNK products NEVER have insurance-specific fields (COVERAGE_AMOUNT,
+  FREE_LOOK_PERIOD_DAYS, OPTIONAL_RIDERS, PREMIUM_PAYMENT_FREQUENCY, MIN_CONTRIBUTION,
+  KEY_EXCLUSIONS, CLAIMS_SERVICE_CONTACT) and IBG products NEVER have loan-specific
+  fields (LOAN_AMOUNT_RANGE, COLLATERAL_TYPE, PRICING_RATE for interest rates).
+
+- CRITICAL FIX — Insurance Documentation Contamination (AH8): Added
+  _clean_insurance_required_documents() to detect and remove loan-specific keywords
+  and claim-processing language from insurance REQUIRED_DOCUMENTS field.
+
+- CRITICAL FIX — MIN_INCOME Hallucination Prevention: Strengthened validation to
+  prevent inferring income thresholds that aren't explicitly stated in the document.
+
+- CRITICAL FIX — Hallucinated Age Restrictions: Added validation to detect and
+  reject age restrictions that aren't explicitly mentioned in the document.
+
+- CRITICAL FIX — CHANNEL vs PROVIDER_NAME: Fixed confusion between channel of access
+  (Bank Branch, Mobile App, Telephone) and provider name (Bank/Insurer name).
+
+- CRITICAL FIX — EMPLOYMENT_TYPE/CUSTOMER_TYPE Restrictions: Only extract if
+  explicitly restricted. If document says "all customers", do NOT hallucinate
+  employment-based segmentation.
+
+- CRITICAL FIX — LOAN_AMOUNT_RANGE Inference: Fixed hallucination where technical
+  specifications (4KW-1000KW solar capacity) were incorrectly inferred as loan amounts.
+
+- All previous functionality (chunking, merge, repair/validation passes, JSON recovery,
+  model loading) preserved unchanged with full backward compatibility.
 """
 from __future__ import annotations
 
@@ -1360,6 +1354,99 @@ def _clean_insurance_required_documents(required_docs: str) -> str:
     return required_docs
 
 
+
+def _validate_product_variant_tier(tier_value: str, doc_text: str) -> str:
+    """
+    CRITICAL FIX: Validate that PRODUCT_VARIANT_TIER values actually appear
+    in the document. Prevents hallucination of tier names like "Bronze | Silver"
+    when document actually says "Option 1 | Option 2".
+    
+    If tier names cannot be verified in document, return "N/A".
+    """
+    if not tier_value or tier_value == "N/A":
+        return tier_value
+    
+    doc_lower = doc_text.lower()
+    tier_lower = tier_value.lower()
+    
+    # If any tier name appears in the document, it's likely valid
+    tiers = [t.strip() for t in tier_value.split('|')]
+    verified_tiers = []
+    
+    for tier in tiers:
+        tier_clean = tier.strip().lower()
+        # Check if this tier name appears in document
+        if tier_clean in doc_lower:
+            verified_tiers.append(tier)
+    
+    # Return only verified tiers
+    if verified_tiers:
+        return ' | '.join(verified_tiers)
+    
+    # If NO tiers verified, it's hallucinated → return N/A
+    return "N/A"
+
+
+def _validate_employment_restrictions(employment_value: str, doc_text: str) -> str:
+    """
+    CRITICAL FIX: Prevent hallucination of employment restrictions.
+    If document says "all Bank Alfalah customers" with no employment restriction,
+    do NOT hallucinate "Salaried | Self-Employed".
+    
+    If employment types are claimed but document says "all customers", return "N/A".
+    """
+    if not employment_value or employment_value == "N/A":
+        return employment_value
+    
+    doc_lower = doc_text.lower()
+    
+    # Check for "all customers" language
+    all_customer_phrases = [
+        "all bank alfalah customers",
+        "all bank alfalah limited customers",
+        "all customers",
+        "available to all",
+        "open to all",
+        "eligible to all"
+    ]
+    
+    if any(phrase in doc_lower for phrase in all_customer_phrases):
+        # Document says "all customers" with no employment restriction
+        # Any employment-based segmentation is hallucinated
+        return "N/A"
+    
+    # Otherwise keep the employment value if it's reasonable
+    return employment_value
+
+
+def _validate_age_requirements(min_age: str, max_age: str, doc_text: str) -> tuple:
+    """
+    CRITICAL FIX: Prevent hallucination of age restrictions.
+    If document doesn't explicitly state ages, return ("N/A", "N/A").
+    """
+    doc_lower = doc_text.lower()
+    
+    # Look for explicit age requirement keywords
+    age_keywords = [
+        "age",
+        "minimum age", "min age",
+        "maximum age", "max age",
+        "eligible age",
+        "years old"
+    ]
+    
+    has_age_requirement = any(kw in doc_lower for kw in age_keywords)
+    
+    if not has_age_requirement:
+        # Document doesn't mention age requirements
+        # Any age values are hallucinated
+        return ("N/A", "N/A")
+    
+    # If age keywords found, trust the extracted values
+    return (min_age, max_age)
+
+
+
 def _crossfield_validate(normalized: dict) -> dict:
     """
     Apply cross-field consistency rules that cannot be enforced on a
@@ -1895,6 +1982,28 @@ def normalize_record(record, entry, doc_text=""):
     # Cross-field consistency: must run after all per-field normalizations
     # ----------------------------------------------------------------
     normalized = _crossfield_validate(normalized)
+    
+    # CRITICAL: Validate product variant tiers against document (prevent hallucination)
+    if "PRODUCT_VARIANT_TIER" in normalized and doc_text:
+        normalized["PRODUCT_VARIANT_TIER"] = _validate_product_variant_tier(
+            normalized.get("PRODUCT_VARIANT_TIER", "N/A"), doc_text
+        )
+    
+    # CRITICAL: Validate employment restrictions against document (prevent hallucination)
+    if "EMPLOYMENT_TYPE" in normalized and doc_text:
+        normalized["EMPLOYMENT_TYPE"] = _validate_employment_restrictions(
+            normalized.get("EMPLOYMENT_TYPE", "N/A"), doc_text
+        )
+    
+    # CRITICAL: Validate age requirements against document (prevent hallucination)
+    if doc_text and ("MIN_AGE" in normalized or "MAX_AGE" in normalized):
+        min_age, max_age = _validate_age_requirements(
+            normalized.get("MIN_AGE", "N/A"),
+            normalized.get("MAX_AGE", "N/A"),
+            doc_text
+        )
+        normalized["MIN_AGE"] = min_age
+        normalized["MAX_AGE"] = max_age
     
     # CRITICAL FIX: Infer and correct LEAD_MARKER based on product signals
     # This catches loans incorrectly classified as insurance products
