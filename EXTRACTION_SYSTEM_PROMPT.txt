@@ -20,20 +20,38 @@ AH2. LEAD_MARKER: MUST be determined by KEYWORDS in the document text:
        NOT insurance.
      - Keywords explicitly stating "insurance", "protection", "takaful",
        "endowment", "plan", "unit-linked", "policy" → MAY BE "IBG".
-     - When in doubt, check WHO UNDERWRITES: if document mentions bank name
-       only (Bank Alfalah, HBL, UBL, etc.) → BNK. If document mentions
-       insurance company (IGI, EFU, Alfalah Insurance, etc.) → IBG.
+     - CRITICAL: "term finance facility" = BNK loan product, NEVER IBG.
+       Even if insurance is bundled with a loan, the primary product
+       classification is determined by the core product type. A loan with
+       bundled insurance is STILL BNK (the insurance premiums are built into
+       the installments, not a separate insurance product).
+     - When in doubt, check WHO UNDERWRITES and WHAT IS THE PRIMARY PRODUCT:
+       if document focuses on a loan/financing facility with insurance bundled
+       → BNK. If document is ABOUT THE INSURANCE ITSELF (separate policy,
+       standalone coverage, policy term, renewal, free-look period, claims
+       process) → IBG.
 AH3. Never extract insurance-specific fields (FREE_LOOK_PERIOD_DAYS,
      COVERAGE_AMOUNT, OPTIONAL_RIDERS, PREMIUM_PAYMENT_FREQUENCY,
      KEY_EXCLUSIONS, MIN_CONTRIBUTION) for BNK (loan/account/card) products.
      ALL of these must be "N/A" for loans.
+AH3a. LOAN_AMOUNT_RANGE for BNK products: Extract explicit loan limits.
+      Examples: "Up to PKR 5 Million" or "Between 1M - 10M" or "Maximum 2M".
+      If no amount is stated in the document, return "N/A".
 AH4. For BNK (loan) products, you MUST extract:
      LOAN_AMOUNT_RANGE if any loan/financing limit is mentioned.
-     COLLATERAL_TYPE if collateral is mentioned.
-     EQUITY_REQUIREMENT if equity/down payment % is mentioned.
+     COLLATERAL_TYPE if collateral is mentioned (e.g., "Residential Property",
+       "Commercial Property", "Plant & Machinery", "Gold"). Must be EXPLICIT.
+     EQUITY_REQUIREMENT if equity/down payment % is mentioned. Format as
+       percentage (e.g., "20%" or "15-25%"). Must strip verbose prefixes
+       like "Minimum 20% (Salaried & Business)" → "20%".
      FINANCING_TYPE as "Conventional" or "Islamic" only (never "Unit Linked").
 AH5. Every extracted field must correspond to EXPLICIT text in THIS document.
      If you cannot find it, return "N/A". Never infer, assume, or hallucinate.
+AH5a. MIN_TERM_YEARS CRITICAL: Only extract if document EXPLICITLY states
+      a MINIMUM tenure/term (e.g., "Minimum 1 year" or "Min 2 years").
+      Do NOT extract from "Up to X years" or "Maximum X years" — those only
+      give you MAX_TERM_YEARS. If minimum is not stated, return "N/A" (never
+      default to 1 or assume).
 AH6. Do NOT confuse PRICING_RATE with MIN_CONTRIBUTION:
      - PRICING_RATE: For LOAN products ONLY. Interest rates, markup rates,
        KIBOR margins (e.g. "1 Year KIBOR + 3%"). For insurance → "N/A".
@@ -95,6 +113,13 @@ G5. IS_BANK_OFFERED = 1 whenever the product is sold/distributed through the
     bank (bank branch, bank customers, bank in partnership with an insurer/
     takaful operator). Use "N/A" only for a fully independent third-party
     product with no bank distribution mentioned.
+G5a. MIN_AGE and MAX_AGE SEGMENT-SPECIFIC: If document states different age
+     limits for different customer segments (e.g., Salaried vs Self-Employed),
+     extract the MOST RESTRICTIVE minimum age and maximum age that applies
+     across all segments. Example: If Salaried requires Min 25 and Self-Employed
+     requires Min 25, use 25. If one says 21 and another says 25, use 25 (most
+     restrictive). This ensures the extracted age range covers ALL eligible
+     customers mentioned in the document.
 G6. Extract each field from THIS product's own section only. Never copy
     values across products in the same document, and never let a similarly
     named product from general knowledge influence any field — the given
@@ -191,8 +216,12 @@ MIN_CONTRIBUTION: max300. Insurance PREMIUM amounts (tiered by plan) or minimum
 LOAN_AMOUNT_RANGE: max100. Loan/financing range (e.g. "Up to PKR 5 Million").
   For loans ONLY. Else "N/A".
 COVERAGE_AMOUNT: max300. Insurance benefit limits (tiered by coverage type and
-  plan tier). Format: "Benefit1:Min-Max | Benefit2:Min-Max". Insurance ONLY.
-  Separated by " | ". Else "N/A".
+  plan tier). CRITICAL: Extract each NAMED COVERAGE TYPE and list its limit(s).
+  Format: "Accidental Death:500K-1750K | ATM Theft:100K-200K | Medical:10K-20K".
+  Include ALL coverage types from the table. Do NOT skip coverage types.
+  If table shows Bronze:500K, Silver:1000K, Gold:1500K, Platinum:1750K for
+  same coverage, output as "Coverage:500K-1750K" (range) or split by tier
+  if clarity requires it. Insurance ONLY. Separated by " | ". Else "N/A".
 FINANCING_TYPE: Conventional | Islamic | Unit Linked | Hybrid | N/A.
   - Loans/mortgages: "Conventional" or "Islamic"
   - Insurance products: May include "Unit Linked" or "Hybrid"
@@ -248,9 +277,11 @@ FREE_LOOK_PERIOD_DAYS: Insurance only. Integer if EXPLICITLY stated (e.g. "14").
   use "N/A". Bank loans/deposits → "N/A".
 REQUIRED_DOCUMENTS: max250. Short names only, separated by " | ". CRITICAL:
   For insurance (IBG), extract ONLY from an explicit "Documentation Required"
-  section specific to the insurance product. If no such section exists in the
-  document, return "N/A" (do NOT copy from loan sections or hallucinate).
-  For loans (BNK), extract from loan's own documentation section.
+  or "Required Documents" section specific to the insurance product. If no such
+  section exists in the document (e.g., document only shows "Claim Processing"
+  steps but no upfront documentation requirement), return "N/A" immediately
+  (do NOT copy from loan sections, do NOT use claim-related docs, do NOT
+  hallucinate). For loans (BNK), extract from loan's own documentation section.
   Example format: "CNIC | Passport | Employment certificate | Salary slips |
   Bank statements | Property documents".
 CLAIMS_SERVICE_CONTACT: max200. Insurance products only. Extract phone number
@@ -268,54 +299,11 @@ TAX_ZAKAT_TREATMENT: max100. Zakat applicability or tax notes if stated.
   Else "N/A".
 PREMIUM_PAYMENT_FREQUENCY: max50. For INSURANCE ONLY: how customer PAYS premiums.
   Valid values: Annual | Semi-Annual | Quarterly | Monthly. PHRASE MAPPING:
-  "yearly renewable" or "annual" → "Annual", "monthly" → "Monthly", "quarterly"
-  → "Quarterly", "semi-annual" → "Semi-Annual". If document doesn't explicitly
-  state payment frequency, use "N/A" (not "Annual" as default). For loans/deposits → "N/A".
-
-===WORKED EXAMPLES (ground-truth style)===
-Example 1: Term Finance Loan for Solar Equipment (BNK product):
-  LEAD_MARKER: "BNK" | PLAN_TYPE: "Loan" | FINANCING_TYPE: "Conventional"
-  PRODUCT_NAME: "Alfalah Green Energy" (from document heading)
-  TARGET_GOAL: "Green Energy Financing"
-  LOAN_AMOUNT_RANGE: "Up to PKR 5 Million"
-  COLLATERAL_TYPE: "Residential Property" | EQUITY_REQUIREMENT: "20%"
-  MIN_AGE: 25 (not 18, because Salaried minimum is 25) | MAX_AGE: "N/A" 
-    (document says "age of retirement minus 3" but DOES NOT state retirement age)
-  MIN_TERM_YEARS: "N/A" (document says only "Up to 10 years", NO minimum stated)
-  MAX_TERM_YEARS: 10
-  CRITICAL FIX APPLIED: MIN_TERM_YEARS is "N/A", NOT "1" (rule AH5)
-  PRICING_RATE: "Salaried: 1 Year KIBOR + 3% | Businessman: KIBOR + 4%"
-  COVERAGE_AMOUNT: "N/A" (NOT insurance)
-  FREE_LOOK_PERIOD_DAYS: "N/A" (NOT insurance)
-  OPTIONAL_RIDERS: "N/A" (NOT insurance)
-  PREMIUM_PAYMENT_FREQUENCY: "N/A" (NOT insurance)
-  KEY_BENEFITS: "Customized financing | Attractive markup rates | Asset insurance |
-    Life insurance | Balloon payment flexibility"
-  MIN_CONTRIBUTION: "N/A" (NOT insurance)
-  KEY_EXCLUSIONS: "N/A" (NOT insurance)
-  REQUIRED_DOCUMENTS: "CNIC | Employment certificate | Salary slips | Bank statements |
-    Property documents | Processing fee cheque | Photographs"
-
-Example 2: Protection Insurance (IBG product):
-  LEAD_MARKER: "IBG" | PLAN_TYPE: "Insurance"
-  PRODUCT_NAME: "Alfalah Nighaban Insurance Plan" (from document heading, NOT Jubilee Kamil)
-  COVERAGE_AMOUNT: "Accidental Death:500K-1750K | ATM Withdrawal:100K-200K | Fraudulent:50K-100K |
-    Medical:10K-20K | Identity:10K-20K | Wallet:3K-7500 | Burglary:35K-75K | Mobile:30K-45K"
-  PRODUCT_VARIANT_TIER: "Bronze | Silver | Gold | Platinum" (ALL 4 TIERS, NOT just 3)
-  MIN_CONTRIBUTION: "Bronze:5000 | Silver:10000 | Gold:15000 | Platinum:20000" (ALL 4)
-  FREE_LOOK_PERIOD_DAYS: "14" (if stated in document) or "N/A"
-  PREMIUM_PAYMENT_FREQUENCY: "Annual" (from "yearly renewable plan")
-  PRICING_RATE: "N/A" (NOT for insurance — premium amounts go in MIN_CONTRIBUTION)
-  MIN_AGE: 18 | MAX_AGE: 60
-  CLAIMS_SERVICE_CONTACT: "(042) 111 786 234" (IF found in claims section of document, else "N/A")
-  LOAN_AMOUNT_RANGE: "N/A" (NOT a loan)
-  COLLATERAL_TYPE: "N/A" (NOT a loan)
-  KEY_EXCLUSIONS: "N/A" (or "Exclusion1 | Exclusion2" ONLY if explicitly in document)
-  KEY_BENEFITS: "Accidental death protection | Medical expense coverage | ATM theft protection |
-    Fraudulent transaction coverage | Identity document replacement"
-  TENURE: "1 Year" (yearly renewable plan term)
-  MAX_TERM_YEARS: 1 (annual renewable policy)
-  REQUIRED_DOCUMENTS: "N/A" (NO explicit "Documentation Required" section found for insurance)
+  "yearly renewable", "yearly renewable plan", "annual", "annually" → "Annual"
+  "monthly" → "Monthly", "quarterly" → "Quarterly", "semi-annual", "half-yearly"
+  → "Semi-Annual". CRITICAL: "yearly renewable plan" means customer renews
+  annually and pays Annual premiums. If document doesn't explicitly state
+  payment frequency, use "N/A" (not "Annual" as default). For loans/deposits → "N/A".
 
 ===DO NOT===
 × PRODUCT_NAME that doesn't appear in the document heading/title.

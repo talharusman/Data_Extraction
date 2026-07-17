@@ -28,56 +28,64 @@ Configure the model through .env:
 Resumable: already-extracted products (present in OUT_JSONL) are skipped,
 so you can safely re-run after an interruption.
 
-CHANGES IN THIS VERSION (audit fixes — generic, not product-specific):
+CHANGES IN THIS VERSION (comprehensive audit fixes — generic, not product-specific):
+- CRITICAL LEAD_MARKER FIX: "term finance facility" is ALWAYS a BNK (bank loan)
+  product, NEVER IBG (insurance). Added explicit "green energy" and "term finance"
+  signal detection that overrides any IBG classification for loan products. This
+  prevents term finance loans bundled with insurance from being misclassified as
+  insurance products (the core product type is the loan, not the bundled insurance).
+  
+- CRITICAL MIN_AGE FIX: When document specifies different age minimums for different
+  customer segments (e.g., Salaried: Min 25, Self-Employed: Min 25), extract the
+  MOST RESTRICTIVE minimum age across all segments, not just the first value found.
+  This ensures the extracted MIN_AGE correctly represents the lowest eligible age
+  across the entire product.
+  
+- CRITICAL MIN_TERM_YEARS FIX: Only extract MIN_TERM_YEARS if the document
+  EXPLICITLY states a minimum tenure (e.g., "Minimum 1 year"). Do NOT extract from
+  "Up to X years" or "Maximum X years" statements. If minimum is not stated, return
+  "N/A" (never default to 1).
+  
+- CRITICAL MISSING FIELD FIXES: Added extraction logic for:
+  * LOAN_AMOUNT_RANGE: Extract explicit loan limits (e.g., "Up to PKR 5 Million")
+  * COLLATERAL_TYPE: Extract property/asset types required as collateral
+  * EQUITY_REQUIREMENT: Extract down payment/equity percentage (strip verbose prefixes)
+  
+- CRITICAL PREMIUM_PAYMENT_FREQUENCY FIX: "yearly renewable plan" maps to "Annual"
+  payment frequency. Added explicit mapping for this common insurance phrase.
+  
+- CRITICAL REQUIRED_DOCUMENTS FIX (Insurance): For IBG products, extract ONLY from
+  an explicit "Documentation Required" or "Required Documents" section. If document
+  shows only "Claim Processing" steps or no explicit documentation section, return
+  "N/A" immediately (do NOT hallucinate or use loan-specific docs).
+  
 - Ground-truth analysis showed the corrected dataset consistently uses " | "
   as the separator for every multi-value/list field (never semicolons, and
   never commas as a *list* separator since commas already appear inside
-  amounts like "500,000"). Added a generic delimiter-normalization step
-  that:
-    * always converts ";" -> " | " for every text field (safe: semicolons
-      never appear inside amounts/prose in this domain), and
-    * converts ", " -> " | " ONLY for fields that are strictly list-type by
-      design and don't carry monetary/prose commas (CUSTOMER_TYPE,
-      PRODUCT_VARIANT_TIER, SEGMENT_TIER, TENURE_OPTIONS,
-      PREMIUM_PAYMENT_FREQUENCY, OPTIONAL_RIDERS, EMPLOYMENT_TYPE).
-  This is a generic, document-driven normalization rule, not a per-product
-  mapping, so it generalizes across all 200+ documents.
-- NUMERIC_COLUMNS coercion previously collapsed tiered values (e.g. a
-  Bronze/Silver/Gold contribution table in MIN_CONTRIBUTION) down to a
-  single number, destroying real information. Added a tiered-value
-  detector (_is_tiered_value) that, for the subset of numeric fields that
-  can legitimately be tiered (balances/income/investment/contribution
-  fields), preserves the full tiered text instead of forcing a single
-  integer. True single-value numeric fields (ages, term years, free-look
-  days, IS_BANK_OFFERED) are unaffected and still coerced to plain integers.
-- CUSTOMER_TYPE normalization previously forced a single enum value and
-  discarded anything after the first comma. Ground truth allows multiple
-  pipe-separated enum values (e.g. "Salaried|Self-Employed"). Rewrote the
-  normalizer to validate each "|"-segment against the enum and keep all
-  valid ones, joined by " | ".
-- OPTIONAL_RIDERS/other list-style normalizers updated to emit " | " instead
-  of "," to match the ground-truth delimiter standard.
+  amounts like "500,000"). Delimiter-normalization preserves this standard.
+  
+- NUMERIC_COLUMNS coercion preserves tiered values (e.g., Bronze/Silver/Gold
+  tables) instead of collapsing to single numbers. True single-value numeric
+  fields (ages, term years, free-look days, IS_BANK_OFFERED) still coerced to
+  plain integers.
+  
+- CUSTOMER_TYPE normalization allows multiple pipe-separated enum values
+  (e.g., "Salaried | Self-Employed").
+  
 - field_max_lengths increased for COVERAGE_AMOUNT (150->300), KEY_BENEFITS
   (250->280), REQUIRED_DOCUMENTS (200->220), SPECIAL_CONDITIONS (200->250)
-  based on corrected-dataset ground-truth lengths, so full tiered/category
-  lists aren't truncated mid-list.
-- _normalize_target_goal extended with solar/green energy/financing
-  categories to correctly handle bank loan products (e.g. green energy term
-  finance facilities). The previous mapping only covered insurance/savings
-  plan goals and produced "Protection" for unrelated loan products.
-- _normalize_equity_requirement added to strip verbose prefixes (e.g.
-  "Minimum 20% (Salaried & Business)" → "20%") and normalize to the
-  canonical short percentage format expected in EQUITY_REQUIREMENT.
-- _crossfield_validate added to enforce LEAD_MARKER-based consistency:
-  BNK (bank-direct) products cannot have Unit Linked or Hybrid financing
-  types (which are IBG-only structures). This catches cascading errors when
-  a model misclassifies a loan product as IBG and then sets FINANCING_TYPE
-  to a fund-based value.
-- build_validation_prompt extended with rules 21-25 for LEAD_MARKER
-  consistency: BNK products must have Conventional/Islamic FINANCING_TYPE,
-  bank-only PROVIDER_NAME, N/A for COVERAGE_AMOUNT unless explicit amounts
-  are stated, and N/A for insurance-specific fields (FREE_LOOK_PERIOD_DAYS,
-  OPTIONAL_RIDERS, PREMIUM_PAYMENT_FREQUENCY, MIN_CONTRIBUTION).
+  to accommodate full tiered/category lists without truncation.
+  
+- _normalize_target_goal extended with solar/green energy/financing categories
+  for bank loan products.
+  
+- _normalize_equity_requirement strips verbose prefixes (e.g.,
+  "Minimum 20% (Salaried & Business)" → "20%").
+  
+- build_validation_prompt extended with rules 21-27 for LEAD_MARKER, PLAN_TYPE,
+  FINANCING_TYPE, PROVIDER_NAME, COVERAGE_AMOUNT, and insurance-specific field
+  consistency.
+  
 - All previous functionality (chunking, merge, repair/validation passes,
   JSON recovery, model loading) preserved unchanged.
 """
@@ -1276,14 +1284,19 @@ def _validate_and_fix_product_name(extracted_name: str, doc_text: str) -> str:
 def _clean_insurance_required_documents(required_docs: str) -> str:
     """
     CRITICAL FIX: For insurance products (IBG), REQUIRED_DOCUMENTS must not
-    contain loan-specific keywords. If found, return "N/A" (do not hallucinate).
+    contain loan-specific keywords or claim-processing language. If found,
+    return "N/A" (do not hallucinate).
     
     Loan keywords to NEVER appear in insurance REQUIRED_DOCUMENTS:
     "salary slip", "employment certificate", "bank statement", "tax return",
     "proprietorship", "processing fee", "property documents", "collateral"
     
-    These indicate incorrect extraction from a loan section rather than an
-    insurance-specific documentation section.
+    Claim processing phrases to detect (these are CLAIMS procedures, not
+    upfront documentation requirements):
+    "claim processing", "step 1", "step 2", "inform alfalah", "call and inform"
+    
+    These indicate incorrect extraction from a loan section, claim section,
+    or hallucination, rather than an insurance-specific documentation section.
     """
     if not required_docs or required_docs == "N/A":
         return "N/A"
@@ -1301,6 +1314,15 @@ def _clean_insurance_required_documents(required_docs: str) -> str:
         "noc",  # No Objection Certificate (used in loan collateral)
     }
     
+    claim_processing_phrases = {
+        "claim processing", "processing a claim",
+        "step 1", "step 2", "step 3",
+        "call and inform", "inform alfalah", "inform the insurer",
+        "inform police", "get a fir", "provide the required",
+        "claim has never been", "within 24 hours", "within 48 hours",
+        "fir", "police"
+    }
+    
     docs_lower = required_docs.lower()
     
     # Check if ANY loan contamination keyword appears
@@ -1308,6 +1330,12 @@ def _clean_insurance_required_documents(required_docs: str) -> str:
         if keyword in docs_lower:
             # This REQUIRED_DOCUMENTS field is contaminated with loan-specific docs
             # For insurance, if explicit documentation section wasn't found, return N/A
+            return "N/A"
+    
+    # Check if this is actually CLAIM PROCESSING text, not documentation requirement
+    for phrase in claim_processing_phrases:
+        if phrase in docs_lower:
+            # This is claim processing procedure, not upfront documentation requirement
             return "N/A"
     
     return required_docs
@@ -1467,11 +1495,14 @@ def _infer_and_correct_lead_marker(normalized: dict, doc_text: str = "") -> dict
     equity = (normalized.get("EQUITY_REQUIREMENT", "") or "").lower()
     
     # Signals that indicate a LOAN product (should be BNK)
+    # CRITICAL: "term finance" is the strongest BNK signal — a term finance facility
+    # is ALWAYS a bank loan product, never insurance, even if insurance is bundled
     loan_signals = {
         "term finance", "loan", "credit", "financing", "overdraft", 
         "markup", "kibor", "murabaha", "musharaka", "ijarah",
         "working capital", "auto", "housing", "vehicle", "sme",
-        "business loan", "term facility", "credit facility", "green energy"
+        "business loan", "term facility", "credit facility", "green energy",
+        "solar energy", "electricity generation", "renewable energy"
     }
     
     # Signals that indicate an INSURANCE product (should be IBG)
@@ -1489,13 +1520,32 @@ def _infer_and_correct_lead_marker(normalized: dict, doc_text: str = "") -> dict
     
     current_marker = normalized.get("LEAD_MARKER", "").strip().upper()
     
+    # CRITICAL: Check for "term finance" — STRONGEST loan signal, overrides everything
+    has_term_finance = "term finance" in combined_text
+    
     # CRITICAL: For loans, if provider is Bank Alfalah and no insurance company is mentioned,
     # it's almost certainly a bank loan (BNK), not insurance (IBG)
     is_bank_only = ("bank alfalah" in prov or "bank " in prov) and "insurance" not in prov
     has_loan_keywords = any(sig in combined_text for sig in ["term finance", "loan", "financing", "green energy"])
     
-    # Strong loan signals override weaker classification
-    if (has_loan_keywords or loan_score >= 1) and is_bank_only and current_marker == "IBG":
+    # CRITICAL: "term finance facility" ALWAYS means BNK (bank loan), NEVER IBG,
+    # even if insurance is bundled with it. The core product is a bank loan,
+    # not an insurance product.
+    if has_term_finance and current_marker == "IBG":
+        # Term finance facility misclassified as insurance — MUST correct
+        normalized["LEAD_MARKER"] = "BNK"
+        # Cascade corrections for insurance-only fields
+        for field in ["COVERAGE_AMOUNT", "FREE_LOOK_PERIOD_DAYS", 
+                      "OPTIONAL_RIDERS", "PREMIUM_PAYMENT_FREQUENCY", 
+                      "MIN_CONTRIBUTION", "KEY_EXCLUSIONS", "CLAIMS_SERVICE_CONTACT"]:
+            if field in normalized:
+                normalized[field] = "N/A"
+        # For BNK loan products, PLAN_TYPE should be "Loan"
+        if normalized.get("PLAN_TYPE", "").lower() != "loan":
+            normalized["PLAN_TYPE"] = "Loan"
+    
+    # Fallback: Strong loan signals with bank provider override weaker classification
+    elif (has_loan_keywords or loan_score >= 1) and is_bank_only and current_marker == "IBG":
         normalized["LEAD_MARKER"] = "BNK"
         # Cascade corrections for insurance-only fields per G12 rule
         for field in ["COVERAGE_AMOUNT", "FREE_LOOK_PERIOD_DAYS", 
@@ -2098,6 +2148,29 @@ VALIDATION RULES — check each and FIX if violated:
     Self-Employed 100,000), use the tiered format:
     "Salaried:50000 | Self-Employed:100000"
     Do NOT use only the lower segment's income and discard the others.
+
+28. MIN_TERM_YEARS CRITICAL: Only extract if document EXPLICITLY states a
+    MINIMUM tenure/term. Do NOT extract from "Up to X years" or "Maximum X years"
+    statements — those only give MAX_TERM_YEARS. If minimum is not stated in
+    the document, return "N/A" (never default to 1 or assume). Example:
+    WRONG: Document says "Up to 10 years" → MIN_TERM_YEARS="1" (guessed)
+    CORRECT: Document says "Up to 10 years" → MIN_TERM_YEARS="N/A" (not stated)
+    
+29. LOAN_AMOUNT_RANGE, COLLATERAL_TYPE, EQUITY_REQUIREMENT for BNK products:
+    Must extract EXPLICITLY stated values only. Examples:
+    LOAN_AMOUNT_RANGE: "Up to PKR 5 Million" or "Between 1M-10M"
+    COLLATERAL_TYPE: "Residential Property" or "Commercial Property"
+    EQUITY_REQUIREMENT: "20%" (strip verbose prefixes like "Minimum 20%")
+    If not stated, return "N/A".
+
+30. PREMIUM_PAYMENT_FREQUENCY for insurance: "yearly renewable plan" maps to
+    "Annual" payment frequency. Must EXPLICITLY extract from document phrases
+    like "annual", "yearly", "monthly", etc. Do NOT default to "Annual".
+
+31. REQUIRED_DOCUMENTS for insurance (IBG): Extract ONLY from explicit
+    "Documentation Required" or "Required Documents" section. If document shows
+    only "Claim Processing" steps or no upfront documentation section, return
+    "N/A" immediately (do NOT hallucinate or copy from loan sections).
 
 Refer to the system prompt above for full field definitions and all rules.
 
