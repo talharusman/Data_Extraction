@@ -272,6 +272,51 @@ PREMIUM_PAYMENT_FREQUENCY: max50. For INSURANCE ONLY: how customer PAYS premiums
   → "Quarterly", "semi-annual" → "Semi-Annual". If document doesn't explicitly
   state payment frequency, use "N/A" (not "Annual" as default). For loans/deposits → "N/A".
 
+===WORKED EXAMPLES (ground-truth style)===
+Example 1: Term Finance Loan for Solar Equipment (BNK product):
+  LEAD_MARKER: "BNK" | PLAN_TYPE: "Loan" | FINANCING_TYPE: "Conventional"
+  PRODUCT_NAME: "Alfalah Green Energy" (from document heading)
+  TARGET_GOAL: "Green Energy Financing"
+  LOAN_AMOUNT_RANGE: "Up to PKR 5 Million"
+  COLLATERAL_TYPE: "Residential Property" | EQUITY_REQUIREMENT: "20%"
+  MIN_AGE: 25 (not 18, because Salaried minimum is 25) | MAX_AGE: "N/A" 
+    (document says "age of retirement minus 3" but DOES NOT state retirement age)
+  MIN_TERM_YEARS: "N/A" (document says only "Up to 10 years", NO minimum stated)
+  MAX_TERM_YEARS: 10
+  CRITICAL FIX APPLIED: MIN_TERM_YEARS is "N/A", NOT "1" (rule AH5)
+  PRICING_RATE: "Salaried: 1 Year KIBOR + 3% | Businessman: KIBOR + 4%"
+  COVERAGE_AMOUNT: "N/A" (NOT insurance)
+  FREE_LOOK_PERIOD_DAYS: "N/A" (NOT insurance)
+  OPTIONAL_RIDERS: "N/A" (NOT insurance)
+  PREMIUM_PAYMENT_FREQUENCY: "N/A" (NOT insurance)
+  KEY_BENEFITS: "Customized financing | Attractive markup rates | Asset insurance |
+    Life insurance | Balloon payment flexibility"
+  MIN_CONTRIBUTION: "N/A" (NOT insurance)
+  KEY_EXCLUSIONS: "N/A" (NOT insurance)
+  REQUIRED_DOCUMENTS: "CNIC | Employment certificate | Salary slips | Bank statements |
+    Property documents | Processing fee cheque | Photographs"
+
+Example 2: Protection Insurance (IBG product):
+  LEAD_MARKER: "IBG" | PLAN_TYPE: "Insurance"
+  PRODUCT_NAME: "Alfalah Nighaban Insurance Plan" (from document heading, NOT Jubilee Kamil)
+  COVERAGE_AMOUNT: "Accidental Death:500K-1750K | ATM Withdrawal:100K-200K | Fraudulent:50K-100K |
+    Medical:10K-20K | Identity:10K-20K | Wallet:3K-7500 | Burglary:35K-75K | Mobile:30K-45K"
+  PRODUCT_VARIANT_TIER: "Bronze | Silver | Gold | Platinum" (ALL 4 TIERS, NOT just 3)
+  MIN_CONTRIBUTION: "Bronze:5000 | Silver:10000 | Gold:15000 | Platinum:20000" (ALL 4)
+  FREE_LOOK_PERIOD_DAYS: "14" (if stated in document) or "N/A"
+  PREMIUM_PAYMENT_FREQUENCY: "Annual" (from "yearly renewable plan")
+  PRICING_RATE: "N/A" (NOT for insurance — premium amounts go in MIN_CONTRIBUTION)
+  MIN_AGE: 18 | MAX_AGE: 60
+  CLAIMS_SERVICE_CONTACT: "(042) 111 786 234" (IF found in claims section of document, else "N/A")
+  LOAN_AMOUNT_RANGE: "N/A" (NOT a loan)
+  COLLATERAL_TYPE: "N/A" (NOT a loan)
+  KEY_EXCLUSIONS: "N/A" (or "Exclusion1 | Exclusion2" ONLY if explicitly in document)
+  KEY_BENEFITS: "Accidental death protection | Medical expense coverage | ATM theft protection |
+    Fraudulent transaction coverage | Identity document replacement"
+  TENURE: "1 Year" (yearly renewable plan term)
+  MAX_TERM_YEARS: 1 (annual renewable policy)
+  REQUIRED_DOCUMENTS: "N/A" (NO explicit "Documentation Required" section found for insurance)
+
 ===DO NOT===
 × PRODUCT_NAME that doesn't appear in the document heading/title.
 × Inventing product names like "Jubilee Kamil" when the actual title is "Alfalah Nighaban".
