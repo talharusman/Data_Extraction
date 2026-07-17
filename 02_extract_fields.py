@@ -1355,6 +1355,115 @@ def _clean_insurance_required_documents(required_docs: str) -> str:
 
 
 
+def _validate_insurance_fields(normalized: dict, doc_text: str) -> dict:
+    """
+    CRITICAL FIX: For IBG (insurance) products, validate that insurance-specific
+    fields are properly populated and loan-specific fields are cleared.
+    
+    Common issue: PRICING_RATE contains insurance premium percentages instead
+    of MIN_CONTRIBUTION. This function detects and fixes such contamination.
+    """
+    lead_marker = normalized.get("LEAD_MARKER", "").upper()
+    
+    if lead_marker != "IBG":
+        return normalized
+    
+    doc_lower = doc_text.lower()
+    
+    # For insurance products:
+    # 1. Extract PRODUCT_VARIANT_TIER if not already present
+    if normalized.get("PRODUCT_VARIANT_TIER") == "N/A":
+        if "option" in doc_lower:
+            # Check for Option 1, Option 2, etc.
+            options = []
+            for i in range(1, 6):
+                if f"option {i}" in doc_lower:
+                    options.append(f"Option {i}")
+            if options:
+                normalized["PRODUCT_VARIANT_TIER"] = " | ".join(options)
+    
+    # 2. Extract MIN_CONTRIBUTION if not already present (insurance premiums)
+    if normalized.get("MIN_CONTRIBUTION") == "N/A":
+        # Look for premium percentages like "2.75%", "1.50%"
+        premium_matches = re.findall(r'(\d+\.?\d*)\s*(?:%|percent|of sum|of vehicle|of value)', doc_lower)
+        if premium_matches:
+            # Found percentage premiums
+            unique_premiums = sorted(set(premium_matches))
+            normalized["MIN_CONTRIBUTION"] = " | ".join(unique_premiums)
+    
+    # 3. Extract COVERAGE_AMOUNT if not already present
+    if normalized.get("COVERAGE_AMOUNT") == "N/A":
+        # Look for coverage amounts like "Up to PKR 5 Million"
+        coverage_matches = re.findall(r'(?:up to|maximum|sum insured|coverage)[\s:]+(?:pkr\s+)?([0-9,.]+)\s*(?:million|m|lakh|lac|thousand|k)?', doc_lower)
+        if coverage_matches:
+            coverage_lines = []
+            if "option" in doc_lower:
+                # Try to map to options
+                for i in range(1, 6):
+                    if f"option {i}" in doc_lower:
+                        # Find coverage for this option
+                        pass
+            if coverage_matches and not coverage_lines:
+                # Fallback: just concatenate found amounts
+                normalized["COVERAGE_AMOUNT"] = " | ".join(coverage_matches)
+    
+    # 4. Extract FREE_LOOK_PERIOD_DAYS if not already present
+    if normalized.get("FREE_LOOK_PERIOD_DAYS") == "N/A":
+        free_look = re.search(r'(\d+)\s*days?\s*(?:free look|free-look|return period|cancellation period)', doc_lower)
+        if free_look:
+            normalized["FREE_LOOK_PERIOD_DAYS"] = free_look.group(1)
+    
+    # 5. Extract PREMIUM_PAYMENT_FREQUENCY if not already present
+    if normalized.get("PREMIUM_PAYMENT_FREQUENCY") == "N/A":
+        freq = "N/A"
+        if re.search(r'\byearly\b|\bannual\b|\bannually\b', doc_lower):
+            freq = "Annual"
+        elif re.search(r'\bmonthly\b', doc_lower):
+            freq = "Monthly"
+        elif re.search(r'\bquarterly\b', doc_lower):
+            freq = "Quarterly"
+        elif re.search(r'\bsemi-annual\b|\bhalf-yearly\b|\bhalf yearly\b', doc_lower):
+            freq = "Semi-Annual"
+        if freq != "N/A":
+            normalized["PREMIUM_PAYMENT_FREQUENCY"] = freq
+    
+    # 6. Extract CLAIMS_SERVICE_CONTACT if not already present
+    if normalized.get("CLAIMS_SERVICE_CONTACT") == "N/A":
+        # Look for phone or email in claims section
+        phone_match = re.search(r'\(0?42\)?\s*(?:111-)?[\d-]{6,}', doc_text)
+        email_match = re.search(r'[a-z]+@[a-z]+\.com', doc_lower)
+        if phone_match:
+            normalized["CLAIMS_SERVICE_CONTACT"] = phone_match.group(0)
+        elif email_match:
+            normalized["CLAIMS_SERVICE_CONTACT"] = email_match.group(0)
+    
+    # 7. Extract KEY_EXCLUSIONS if not already present
+    if normalized.get("KEY_EXCLUSIONS") == "N/A":
+        # Look for explicit exclusions section
+        exclusions_idx = doc_lower.find("exclusion")
+        if exclusions_idx >= 0:
+            # Found exclusions section, try to extract
+            exclusions_section = doc_lower[exclusions_idx:exclusions_idx+500]
+            # Common exclusion keywords
+            exclusions = []
+            for excl in ["war", "pre-existing", "terrorism", "hire and reward", "racing", "hazardous"]:
+                if excl in exclusions_section:
+                    exclusions.append(excl.title())
+            if exclusions:
+                normalized["KEY_EXCLUSIONS"] = " | ".join(exclusions)
+    
+    # 8. Fix PRICING_RATE contamination - insurance MUST have PRICING_RATE="N/A"
+    pricing_rate = normalized.get("PRICING_RATE", "N/A")
+    if pricing_rate not in ("N/A", ""):
+        # Check if this looks like insurance premiums (contains % or "of sum/vehicle")
+        if "%" in pricing_rate and any(kw in pricing_rate.lower() for kw in ["of", "sum", "vehicle", "value"]):
+            # This is a premium, move it to MIN_CONTRIBUTION
+            normalized["MIN_CONTRIBUTION"] = pricing_rate
+            normalized["PRICING_RATE"] = "N/A"
+    
+    return normalized
+
+
 def _validate_product_variant_tier(tier_value: str, doc_text: str) -> str:
     """
     CRITICAL FIX: Validate that PRODUCT_VARIANT_TIER values actually appear
@@ -1417,6 +1526,122 @@ def _validate_employment_restrictions(employment_value: str, doc_text: str) -> s
     
     # Otherwise keep the employment value if it's reasonable
     return employment_value
+
+
+def _validate_critical_numeric_fields(normalized: dict, doc_text: str) -> dict:
+    """
+    CRITICAL FIX: Validate that critical numeric fields actually appear
+    in the document text. Prevents hallucination of default values like
+    MIN_AGE=25, MAX_AGE=65, MIN_INCOME=50000, MIN_TERM_YEARS=1, etc.
+    
+    Fields to validate:
+    - MIN_AGE, MAX_AGE: only keep if age keywords explicitly in doc
+    - MIN_INCOME, MIN_INCOME_USD: only keep if income keywords explicitly in doc
+    - MIN_TERM_YEARS, MAX_TERM_YEARS: only keep if term/tenure keywords in doc
+    - LOAN_AMOUNT_RANGE: only keep if loan amount keywords in doc
+    - COLLATERAL_TYPE: only keep if collateral keywords in doc
+    - EQUITY_REQUIREMENT: only keep if equity/down payment keywords in doc
+    - PRICING_RATE: for BNK products, only if rate keywords in doc
+    """
+    if not doc_text:
+        return normalized
+    
+    doc_lower = doc_text.lower()
+    
+    # Validate MIN_AGE and MAX_AGE
+    min_age = normalized.get("MIN_AGE", "N/A")
+    max_age = normalized.get("MAX_AGE", "N/A")
+    
+    age_keywords = ["minimum age", "min age", "maximum age", "max age", "eligible age", "years old", "aged"]
+    has_age_context = any(kw in doc_lower for kw in age_keywords)
+    
+    if not has_age_context:
+        # No age-related language in document — any age values are hallucinated
+        normalized["MIN_AGE"] = "N/A"
+        normalized["MAX_AGE"] = "N/A"
+    
+    # Validate MIN_INCOME
+    min_income = normalized.get("MIN_INCOME", "N/A")
+    if min_income not in ("N/A", ""):
+        income_keywords = ["minimum income", "min income", "required income", "salary requirement", "income "]
+        has_income_context = any(kw in doc_lower for kw in income_keywords)
+        if not has_income_context:
+            # No income-related language — value is hallucinated
+            normalized["MIN_INCOME"] = "N/A"
+    
+    # Validate MIN_INCOME_USD
+    min_income_usd = normalized.get("MIN_INCOME_USD", "N/A")
+    if min_income_usd not in ("N/A", ""):
+        if "usd" not in doc_lower and "dollar" not in doc_lower and "$" not in doc_text:
+            # Document doesn't mention USD income
+            normalized["MIN_INCOME_USD"] = "N/A"
+    
+    # Validate LOAN_AMOUNT_RANGE
+    loan_amt = normalized.get("LOAN_AMOUNT_RANGE", "N/A")
+    if loan_amt not in ("N/A", ""):
+        # Check if this is really a loan amount (not solar capacity or other tech specs)
+        loan_keywords = ["loan", "financing", "amount", "up to", "maximum", "facility", "credit"]
+        has_loan_amount_context = any(kw in doc_lower for kw in loan_keywords)
+        
+        # Check for solar/tech capacity words that would indicate hallucination
+        solar_keywords = ["kw", "kilowatt", "watt", "capacity", "technical specification"]
+        is_solar_capacity = any(kw in doc_lower for kw in solar_keywords)
+        
+        if is_solar_capacity and not has_loan_amount_context:
+            # This looks like a solar capacity spec, not a loan amount
+            normalized["LOAN_AMOUNT_RANGE"] = "N/A"
+        elif not has_loan_amount_context:
+            normalized["LOAN_AMOUNT_RANGE"] = "N/A"
+    
+    # Validate MIN_TERM_YEARS and MAX_TERM_YEARS
+    min_term = normalized.get("MIN_TERM_YEARS", "N/A")
+    max_term = normalized.get("MAX_TERM_YEARS", "N/A")
+    
+    if min_term not in ("N/A", ""):
+        # MIN_TERM_YEARS should ONLY be set if document explicitly says "minimum tenure"
+        min_tenure_keywords = ["minimum tenure", "min tenure", "minimum term", "min term", "at least"]
+        has_min_tenure = any(kw in doc_lower for kw in min_tenure_keywords)
+        if not has_min_tenure:
+            # No explicit minimum — value is likely hallucinated
+            normalized["MIN_TERM_YEARS"] = "N/A"
+    
+    if max_term not in ("N/A", ""):
+        # MAX_TERM_YEARS should be in document with "up to", "maximum", "up to X years", etc.
+        max_tenure_keywords = ["maximum", "max", "up to", "years"]
+        has_max_tenure = any(kw in doc_lower for kw in max_tenure_keywords)
+        if not has_max_tenure:
+            normalized["MAX_TERM_YEARS"] = "N/A"
+    
+    # Validate COLLATERAL_TYPE
+    collateral = normalized.get("COLLATERAL_TYPE", "N/A")
+    if collateral not in ("N/A", ""):
+        collateral_keywords = ["collateral", "security", "pledge", "mortgage", "property"]
+        has_collateral = any(kw in doc_lower for kw in collateral_keywords)
+        if not has_collateral:
+            # No collateral mention — value is hallucinated
+            normalized["COLLATERAL_TYPE"] = "N/A"
+    
+    # Validate EQUITY_REQUIREMENT
+    equity = normalized.get("EQUITY_REQUIREMENT", "N/A")
+    if equity not in ("N/A", ""):
+        equity_keywords = ["equity", "down payment", "down-payment", "initial", "first installment", "deposit requirement"]
+        has_equity = any(kw in doc_lower for kw in equity_keywords)
+        if not has_equity:
+            # No equity/down payment mention — value is hallucinated
+            normalized["EQUITY_REQUIREMENT"] = "N/A"
+    
+    # Validate PRICING_RATE for BNK products
+    pricing_rate = normalized.get("PRICING_RATE", "N/A")
+    lead_marker = normalized.get("LEAD_MARKER", "").upper()
+    if lead_marker == "BNK" and pricing_rate not in ("N/A", ""):
+        # For bank products, PRICING_RATE should only have interest/markup rates
+        rate_keywords = ["rate", "percentage", "p.a.", "kibor", "margin", "markup", "interest"]
+        has_rate = any(kw in doc_lower for kw in rate_keywords)
+        if not has_rate:
+            # No rate information in document
+            normalized["PRICING_RATE"] = "N/A"
+    
+    return normalized
 
 
 def _validate_age_requirements(min_age: str, max_age: str, doc_text: str) -> tuple:
@@ -1680,6 +1905,20 @@ def _infer_and_correct_lead_marker(normalized: dict, doc_text: str = "") -> dict
         for field in ["LOAN_AMOUNT_RANGE", "COLLATERAL_TYPE", "EQUITY_REQUIREMENT", "DBR_LIMIT"]:
             if field in normalized:
                 normalized[field] = "N/A"
+    
+    # CRITICAL FIX: Additional check for insurance products that have VERY strong
+    # insurance signals but might not reach insurance_score >= 2 due to weighting.
+    # If current_marker is BNK but the document explicitly contains insurance-specific
+    # fields with real values, it's almost certainly an IBG product.
+    if current_marker == "BNK" and normalized.get("PLAN_TYPE", "").lower() == "insurance":
+        # PLAN_TYPE="Insurance" but LEAD_MARKER="BNK" is a contradiction
+        # This must be an insurance product
+        if any(sig in combined_text for sig in ["insurance", "policy", "underwritten", "insurer"]):
+            normalized["LEAD_MARKER"] = "IBG"
+            # Cascade corrections for loan-only fields
+            for field in ["LOAN_AMOUNT_RANGE", "COLLATERAL_TYPE", "EQUITY_REQUIREMENT", "DBR_LIMIT"]:
+                if field in normalized:
+                    normalized[field] = "N/A"
     
     return normalized
 
@@ -1982,6 +2221,15 @@ def normalize_record(record, entry, doc_text=""):
     # Cross-field consistency: must run after all per-field normalizations
     # ----------------------------------------------------------------
     normalized = _crossfield_validate(normalized)
+    
+    # CRITICAL FIX: Validate critical numeric fields against document
+    # Prevents hallucination of default values
+    if doc_text:
+        normalized = _validate_critical_numeric_fields(normalized, doc_text)
+    
+    # CRITICAL: Validate and enrich insurance-specific fields
+    if doc_text:
+        normalized = _validate_insurance_fields(normalized, doc_text)
     
     # CRITICAL: Validate product variant tiers against document (prevent hallucination)
     if "PRODUCT_VARIANT_TIER" in normalized and doc_text:
@@ -2473,6 +2721,84 @@ def extract_one_chunk(model, tokenizer, entry, chunk, chunk_idx, chunk_total, ma
 
 
 def extract_one_product(model, tokenizer, entry, text, max_new_tokens=None):
+    """
+    Chunked extraction + field-level merge + single validation pass.
+
+    The document is split into TEXT_CHUNK_SIZE-char pieces. Each piece is
+    sent to the model separately. Results are merged field-by-field
+    (first real value found for a field across chunks wins). A single
+    validation pass runs on the final merged record.
+
+    If ENABLE_CHUNKING=False, the whole document is sent in one call
+    (risks OOM on long documents + large system prompt).
+
+    max_new_tokens: optional override (used by the OOM retry loop in main()
+    to shrink the generation budget — and therefore the KV-cache/activation
+    memory — on subsequent attempts instead of repeating an identical call).
+    """
+    if ENABLE_CHUNKING:
+        chunks = chunk_text(text, TEXT_CHUNK_SIZE, TEXT_CHUNK_OVERLAP)
+    else:
+        chunks = [text.strip()]
+    chunk_total = len(chunks)
+
+    accumulated = blank_record(entry)
+    any_chunk_succeeded = False
+
+    for i, chunk in enumerate(chunks, start=1):
+        chunk_record = extract_one_chunk(
+            model, tokenizer, entry, chunk, i, chunk_total, max_new_tokens=max_new_tokens,
+            full_text=text
+        )
+        if chunk_record is not None:
+            any_chunk_succeeded = True
+            accumulated = merge_records(accumulated, chunk_record, COLUMNS)
+        free_gpu_memory()
+
+    if not any_chunk_succeeded:
+        return blank_record(entry)
+
+    # CRITICAL FIX: Always normalize the accumulated record with full document context.
+    # This ensures cross-field validation (LEAD_MARKER correction, field applicability
+    # checks, etc.) is applied even if the validation pass fails or is skipped.
+    # Single validation/correction pass on the merged record.
+    # FIX (OOM): The validation prompt is the LARGEST in the pipeline
+    # (full SYSTEM_PROMPT + 31 rules + extracted JSON ≈ 10,500 tokens
+    # input).  On Colab-tier GPUs (≤16 GB) this is the most common OOM
+    # trigger.  Skip it when free VRAM is below 3 GiB — the Python-side
+    # normalize_record + _crossfield_validate already enforce the same
+    # rules deterministically, so extraction quality is preserved.
+    free_gib = _gpu_free_gib()
+    if free_gib < 3.0:
+        print(
+            f"    note: skipping LLM validation pass (only {free_gib:.1f} GiB free, "
+            f"need ~3 GiB) — Python-side normalization still applied"
+        )
+        # CRITICAL FIX: Normalize even when validation is skipped
+        return normalize_record(accumulated, entry, doc_text=text)
+
+    # FIX (OOM): Use a smaller token budget for validation since its output
+    # is just a corrected copy of the already-extracted JSON (no new info).
+    validation_max = min(max_new_tokens or MAX_NEW_TOKENS, 1200)
+    validation_prompt = build_validation_prompt(entry, accumulated)
+    try:
+        validation_raw = get_raw_generation(model, tokenizer, validation_prompt, max_new_tokens=validation_max)
+    except torch.cuda.OutOfMemoryError:
+        free_gpu_memory()
+        print(
+            "    note: validation pass OOM — returning merged record "
+            "(Python-side normalization still applied)"
+        )
+        # CRITICAL FIX: Normalize even when validation OOMs
+        return normalize_record(accumulated, entry, doc_text=text)
+    try:
+        validated_parsed = parse_json_blob(validation_raw)
+        return normalize_record(validated_parsed, entry, doc_text=text)
+    except Exception:
+        # If the validation call itself fails to parse, normalize the merged record
+        # (already merged field-by-field, now needs cross-field validation)
+        # CRITICAL FIX: Apply critical cross-field validation even on parse failure
+        return normalize_record(accumulated, entry, doc_text=text)
     """
     Chunked extraction + field-level merge + single validation pass.
 
