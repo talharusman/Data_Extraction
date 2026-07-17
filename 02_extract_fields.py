@@ -1355,6 +1355,61 @@ def _clean_insurance_required_documents(required_docs: str) -> str:
 
 
 
+
+def _extract_insurance_coverage_from_doc(doc_text: str) -> dict:
+    """
+    CRITICAL HELPER: Extract insurance-specific fields from document text when
+    LLM extraction misses them. This prevents missing critical insurance data.
+    """
+    result = {
+        "FREE_LOOK_PERIOD_DAYS": "N/A",
+        "COVERAGE_AMOUNT": "N/A",
+        "MIN_CONTRIBUTION": "N/A",
+        "PREMIUM_PAYMENT_FREQUENCY": "N/A",
+        "PRODUCT_VARIANT_TIER": "N/A",
+        "KEY_EXCLUSIONS": "N/A",
+        "CLAIMS_SERVICE_CONTACT": "N/A",
+    }
+    
+    doc_lower = doc_text.lower()
+    
+    # Extract FREE_LOOK_PERIOD_DAYS
+    flp_match = re.search(r'(\d+)\s*(?:day)?s?\s*(?:free[\s-]?look|review\s+period|grace\s+period)', doc_lower)
+    if flp_match:
+        result["FREE_LOOK_PERIOD_DAYS"] = flp_match.group(1)
+    
+    # Extract PREMIUM_PAYMENT_FREQUENCY  
+    if "annual" in doc_lower or "yearly" in doc_lower:
+        result["PREMIUM_PAYMENT_FREQUENCY"] = "Annual"
+    elif "monthly" in doc_lower:
+        result["PREMIUM_PAYMENT_FREQUENCY"] = "Monthly"
+    elif "quarterly" in doc_lower:
+        result["PREMIUM_PAYMENT_FREQUENCY"] = "Quarterly"
+    
+    # Extract PRODUCT_VARIANT_TIER
+    option_matches = re.findall(r'option\s+(\d+)', doc_lower)
+    if option_matches:
+        options = [f"Option {n}" for n in sorted(set(option_matches))]
+        result["PRODUCT_VARIANT_TIER"] = " | ".join(options)
+    
+    # Extract MIN_CONTRIBUTION
+    prem_matches = re.findall(r'(\d+\.?\d*)\s*%\s*(?:of\s+(?:sum|vehicle|value))?', doc_lower)
+    if prem_matches:
+        contributions = [f"{p}% of Sum Assured" for p in prem_matches[:5]]
+        if contributions:
+            result["MIN_CONTRIBUTION"] = " | ".join(contributions)
+    
+    # Extract COVERAGE_AMOUNT
+    coverage_matches = re.findall(r'(?:sum\s+insured|coverage)\s*[:-]?\s*(?:up\s+to\s+)?(?:pkr\s+)?(\d+(?:,\d{3})*)', doc_lower)
+    if coverage_matches:
+        coverages = [f"Up to PKR {c}" for c in coverage_matches[:5]]
+        if coverages:
+            result["COVERAGE_AMOUNT"] = " | ".join(coverages)
+    
+    return result
+
+
+
 def _validate_insurance_fields(normalized: dict, doc_text: str) -> dict:
     """
     CRITICAL FIX: For IBG (insurance) products, validate that insurance-specific
@@ -1370,8 +1425,20 @@ def _validate_insurance_fields(normalized: dict, doc_text: str) -> dict:
     
     doc_lower = doc_text.lower()
     
+    # CRITICAL: Try to extract missing insurance fields from document using helper
+    insurance_data = _extract_insurance_coverage_from_doc(doc_text)
+    
+    # Apply extracted insurance data if LLM didn't extract it
+    for field in ["FREE_LOOK_PERIOD_DAYS", "COVERAGE_AMOUNT", "MIN_CONTRIBUTION",
+                  "PREMIUM_PAYMENT_FREQUENCY", "PRODUCT_VARIANT_TIER", "KEY_EXCLUSIONS",
+                  "CLAIMS_SERVICE_CONTACT"]:
+        current = normalized.get(field, "N/A")
+        extracted = insurance_data.get(field, "N/A")
+        if (current == "N/A" or not current) and extracted != "N/A":
+            normalized[field] = extracted
+    
     # For insurance products:
-    # 1. Extract PRODUCT_VARIANT_TIER if not already present
+    # 1. Extract PRODUCT_VARIANT_TIER if not already present (double-check)
     if normalized.get("PRODUCT_VARIANT_TIER") == "N/A":
         if "option" in doc_lower:
             # Check for Option 1, Option 2, etc.
@@ -1766,6 +1833,16 @@ def _crossfield_validate(normalized: dict) -> dict:
         if isinstance(req_docs, str) and req_docs not in ("N/A", ""):
             req_docs = _clean_insurance_required_documents(req_docs)
             normalized["REQUIRED_DOCUMENTS"] = req_docs
+        
+        # CRITICAL FINAL CHECK: For insurance products, ensure PRICING_RATE is always N/A
+        # (insurance premiums are in MIN_CONTRIBUTION, not PRICING_RATE)
+        if normalized.get("PRICING_RATE") not in ("N/A", ""):
+            # If PRICING_RATE still has a value for an insurance product, it's likely
+            # a loan rate that shouldn't be there. Clear it.
+            if any(keyword in normalized.get("PRICING_RATE", "").lower() 
+                   for keyword in ["kibor", "markup", "rate", "interest"]):
+                # Loan-specific rate in insurance product - clear it
+                normalized["PRICING_RATE"] = "N/A"
 
     return normalized
 
@@ -1841,7 +1918,11 @@ def _infer_and_correct_lead_marker(normalized: dict, doc_text: str = "") -> dict
         "insurance", "protection", "takaful", "endowment",
         "unit-linked", "unit linked", "investment-linked", "cover",
         "policy", "premium", "rider", "hospitalization", "death benefit",
-        "claims", "underwritten by"
+        "claims", "underwritten by",
+        # CRITICAL ENHANCED: Strong insurance product signals
+        "insurance plan", "insurance product", "insurance policy",
+        "insurance company", "insurer", "underwritten", "motor insurance",
+        "underwritten by insurance", "insurance underwritten"
     }
     
     combined_text = f"{desc} {plan} {prov} {pricing} {loan_amt} {collateral} {equity}".lower()
@@ -1854,6 +1935,9 @@ def _infer_and_correct_lead_marker(normalized: dict, doc_text: str = "") -> dict
     # CRITICAL: Check for "term finance" — STRONGEST loan signal, overrides everything
     has_term_finance = "term finance" in combined_text
     
+    # CRITICAL ENHANCED: Check for "insurance plan" — STRONGEST insurance signal
+    has_insurance_plan = any(sig in combined_text for sig in ["insurance plan", "insurance product", "insurance policy"])
+    
     # CRITICAL: For loans, if provider is Bank Alfalah and no insurance company is mentioned,
     # it's almost certainly a bank loan (BNK), not insurance (IBG)
     is_bank_only = ("bank alfalah" in prov or "bank " in prov) and "insurance" not in prov
@@ -1862,6 +1946,19 @@ def _infer_and_correct_lead_marker(normalized: dict, doc_text: str = "") -> dict
     # CRITICAL: "term finance facility" ALWAYS means BNK (bank loan), NEVER IBG,
     # even if insurance is bundled with it. The core product is a bank loan,
     # not an insurance product.
+    # CRITICAL ENHANCED: If document has "insurance plan" or "insurance policy" keywords,
+    # it's DEFINITELY an insurance product (IBG), overrides bank provider
+    has_strong_insurance_signal = has_insurance_plan or ("insurance company" in prov or "insurer" in prov)
+    
+    # CRITICAL ENHANCED: If strong insurance signals found but marked as BNK, correct to IBG
+    if has_strong_insurance_signal and current_marker == "BNK":
+        # Strong insurance signals but marked as bank product — MUST correct
+        normalized["LEAD_MARKER"] = "IBG"
+        # Cascade corrections for loan-only fields
+        for field in ["LOAN_AMOUNT_RANGE", "COLLATERAL_TYPE", "EQUITY_REQUIREMENT", "DBR_LIMIT", "PRICING_RATE"]:
+            if field in normalized:
+                normalized[field] = "N/A"
+    
     if has_term_finance and current_marker == "IBG":
         # Term finance facility misclassified as insurance — MUST correct
         normalized["LEAD_MARKER"] = "BNK"
@@ -2401,10 +2498,21 @@ Return the repaired JSON object now."""
     return repair_instructions
 
 
-def build_validation_prompt(entry, extracted_json):
+def build_validation_prompt(entry, extracted_json, tokenizer=None):
     """
-    Validation and correction prompt using the full system context.
-    Checks the 56-field output against the corrected extraction rules.
+    Validation and correction prompt for the 56-field output.
+
+    FIX (OOM): Removed the full SYSTEM_PROMPT (~5,800 tokens) that was
+    prepended to every validation call.  The 31 validation rules below are
+    entirely self-contained — they already enumerate all 56 fields, all
+    cross-field consistency checks, and all formatting rules.  Dropping the
+    system prompt cuts total input from ~10,800 tokens to ~5,000 tokens,
+    which reduces the Qwen-2.5 prefill logits tensor (151K vocab × seq_len
+    × 4 bytes) from ~6.2 GiB to ~2.9 GiB — well within Colab T4/L4 headroom.
+
+    FIX (JSON output): Now accepts the tokenizer and applies the chat
+    template so Qwen emits raw JSON instead of conversational preamble,
+    matching the fix already applied to build_repair_prompt.
     """
     validation_instructions = f"""You extracted this JSON. Validate and fix any issues:
 
@@ -2570,13 +2678,34 @@ VALIDATION RULES — check each and FIX if violated:
     only "Claim Processing" steps or no upfront documentation section, return
     "N/A" immediately (do NOT hallucinate or copy from loan sections).
 
-Refer to the system prompt above for full field definitions and all rules.
-
 If ANY rule is violated, return CORRECTED JSON. Otherwise return JSON unchanged.
 Fix ONLY the violations, preserve everything else.
 Return ONLY valid JSON, no explanations."""
 
-    return f"{SYSTEM_PROMPT}\n\n{validation_instructions}"
+    # FIX (OOM): Apply chat template so Qwen generates raw JSON instead of
+    # conversational preamble.  Same pattern as build_repair_prompt.
+    if tokenizer is not None and hasattr(tokenizer, "apply_chat_template"):
+        messages = [
+            {"role": "user", "content": validation_instructions},
+        ]
+        try:
+            try:
+                return tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
+                )
+            except TypeError:
+                return tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+        except Exception:
+            pass  # fall through to raw string
+
+    return validation_instructions
 
 
 # ============================================================================
@@ -2768,6 +2897,9 @@ def extract_one_product(model, tokenizer, entry, text, max_new_tokens=None):
     # trigger.  Skip it when free VRAM is below 3 GiB — the Python-side
     # normalize_record + _crossfield_validate already enforce the same
     # rules deterministically, so extraction quality is preserved.
+    # FIX (OOM): Aggressively defragment CUDA memory before the validation
+    # pass — this is the single largest generation call in the pipeline.
+    free_gpu_memory()
     free_gib = _gpu_free_gib()
     if free_gib < 3.0:
         print(
@@ -2780,7 +2912,7 @@ def extract_one_product(model, tokenizer, entry, text, max_new_tokens=None):
     # FIX (OOM): Use a smaller token budget for validation since its output
     # is just a corrected copy of the already-extracted JSON (no new info).
     validation_max = min(max_new_tokens or MAX_NEW_TOKENS, 1200)
-    validation_prompt = build_validation_prompt(entry, accumulated)
+    validation_prompt = build_validation_prompt(entry, accumulated, tokenizer=tokenizer)
     try:
         validation_raw = get_raw_generation(model, tokenizer, validation_prompt, max_new_tokens=validation_max)
     except torch.cuda.OutOfMemoryError:
@@ -2799,78 +2931,6 @@ def extract_one_product(model, tokenizer, entry, text, max_new_tokens=None):
         # (already merged field-by-field, now needs cross-field validation)
         # CRITICAL FIX: Apply critical cross-field validation even on parse failure
         return normalize_record(accumulated, entry, doc_text=text)
-    """
-    Chunked extraction + field-level merge + single validation pass.
-
-    The document is split into TEXT_CHUNK_SIZE-char pieces. Each piece is
-    sent to the model separately. Results are merged field-by-field
-    (first real value found for a field across chunks wins). A single
-    validation pass runs on the final merged record.
-
-    If ENABLE_CHUNKING=False, the whole document is sent in one call
-    (risks OOM on long documents + large system prompt).
-
-    max_new_tokens: optional override (used by the OOM retry loop in main()
-    to shrink the generation budget — and therefore the KV-cache/activation
-    memory — on subsequent attempts instead of repeating an identical call).
-    """
-    if ENABLE_CHUNKING:
-        chunks = chunk_text(text, TEXT_CHUNK_SIZE, TEXT_CHUNK_OVERLAP)
-    else:
-        chunks = [text.strip()]
-    chunk_total = len(chunks)
-
-    accumulated = blank_record(entry)
-    any_chunk_succeeded = False
-
-    for i, chunk in enumerate(chunks, start=1):
-        chunk_record = extract_one_chunk(
-            model, tokenizer, entry, chunk, i, chunk_total, max_new_tokens=max_new_tokens,
-            full_text=text
-        )
-        if chunk_record is not None:
-            any_chunk_succeeded = True
-            accumulated = merge_records(accumulated, chunk_record, COLUMNS)
-        free_gpu_memory()
-
-    if not any_chunk_succeeded:
-        return blank_record(entry)
-
-    # Single validation/correction pass on the merged record.
-    # FIX (OOM): The validation prompt is the LARGEST in the pipeline
-    # (full SYSTEM_PROMPT + 31 rules + extracted JSON ≈ 10,500 tokens
-    # input).  On Colab-tier GPUs (≤16 GB) this is the most common OOM
-    # trigger.  Skip it when free VRAM is below 3 GiB — the Python-side
-    # normalize_record + _crossfield_validate already enforce the same
-    # rules deterministically, so extraction quality is preserved.
-    free_gib = _gpu_free_gib()
-    if free_gib < 3.0:
-        print(
-            f"    note: skipping LLM validation pass (only {free_gib:.1f} GiB free, "
-            f"need ~3 GiB) — Python-side normalization still applied"
-        )
-        return accumulated
-
-    # FIX (OOM): Use a smaller token budget for validation since its output
-    # is just a corrected copy of the already-extracted JSON (no new info).
-    validation_max = min(max_new_tokens or MAX_NEW_TOKENS, 1200)
-    validation_prompt = build_validation_prompt(entry, accumulated)
-    try:
-        validation_raw = get_raw_generation(model, tokenizer, validation_prompt, max_new_tokens=validation_max)
-    except torch.cuda.OutOfMemoryError:
-        free_gpu_memory()
-        print(
-            "    note: validation pass OOM — returning merged record "
-            "(Python-side normalization still applied)"
-        )
-        return accumulated
-    try:
-        validated_parsed = parse_json_blob(validation_raw)
-        return normalize_record(validated_parsed, entry, doc_text=text)
-    except Exception:
-        # If the validation call itself fails to parse, the merged record
-        # (already normalized field-by-field) is still a valid result.
-        return accumulated
 
 
 def extract_one(model, tokenizer, entry, text, max_new_tokens=None):
