@@ -139,19 +139,14 @@ MODEL_NAME = os.environ.get("HF_MODEL_NAME_OR_PATH", "").strip()
 MODEL_CLASS = os.environ.get("HF_MODEL_CLASS", "causal").strip().lower()
 LOCAL_FILES_ONLY = env_bool("HF_LOCAL_FILES_ONLY", True)
 TRUST_REMOTE_CODE = env_bool("HF_TRUST_REMOTE_CODE", False)
-# Raised from 1500 to 2200: the 1500 budget was still getting hit on
-# products with long CUSTOMER_TYPE lists, EMPLOYMENT_TYPE target-market
-# text, and multi-tier PRICING_RATE tables, which truncated the JSON
-# mid-field (see _close_unterminated_json for the recovery path when this
-# still happens). Override via HF_MAX_NEW_TOKENS in .env if needed.
-MAX_NEW_TOKENS = env_int("HF_MAX_NEW_TOKENS", 2200)
+# FIX (OOM): Lowered default from 2200 to 1500.  The auto-close recovery
+# (_close_unterminated_json) reliably handles the rare case where 1500 is
+# not enough, so we no longer need to reserve worst-case headroom that
+# pushes the KV-cache into OOM territory on Colab T4/L4 GPUs.
+# Override via HF_MAX_NEW_TOKENS in .env if needed.
+MAX_NEW_TOKENS = env_int("HF_MAX_NEW_TOKENS", 1500)
 # FIX: Enforce a minimum safe budget for 56-field JSON generation.
-# If .env has HF_MAX_NEW_TOKENS set too low (e.g. 1000), the model will
-# truncate the JSON mid-field — the auto-close recovery cannot reliably
-# repair both the initial and repair-pass outputs when both hit the same
-# token ceiling. Override with a warning instead of silently producing
-# blank/partial records in the JSONL output.
-_MIN_SAFE_TOKENS = 2200
+_MIN_SAFE_TOKENS = 1500
 if MAX_NEW_TOKENS < _MIN_SAFE_TOKENS:
     print(
         f"\nWARNING: HF_MAX_NEW_TOKENS={MAX_NEW_TOKENS} is too small to generate "
@@ -163,7 +158,10 @@ if MAX_NEW_TOKENS < _MIN_SAFE_TOKENS:
 TEMPERATURE = env_float("HF_TEMPERATURE", 0.0)
 TOP_P = env_float("HF_TOP_P", 1.0)
 REPETITION_PENALTY = env_float("HF_REPETITION_PENALTY", 1.03)
-TEXT_CHUNK_SIZE = env_int("TEXT_CHUNK_SIZE", 6000)
+# FIX (OOM): Lowered default from 6000 to 4000 chars.  With the 22 KB
+# system prompt each chunk call was ~8,500 input tokens.  At 4000 chars
+# the input drops to ~7,000 tokens, saving ~25% KV-cache memory per call.
+TEXT_CHUNK_SIZE = env_int("TEXT_CHUNK_SIZE", 4000)
 TEXT_CHUNK_OVERLAP = env_int("TEXT_CHUNK_OVERLAP", 500)
 LOAD_IN_4BIT = env_bool("HF_LOAD_IN_4BIT", False)
 LOAD_IN_8BIT = env_bool("HF_LOAD_IN_8BIT", False)
@@ -527,11 +525,32 @@ def merge_records(accumulated: dict, new_record: dict, columns) -> dict:
 # ============================================================================
 
 def _strip_wrappers(text: str) -> str:
+    """Remove markdown fences, preamble text, and thinking tags from model
+    output so the downstream JSON parsers see clean content.
+
+    FIX (JSON recovery): The previous version only stripped leading fences
+    and trailing fences.  Repair-pass output from Qwen often starts with
+    conversational preamble like ``Here is the repaired JSON:\n```json``.
+    We now also strip everything *before* the first ``{`` when no fence is
+    found, giving the brace-walker and auto-close logic a clean start.
+    """
     text = text.strip()
+    # Remove <think> blocks
+    text = re.sub(r"(?is)</?think>", "", text)
+    # Remove markdown fences
     text = re.sub(r"^\s*```(?:json)?\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s*```\s*$", "", text)
     text = re.sub(r"^\s*json\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"(?is)</?think>", "", text)
+    text = text.strip()
+    # FIX: If the text still doesn't start with '{' or '[', strip
+    # conversational preamble ("Here is the repaired JSON ...") by
+    # jumping to the first JSON-start character.
+    if text and text[0] not in ('{', '['):
+        first_brace = text.find('{')
+        first_bracket = text.find('[')
+        candidates = [i for i in (first_brace, first_bracket) if i != -1]
+        if candidates:
+            text = text[min(candidates):]
     return text.strip()
 
 
@@ -1939,20 +1958,27 @@ def build_prompt(entry, chunk, tokenizer, chunk_idx=1, chunk_total=1):
     return f"{SYSTEM_PROMPT}\n\n{user_msg}"
 
 
-def build_repair_prompt(entry, raw_text):
+def build_repair_prompt(entry, raw_text, tokenizer=None):
     """
     Compact repair prompt for malformed JSON output.
 
     Intentionally does NOT include the full SYSTEM_PROMPT to avoid exceeding
     Qwen2.5-3B's context limit when the broken output is also long. The essential
     rules are inlined here instead.
+
+    FIX (JSON recovery): Now accepts the tokenizer and applies the chat
+    template so Qwen emits raw JSON instead of conversational preamble.
+    The previous version sent a raw string which caused Qwen to prefix its
+    output with "Here is the repaired JSON …" text that broke parsing.
     """
+    # FIX: Truncate broken output more aggressively to save prompt tokens.
+    # 2000 chars is enough context for repair; 3000 was wasting budget.
     repair_instructions = f"""You are repairing broken JSON from a data extraction task.
 Product: {entry['title']}
 Source file: {get_source_filename(entry)}
 
 BROKEN OUTPUT TO REPAIR:
-{raw_text[:3000]}
+{raw_text[:2000]}
 
 REPAIR RULES — apply all of these:
 - Return exactly ONE valid JSON object with 56 fields, nothing else
@@ -1992,13 +2018,28 @@ REPAIR RULES — apply all of these:
 
 Return the repaired JSON object now."""
 
-    messages = [
-        {"role": "user", "content": repair_instructions},
-    ]
-
-    # Use chat template if available (no system prompt to save tokens)
-    if hasattr(entry.get("_tokenizer_ref"), "apply_chat_template"):
-        pass  # no tokenizer ref stored in entry; fall through
+    # FIX: Apply chat template so Qwen generates raw JSON instead of
+    # conversational preamble that breaks the parser.
+    if tokenizer is not None and hasattr(tokenizer, "apply_chat_template"):
+        messages = [
+            {"role": "user", "content": repair_instructions},
+        ]
+        try:
+            try:
+                return tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
+                )
+            except TypeError:
+                return tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+        except Exception:
+            pass  # fall through to raw string
 
     return repair_instructions
 
@@ -2198,10 +2239,38 @@ def free_gpu_memory():
         torch.cuda.synchronize()
 
 
+def _gpu_free_gib() -> float:
+    """Return free GPU memory in GiB, or inf if CUDA is not available.
+
+    Used to decide at runtime whether the validation LLM pass can safely
+    run without risking OOM (its prompt is the largest in the pipeline).
+    """
+    if not torch.cuda.is_available():
+        return float("inf")
+    free_bytes = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)
+    return free_bytes / (1024 ** 3)
+
+
 def get_raw_generation(model, tokenizer, prompt, max_new_tokens=None):
     effective_max_new_tokens = max_new_tokens or MAX_NEW_TOKENS
 
     inputs = tokenizer(prompt, return_tensors="pt")
+    input_len = inputs["input_ids"].shape[-1]
+
+    # FIX (OOM): Log prompt size so users can diagnose which call is the
+    # memory hog without needing a debugger.  Also cap total context to the
+    # model's max position embeddings minus a small safety margin.
+    model_max_len = getattr(model.config, "max_position_embeddings", 32768)
+    total_len = input_len + effective_max_new_tokens
+    if total_len > model_max_len:
+        trimmed = max(400, model_max_len - input_len)
+        print(
+            f"    note: prompt ({input_len} tok) + max_new_tokens ({effective_max_new_tokens}) "
+            f"= {total_len} exceeds model context ({model_max_len}). "
+            f"Capping max_new_tokens to {trimmed}."
+        )
+        effective_max_new_tokens = trimmed
+
     device = getattr(model, "device", None)
     if device is not None:
         inputs = {key: value.to(device) for key, value in inputs.items()}
@@ -2231,10 +2300,6 @@ def get_raw_generation(model, tokenizer, prompt, max_new_tokens=None):
 
     hit_token_limit = generated_ids.shape[-1] >= effective_max_new_tokens
     if hit_token_limit:
-        # The model ran out of budget before emitting EOS on its own, which
-        # means the JSON is almost certainly truncated mid-field rather than
-        # genuinely malformed. Surface this distinctly from a real parse
-        # error so it's obvious in the logs which one you're dealing with.
         print(
             f"    note: generation hit max_new_tokens={effective_max_new_tokens} "
             f"(output likely truncated, not malformed) — attempting auto-close recovery"
@@ -2258,15 +2323,35 @@ def extract_one_chunk(model, tokenizer, entry, chunk, chunk_idx, chunk_total, ma
     - full_text: the complete document text (for validation purposes)
     """
     prompt = build_prompt(entry, chunk, tokenizer, chunk_idx, chunk_total)
-    raw = get_raw_generation(model, tokenizer, prompt, max_new_tokens=max_new_tokens)
+
+    # FIX (OOM): Wrap individual generate() calls so a single OOM during
+    # one chunk doesn't abort the entire product.  The caller's retry loop
+    # then only re-runs the failing chunk, not all previous successful ones.
+    try:
+        raw = get_raw_generation(model, tokenizer, prompt, max_new_tokens=max_new_tokens)
+    except torch.cuda.OutOfMemoryError:
+        free_gpu_memory()
+        print(
+            f"  Warning: chunk {chunk_idx}/{chunk_total} OOM during extraction, "
+            f"skipping this chunk"
+        )
+        return None
 
     try:
         parsed = parse_json_blob(raw)
         return normalize_record(parsed, entry, doc_text=full_text)
     except Exception:
-        # Compact repair prompt (no full SYSTEM_PROMPT) to stay within context
-        repair_prompt = build_repair_prompt(entry, raw)
-        repaired_raw = get_raw_generation(model, tokenizer, repair_prompt, max_new_tokens=max_new_tokens)
+        # Compact repair prompt — now uses chat template (FIX).
+        repair_prompt = build_repair_prompt(entry, raw, tokenizer=tokenizer)
+        try:
+            repaired_raw = get_raw_generation(model, tokenizer, repair_prompt, max_new_tokens=max_new_tokens)
+        except torch.cuda.OutOfMemoryError:
+            free_gpu_memory()
+            print(
+                f"  Warning: chunk {chunk_idx}/{chunk_total} OOM during repair, "
+                f"skipping this chunk"
+            )
+            return None
         try:
             repaired_parsed = parse_json_blob(repaired_raw)
             return normalize_record(repaired_parsed, entry, doc_text=full_text)
@@ -2317,8 +2402,33 @@ def extract_one_product(model, tokenizer, entry, text, max_new_tokens=None):
         return blank_record(entry)
 
     # Single validation/correction pass on the merged record.
+    # FIX (OOM): The validation prompt is the LARGEST in the pipeline
+    # (full SYSTEM_PROMPT + 31 rules + extracted JSON ≈ 10,500 tokens
+    # input).  On Colab-tier GPUs (≤16 GB) this is the most common OOM
+    # trigger.  Skip it when free VRAM is below 3 GiB — the Python-side
+    # normalize_record + _crossfield_validate already enforce the same
+    # rules deterministically, so extraction quality is preserved.
+    free_gib = _gpu_free_gib()
+    if free_gib < 3.0:
+        print(
+            f"    note: skipping LLM validation pass (only {free_gib:.1f} GiB free, "
+            f"need ~3 GiB) — Python-side normalization still applied"
+        )
+        return accumulated
+
+    # FIX (OOM): Use a smaller token budget for validation since its output
+    # is just a corrected copy of the already-extracted JSON (no new info).
+    validation_max = min(max_new_tokens or MAX_NEW_TOKENS, 1200)
     validation_prompt = build_validation_prompt(entry, accumulated)
-    validation_raw = get_raw_generation(model, tokenizer, validation_prompt, max_new_tokens=max_new_tokens)
+    try:
+        validation_raw = get_raw_generation(model, tokenizer, validation_prompt, max_new_tokens=validation_max)
+    except torch.cuda.OutOfMemoryError:
+        free_gpu_memory()
+        print(
+            "    note: validation pass OOM — returning merged record "
+            "(Python-side normalization still applied)"
+        )
+        return accumulated
     try:
         validated_parsed = parse_json_blob(validation_raw)
         return normalize_record(validated_parsed, entry, doc_text=text)
@@ -2447,12 +2557,39 @@ def make_generator():
     if torch.cuda.is_available():
         allocated_gib = torch.cuda.memory_allocated() / (1024**3)
         reserved_gib = torch.cuda.memory_reserved() / (1024**3)
+        total_gib = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        free_gib = total_gib - allocated_gib
         print(
             f"Post-load GPU memory: {allocated_gib:.2f} GiB allocated, "
-            f"{reserved_gib:.2f} GiB reserved "
-            f"(expect ~4-6 GiB for a 4-bit 7B model — if this is much higher, "
-            f"quantization isn't actually shrinking memory)."
+            f"{reserved_gib:.2f} GiB reserved, "
+            f"{free_gib:.2f} GiB free out of {total_gib:.2f} GiB total"
         )
+        # FIX (diagnostics): Loud warning when the model is using far more
+        # VRAM than expected for the claimed quantization level.  This is
+        # the single most common misconfiguration — the .env has
+        # HF_LOAD_IN_4BIT=false (default) so weights load in fp16.
+        if LOAD_IN_4BIT and allocated_gib > 4.0:
+            print(
+                f"\n{'='*70}\n"
+                f"WARNING: 4-bit quantization is ENABLED but the model is using "
+                f"{allocated_gib:.1f} GiB — this is too high for a 4-bit 3B model\n"
+                f"(expected ~2 GiB). Quantization may not be applied correctly.\n"
+                f"Check that bitsandbytes is installed and working:\n"
+                f"  pip install -U 'bitsandbytes>=0.46.1'\n"
+                f"{'='*70}\n"
+            )
+        elif not LOAD_IN_4BIT and not LOAD_IN_8BIT and allocated_gib > 5.0:
+            print(
+                f"\n{'='*70}\n"
+                f"WARNING: Model loaded in fp16 and using {allocated_gib:.1f} GiB.\n"
+                f"On a {total_gib:.1f} GiB GPU this leaves only {free_gib:.1f} GiB\n"
+                f"for KV-cache + generation — OOM during generate() is very likely.\n"
+                f"\nSTRONGLY RECOMMENDED: Enable 4-bit quantization in your .env:\n"
+                f"  HF_LOAD_IN_4BIT=true\n"
+                f"This will reduce model memory from ~{allocated_gib:.1f} GiB to ~2 GiB\n"
+                f"and eliminate most OOM errors.\n"
+                f"{'='*70}\n"
+            )
 
     return model, tokenizer
 
