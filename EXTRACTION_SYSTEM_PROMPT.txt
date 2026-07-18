@@ -114,6 +114,16 @@ AH5a. MIN_TERM_YEARS CRITICAL: Only extract if document EXPLICITLY states
       Do NOT extract from "Up to X years" or "Maximum X years" — those only
       give you MAX_TERM_YEARS. If minimum is not stated, return "N/A" (never
       default to 1 or assume).
+      
+      CONCRETE EXAMPLES:
+      CORRECT EXTRACTION:
+      - Document says "Minimum 1 year" → MIN_TERM_YEARS = "1"
+      - Document says "Tenure from 1 to 10 years" → MIN_TERM_YEARS = "1", MAX_TERM_YEARS = "10"
+      
+      WRONG EXTRACTION (HALLUCINATION):
+      - Document says "Up to 10 years" ONLY → MIN_TERM_YEARS = "N/A" (no minimum stated)
+      - Document says "Term up to 5 years" ONLY → MIN_TERM_YEARS = "N/A" (only maximum stated)
+      - Document says "Maximum 10 years" ONLY → MIN_TERM_YEARS = "N/A" (only maximum stated)
 AH5b. TENURE CRITICAL: Extract ONLY if document explicitly uses word "tenure",
       "term", or similar for a stated duration. Do NOT extract "Up to X years"
       into TENURE (that belongs in MAX_TERM_YEARS only). Example:
@@ -231,12 +241,26 @@ G5. IS_BANK_OFFERED = 1 whenever the product is sold/distributed through the
     bank (bank branch, bank customers, bank in partnership with an insurer/
     takaful operator). Use "N/A" only for a fully independent third-party
     product with no bank distribution mentioned.
-G5a. MIN_AGE and MAX_AGE SEGMENT-SPECIFIC: If document states different age
-     limits for different customer segments (e.g., Salaried vs Self-Employed),
-     extract the MOST RESTRICTIVE minimum age and maximum age that applies
-     across all segments. Example: If Salaried requires Min 25 and Self-Employed
-     requires Min 30, use 30 (most restrictive). If Max ages are 60 and 65,
-     use 60 (most restrictive).
+G5a. MIN_AGE and MAX_AGE CRITICAL RULES:
+     
+     RULE 1 - NO AGE RESTRICTIONS: If document says "available to all Bank Alfalah
+     customers" or "open to all customers" with NO age restriction mentioned,
+     BOTH MIN_AGE and MAX_AGE must be "N/A". Never assume or infer ages.
+     
+     RULE 2 - SEGMENT-SPECIFIC: If document states different age limits for
+     different customer segments (e.g., Salaried vs Self-Employed), extract the
+     MOST RESTRICTIVE minimum age and maximum age that applies across all segments.
+     Example: If Salaried requires Min 25 and Self-Employed requires Min 30,
+     use 30 (most restrictive). If Max ages are 60 and 65, use 60 (most restrictive).
+     
+     RULE 3 - PARTIAL STATEMENTS: If document only mentions age for SOME segments
+     but not others (e.g., "Salaried: Min 25" but no age for Self-Employed),
+     then ages are not universally stated → use "N/A" for both MIN_AGE and MAX_AGE
+     (do NOT extract partial requirements).
+     
+     RULE 4 - INFERENCE FORBIDDEN: Do NOT infer ages from context like
+     "retirement less 3 years" (don't calculate what this means — it's not explicit).
+     Ages must be stated as explicit numbers like "25 years" or "65 years".
 G6. CUSTOMER_TYPE: Pipe-separated list of eligible customer categories 
     (e.g. "Salaried | Self-Employed | Corporate"). Order by frequency/priority.
     NEVER include segment/employment type if not explicitly mentioned.
