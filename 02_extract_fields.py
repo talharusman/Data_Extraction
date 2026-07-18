@@ -494,22 +494,53 @@ def merge_records(accumulated: dict, new_record: dict, columns) -> dict:
 
     Strategy (improved):
     - Empty → real value: accept the new value
-    - Both real: for text fields, prefer the LONGER value (more likely to be
-      complete, e.g. a full tier table vs a partial one from a chunk boundary).
-      For strict numeric fields, keep the first value found.
+    - Both real: for LIST-TYPE fields (multi-item, pipe-separated), MERGE items
+      without duplication. For other text fields, prefer the LONGER value
+      (more likely complete). For strict numeric fields, keep the first value found.
+    
+    FIX: List-type fields (REQUIRED_DOCUMENTS, KEY_BENEFITS, etc.) are now
+    properly merged so information from multiple chunks is combined, not lost
+    when one chunk is longer than another.
     """
+    # Fields that contain pipe-separated lists and should be merged, not replaced
+    LIST_MERGE_FIELDS = {
+        "REQUIRED_DOCUMENTS",
+        "OPTIONAL_RIDERS",
+        "KEY_BENEFITS",
+        "FEES_AND_CHARGES",
+        "PRODUCT_VARIANT_TIER",
+        "CUSTOMER_TYPE",
+        "EMPLOYMENT_TYPE",
+        "TENURE_OPTIONS",
+        "CHANNEL",
+        "COVERAGE_AMOUNT",
+        "MIN_CONTRIBUTION",
+    }
+    
     for col in columns:
         old = accumulated.get(col)
         new = new_record.get(col)
         old_is_empty = old is None or old == "" or old == DEFAULT_VALUE
         new_is_real = new not in (None, "", DEFAULT_VALUE)
+        
         if old_is_empty and new_is_real:
             accumulated[col] = new
         elif not old_is_empty and new_is_real and col not in STRICT_NUMERIC_COLUMNS:
-            # Both have real values — prefer the longer one for non-strict-
-            # numeric fields, as it's more likely to be the complete value
-            # (e.g. a full tier table vs a partial one from a chunk boundary).
-            if len(str(new)) > len(str(old)) + 20:
+            # For list-type fields, merge complementary values without duplication
+            if col in LIST_MERGE_FIELDS:
+                # Split both by pipe, deduplicate, and merge
+                old_items = [s.strip() for s in str(old).split("|") if s.strip()]
+                new_items = [s.strip() for s in str(new).split("|") if s.strip()]
+                # Preserve order: keep old items first, then add new items not in old
+                seen = set(old_items)
+                merged_items = list(old_items)
+                for item in new_items:
+                    if item not in seen:
+                        merged_items.append(item)
+                        seen.add(item)
+                accumulated[col] = " | ".join(merged_items)
+            # For other non-numeric fields, prefer longer (more complete)
+            elif len(str(new)) > len(str(old)) + 20:
                 accumulated[col] = new
     return accumulated
 
@@ -2097,6 +2128,41 @@ def _normalize_employment_type(value: str) -> str:
     return truncate_to_boundary(stripped, 50)
 
 
+def validate_and_correct_lead_marker(record: dict) -> dict:
+    """
+    POST-EXTRACTION VALIDATION: If LEAD_MARKER conflicts with presence of
+    strong insurance-specific fields, auto-correct it. This catches cases where
+    initial extraction misclassified the product type.
+    
+    FIX for CRITICAL ISSUE (Row 3): Documents with "insurance plan" +
+    explicit insurance fields should be classified as IBG, not BNK.
+    
+    CRITICAL RULE: If document contains explicit insurance content
+    (COVERAGE_AMOUNT, FREE_LOOK_PERIOD_DAYS, etc.), it MUST be IBG.
+    """
+    lead = record.get("LEAD_MARKER", "").strip()
+    if not lead:
+        return record
+    
+    # Strong insurance field indicators that DEMAND IBG classification
+    insurance_indicators = {
+        "COVERAGE_AMOUNT": record.get("COVERAGE_AMOUNT"),
+        "FREE_LOOK_PERIOD_DAYS": record.get("FREE_LOOK_PERIOD_DAYS"),
+        "OPTIONAL_RIDERS": record.get("OPTIONAL_RIDERS"),
+        "PREMIUM_PAYMENT_FREQUENCY": record.get("PREMIUM_PAYMENT_FREQUENCY"),
+    }
+    
+    # If LEAD_MARKER is BNK but document has populated insurance fields, correct to IBG
+    has_insurance_content = any(
+        v not in (None, "", "N/A") for v in insurance_indicators.values()
+    )
+    
+    if lead == "BNK" and has_insurance_content:
+        record["LEAD_MARKER"] = "IBG"
+    
+    return record
+
+
 def normalize_record(record, entry, doc_text=""):
     """
     Normalize an extracted record with corrections for all known model errors.
@@ -2123,6 +2189,9 @@ def normalize_record(record, entry, doc_text=""):
     """
     if not isinstance(record, dict):
         return blank_record(entry)
+
+    # FIX: Validate and correct LEAD_MARKER if it conflicts with extracted field content
+    record = validate_and_correct_lead_marker(record)
 
     normalized = {col: DEFAULT_VALUE for col in COLUMNS}
 

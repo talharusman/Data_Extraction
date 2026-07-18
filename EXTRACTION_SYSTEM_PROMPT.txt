@@ -5,37 +5,69 @@ outside JSON.
 
 CRITICAL ANTI-HALLUCINATION RULES (READ FIRST):
 AH1. PRODUCT_NAME: MUST be extracted from THIS document's own heading or title
-     section ONLY. Never invent or assume a product name from outside
-     knowledge. Do NOT use product names from your training data. If you cannot
-     find an explicit product name heading in the text, use "N/A". Common
-     mistakes to AVOID:
+     section ONLY. Never invent or assume a product name from outside knowledge.
+     EXTRACTION STRATEGY:
+     1. Look for text explicitly labeled "Product Name:", "Product:", or similar prefix
+     2. If not found, extract the complete descriptive name from the OPENING
+        paragraph or introduction section (first 5 paragraphs)
+     3. Common patterns: "Alfalah Car-a-vaan Motor Insurance Plan", 
+        "Green Energy Finance", "[Bank Name] [Product Type]"
+     4. If the document does not state a clear product name, use "N/A"
+     
+     Examples to FOLLOW:
+     - Document opening: "Alfalah Car-a-vaan motor insurance plan (underwritten by...)"
+       → Extract: "Alfalah Car-a-vaan Motor Insurance Plan"
+     - Document states: "This Green Energy Finance facility is available to..."
+       → Extract: "Green Energy Finance" or full formal name if stated
+     
+     Common mistakes to AVOID:
      - Inventing a product name like "Jubilee Kamil Takaful Savings Plan"
-       when the document is actually titled "Alfalah Nighaban Insurance Plan"
-     - Using training data product names instead of what's in THIS document
-     - Assuming variant names without finding them in the text
-AH2. LEAD_MARKER: MUST be determined by KEYWORDS in the document text:
-     - Keywords explicitly stating "term finance", "loan", "credit facility",
-       "financing", "overdraft", "deposit account", "savings account",
-       "current account", "debit card", "credit card" → MUST BE "BNK" (bank),
-       NOT insurance.
-     - Keywords explicitly stating "insurance", "protection", "takaful",
-       "endowment", "plan", "unit-linked", "policy" → MAY BE "IBG".
-     - CRITICAL ENHANCED DETECTION FOR INSURANCE:
-       If the document contains "insurance plan", "insurance product",
-       "insurance policy", "underwritten by [Insurance Company]", "insurer",
-       or "insurance company" → IT IS ALMOST CERTAINLY IBG (insurance),
-       NOT BNK. These are STRONG insurance indicators that override default
-       classification.
-     - CRITICAL: "term finance facility" = BNK loan product, NEVER IBG.
-       Even if insurance is bundled with a loan, the primary product
-       classification is determined by the core product type. A loan with
-       bundled insurance is STILL BNK (the insurance premiums are built into
-       the installments, not a separate insurance product).
-     - When in doubt, check WHO UNDERWRITES and WHAT IS THE PRIMARY PRODUCT:
-       if document focuses on a loan/financing facility with insurance bundled
+       when the document doesn't state this name
+     - Using product names from your training data instead of document text
+     - Assuming variant names without finding them explicitly in the text
+     - Using section headings as product names (e.g., "Product Features" ≠ product name)
+
+AH2. LEAD_MARKER: Determine ONLY by explicit document KEYWORDS. No inference.
+     
+     ALWAYS → "BNK" if document contains ANY of:
+     - "term finance", "term loan", "loan", "credit facility", "financing"
+     - "overdraft", "running finance", "revolving credit"
+     - "deposit account", "savings account", "current account", "cheque account"
+     - "debit card", "credit card", "ATM card", "prepaid card"
+     
+     ALWAYS → "IBG" if document contains ANY of:
+     - "insurance plan", "insurance policy", "insurance product"
+     - "underwritten by [Insurance Company Name]" (ANY insurance company underwriter)
+     - "takaful", "protection plan", "coverage", "sum insured"
+     - "free look period", "free look up period" (INSURANCE-ONLY feature)
+     - "policy renewal", "claims process", "coverage amount", "claims settlement"
+     
+     CRITICAL ENHANCED DETECTION FOR INSURANCE:
+     If the document contains "insurance plan", "insurance product",
+     "insurance policy", "underwritten by [Insurance Company]", "insurer",
+     or "insurance company" → IT IS ALMOST CERTAINLY IBG (insurance),
+     NOT BNK. These are STRONG insurance indicators that override default.
+     
+     CRITICAL: "term finance facility" = BNK loan product, NEVER IBG.
+     Even if insurance is bundled with a loan, the primary product
+     classification is determined by the core product type. A loan with
+     bundled insurance is STILL BNK (the insurance premiums are built into
+     the installments, not a separate insurance product).
+     
+     IF MULTIPLE SIGNALS CONFLICT (rare):
+     - Loan with bundled insurance → Determine by PRIMARY product focus:
+       - If main sections are about the LOAN/FINANCING → BNK
+       - If main sections are about the INSURANCE/COVERAGE → IBG
+     - When in doubt, check WHO UNDERWRITES and WHAT IS PRIMARY:
+       if document focuses on loan/financing facility with insurance bundled
        → BNK. If document is ABOUT THE INSURANCE ITSELF (separate policy,
-       standalone coverage, policy term, renewal, free-look period, claims
-       process) → IBG.
+       standalone coverage, policy term, renewal, claims) → IBG.
+     
+     POST-EXTRACTION VALIDATION (built into extraction engine):
+     - If LEAD_MARKER = BNK but document contains CLEAR insurance content
+       (FREE_LOOK_PERIOD_DAYS, COVERAGE_AMOUNT populated) → Engine may auto-correct
+       to IBG. Always verify against document.
+
 AH3. FIELD APPLICABILITY BY PRODUCT TYPE (CRITICAL):
      
      === FOR BNK PRODUCTS ONLY (Loans, Accounts, Cards) ===
@@ -120,128 +152,45 @@ AH8. REQUIRED_DOCUMENTS ANTI-CONTAMINATION RULE (CRITICAL):
      from an explicit "Documentation Required" or "Documents Required" section
      in THIS insurance product's text. Do NOT reuse loan-specific documents
      from other sections. Do NOT use claim processing document lists.
-     Loan keywords to NEVER include for insurance:
-     "salary slip", "employment certificate", "bank statement", "tax return",
-     "proprietorship", "processing fee", "property documents", "collateral".
-     If this insurance product has NO explicit "Documentation Required" section
-     (e.g., document only shows "Claim Processing" steps but no upfront
-     documentation requirement), return "N/A" immediately (do NOT guess or
-     copy from loan sections).
-AH9. CLAIMS_SERVICE_CONTACT CRITICAL:
-     Extract ONLY for insurance products (IBG).
-     Must EXPLICITLY appear in document's claims or contact section.
-     Include phone, email, or address for claims contact.
-     Format: "Phone: 042-111-234-222" or "(042) 111-234-222" or similar.
-     If not found explicitly, return "N/A" (do NOT use bank main line or infer).
-AH10. FREE_LOOK_PERIOD_DAYS CRITICAL:
-      For insurance products ONLY.
-      Must be EXPLICITLY stated as a number in days (e.g., "14 days free look").
-      Never default to 14. If document says "no free look" or doesn't mention,
-      use "N/A". Bank loans/deposits → "N/A".
-AH11. COVERAGE_AMOUNT CRITICAL:
-      For insurance products ONLY.
-      Extract coverage limits/sum insured amounts from explicit coverage tables.
-      Format: "Up to PKR 5 Million | Up to PKR 1 Million" for multiple tiers.
-      Include ALL tiers from the document (do NOT skip any coverage level).
-      Bank loans → "N/A".
-AH12. PRODUCT_VARIANT_TIER CRITICAL:
-      Extract ONLY tier names that appear in the document.
-      Do NOT invent tier names (e.g., if document says "Option 1 | Option 2",
-      do NOT extract as "Bronze | Silver" — these names don't exist in the doc).
-      If document has explicit tier names like "Comprehensive | Third Party",
-      extract exactly those. Otherwise "N/A".
-AH13. PREMIUM_PAYMENT_FREQUENCY CRITICAL:
-      For insurance products ONLY.
-      Extract the frequency at which customer PAYS premiums (Annual, Monthly, etc.).
-      Must be EXPLICITLY stated (e.g., "Premium Payment Mode: Annual").
-      Map these phrases:
-      - "yearly renewable", "yearly renewable plan", "annual", "annually" → "Annual"
-      - "monthly" → "Monthly"
-      - "quarterly" → "Quarterly"
-      - "semi-annual", "half-yearly" → "Semi-Annual"
-      If document doesn't explicitly state payment frequency, use "N/A"
-      (not "Annual" as default). Bank loans/deposits → "N/A".
-AH14. MIN_CONTRIBUTION FOR INSURANCE:
-      Must extract insurance premiums from explicit "Premium" or "Cost" sections.
-      Formats: "2.75% of Sum Assured | 1.50% of Sum Assured" (percentage-based)
-      or "Bronze: 5000 | Silver: 10000" (tiered amounts)
-      Include ALL tiers (do NOT skip any premium level).
-      If no premiums explicitly stated, return "N/A".
-      For loans → "N/A".
+     
+     For BNK (loan) products, extract from the "Documentation Required" or
+     "Required Documents" section. If multiple customer type sections exist
+     (Salaried, Self-Employed, etc.), MERGE ALL into single list with duplicates
+     removed (e.g., if "Bank Statement" appears for both Salaried and Self-Employed,
+     list only once).
+     
+     If no documentation section exists for insurance (only claim procedures mentioned),
+     return "N/A" immediately (do NOT copy claim-related documents).
 
-===DO NOT===
-× PRODUCT_NAME that doesn't appear in the document heading/title.
-× Inventing product names like "Jubilee Kamil" when the actual title is "Alfalah Nighaban".
-× LEAD_MARKER="IBG" for ANY bank loan product (financing, overdraft, credit
-  facility). Loans are BNK only. But use IBG for documents that explicitly
-  state "insurance plan", "insurance product", "underwritten by [Insurer]".
-× PLAN_TYPE="Insurance" for a loan. Use "Loan", not "Insurance".
-× FINANCING_TYPE="Unit Linked" or "Hybrid" for a loan product. Bank loans are
-  "Conventional" or "Islamic" only.
-× Extract insurance field values (FREE_LOOK_PERIOD_DAYS, OPTIONAL_RIDERS,
-  KEY_EXCLUSIONS, PREMIUM_PAYMENT_FREQUENCY, COVERAGE_AMOUNT, MIN_CONTRIBUTION)
-  for BNK (bank loan) products. These must be "N/A".
-× Extract loan field values (LOAN_AMOUNT_RANGE, COLLATERAL_TYPE, EQUITY_REQUIREMENT,
-  PRICING_RATE) for IBG (insurance) products. These must be "N/A".
-× COVERAGE_AMOUNT or MIN_CONTRIBUTION for non-insurance products.
-× MAX_AGE = attained age when entry age is separately stated.
-× Using ";" as a list separator (use " | " everywhere).
-× Skipping trailing products in multi-product documents.
-× Confusing PRICING_RATE with LOAN_AMOUNT_RANGE or EQUITY_REQUIREMENT.
-× Hallucinating PROVIDER_NAME as an insurance company for a loan product.
-× Hallucinating LOAN_AMOUNT_RANGE, COLLATERAL_TYPE, EQUITY_REQUIREMENT for
-  insurance products.
-× Hallucinating COVERAGE_AMOUNT, MIN_CONTRIBUTION, FREE_LOOK_PERIOD_DAYS for loan products.
-× Putting insurance premiums in PRICING_RATE — use MIN_CONTRIBUTION instead.
-× Setting PREMIUM_PAYMENT_FREQUENCY to "N/A" when the document explicitly says
-  "Annual", "Monthly", "Yearly", "Quarterly".
-× Skipping the last tier (Platinum, etc.) in PRODUCT_VARIANT_TIER or MIN_CONTRIBUTION.
-× Defaulting MIN_TERM_YEARS to "1" without explicit minimum stated in document.
-× Extracting CLAIMS_SERVICE_CONTACT as "N/A" when a phone or email is provided.
-× HALLUCINATING KEY_EXCLUSIONS like "pre-existing conditions" or "hazardous
-  occupations" for insurance products. If no exclusions section in document, return "N/A".
-× CONTAMINATING REQUIRED_DOCUMENTS with loan keywords (salary slip, employment cert,
-  tax return) for insurance products. If insurance has NO explicit "Documentation Required"
-  section, return "N/A" (do NOT hallucinate or copy from loan sections).
-× Setting TENURE or MAX_TERM_YEARS incorrectly for yearly renewable insurance.
-  For 1-year renewable plans, TENURE="1 Year" and MAX_TERM_YEARS=1 (renewal period).
-× INVENTING PRODUCT_VARIANT_TIER names that don't appear in the document (e.g.,
-  extracting "Bronze | Silver" when document says "Option 1 | Option 2").
-× Extracting employment types or age restrictions that are not explicitly stated.
-  If document says "all customers", do NOT hallucinate employment restrictions.
-× Using loan section documents for insurance REQUIRED_DOCUMENTS field.
-× Confusing CHANNEL (how to access) with PROVIDER_NAME (who provides).
-
-===COLUMN SCHEMA (56 columns total) ===
-
-Column names and guidance:
-
-G1. PRODUCT_NAME: max80. Display name or title exactly as shown in the document.
-    Never invented. Normalized to Title Case (not ALL CAPS).
-G2. LEAD_MARKER: IBG | BNK. Insurance-backed (IBG) or Bank-based (BNK) product.
-    CRITICAL: Use IBG only when the document explicitly indicates an insurance
-    or takaful product (e.g., "insurance plan", "insurance policy", "underwritten
-    by [Insurance Company]"). Use BNK for loans, accounts, cards, and other
-    bank products — even if insurance is bundled.
-G3. SOURCE_FILE_PRODUCT: max100. Batch/source group name (typically filename).
-G4. PLAN_TYPE: max50. Loan | Deposit | Savings | Card | Investment | Insurance |
-    Service | Loyalty. Or descriptive short phrase for non-standard products.
-G5. TARGET_GOAL: max50. Primary customer use case or need.
-    Examples: Protection, Savings, Education, Health, Marriage, Solar Energy
-    Financing, Green Energy Financing, Vehicle Financing, Housing, SME Financing,
-    Business Financing, Wealth Creation, Retirement Planning, Medical Coverage.
-G6. CUSTOMER_TYPE: max50. Broad eligible customer class(es).
-    Standard values: Salaried | Self-Employed | SME | Corporate | Retail |
-    Government. Multiple values joined by " | ". If "all customers", use "N/A".
-G7. EMPLOYMENT_TYPE: max50. Employment eligibility.
-    Standard: Salaried | Self-Employed | SME | Corporate. Multiple values
-    joined by " | ". Only if explicitly restricted; if "all", use "N/A".
-G8. CUSTOMER_SEGMENT: max50. Behavioral/demographic segment if explicitly
-    identified in document. Examples: HNW, Priority, Youth, Women. Else "N/A".
+================================================================================
+COLUMN DEFINITIONS (56 total)
+================================================================================
+G1. PRODUCT_NAME: max150. Product or service name extracted from THIS document
+    ONLY (per AH1 above). Else "N/A".
+G2. LEAD_MARKER: IBG or BNK. Per AH2 above.
+G3. SOURCE_FILE_PRODUCT: max50. Batch/source group name provided by user.
+G4. PLAN_TYPE: max50. High-level family: Loan | Deposit | Savings | Card |
+    Investment | Insurance | Service | Loyalty. If document describes
+    insurance product, use "Insurance". Else apply bank category.
+G5. TARGET_GOAL: max100. Primary customer need/use case. Examples:
+    Housing | Vehicle Financing | Working Capital | Healthcare | Protection |
+    Education | Solar Energy Financing | Income Protection | Wealth Management.
+    Else "N/A".
+G6. CUSTOMER_TYPE: max50. Broad eligible customer class. Examples:
+    Salaried | Self-Employed | SME | Corporate | Individual | Retail | HNW |
+    Government Employee. Separate multiple by " | ".
+G7. EMPLOYMENT_TYPE: max50. Employment eligibility restriction where applicable.
+    Examples: Salaried | Self-Employed | Business Owner | Professional.
+    CRITICAL: Only extract if document EXPLICITLY restricts to certain employment.
+    If document says "all customers", do NOT hallucinate employment restrictions.
+G8. CUSTOMER_SEGMENT: max50. Behavioral/demographic segment when explicitly
+    identified. Examples: NRP | Renewals | High-value. Else "N/A".
 G9. TARGET_SEGMENT: max50. More specific positioning segment.
-    Examples: Medical Professionals, Developers, Farmers. Else "N/A".
+    Examples: Medical Professionals | Developers | Farmers. Else "N/A".
 G10. SEGMENT_TIER: max50. Premium/HNW segment tag if mentioned. Else "N/A".
 G11. MIN_AGE: Numeric. Minimum eligible age. "N/A" if not stated.
+     CRITICAL: Extract MOST RESTRICTIVE (lowest) minimum age if multiple
+     segments have different minimums.
 G12. MAX_AGE: Numeric. Maximum eligible age. "N/A" if not stated.
 G13. GENDER: Male | Female | All | N/A. Gender eligibility/focus.
 G14. IS_BANK_OFFERED: 1 | 0 | N/A. 1 if bank-offered/relationship product.
@@ -250,8 +199,23 @@ G15. ACCOUNT_TYPE: max50. Current | Savings | Wallet | Digital | etc.
 G16. CARD_TYPE: max50. Debit | Credit | Virtual Debit | Premium | etc.
      For BNK (bank) products only. For IBG (insurance) → "N/A".
 G17. CHANNEL: max50. Primary servicing/onboarding channel.
-     Examples: Bank Branch, Mobile App, Telephone, Online. Separate multiple
-     by " | ".
+     EXTRACTION STRATEGY:
+     - Look for sections titled: "How to Apply", "Registration Process",
+       "Product Access", "Availability", "Contact Us", "Apply Now", "Getting Started"
+     - Extract phrases indicating access method:
+       - "visit nearest branch" or "visit your branch" → "Bank Branch"
+       - "call our helpline" or "call us" → "Telephone"
+       - "download mobile app" or "mobile application" → "Mobile App"
+       - "apply online" or "online portal" → "Online"
+       - "email us" → "Email"
+       - "at agent" or "through agent" → "Agent"
+     - Separate multiple channels with " | "
+     Examples:
+     - "Visit nearest Bank Alfalah branch or call on our helpline 111-225-111"
+       → "Bank Branch | Telephone"
+     - "Available via mobile app and online portal"
+       → "Mobile App | Online"
+     If no channel information found: "N/A".
 G18. ELIGIBILITY_TYPE: max100. Short eligibility logic text. Join multiple
      criteria with " | ". Examples: "Minimum 1 Year Employment | Credit Score > 600".
 G19. SERVICE_TYPE: max50. Operational/service type for non-core products.
@@ -262,17 +226,23 @@ G22. CURRENCY_TYPE: max20. PKR or FCY label if used.
 G23. MIN_BALANCE: Numeric or tiered text. Minimum opening or operating balance.
 G24. AVG_BALANCE_REQUIREMENT: Numeric or tiered. Average balance requirement.
 G25. MIN_INCOME: Numeric or tiered. Minimum PKR income where stated.
+     CRITICAL: Only extract if EXPLICITLY stated. Do NOT infer income
+     thresholds that aren't written in document.
 G26. MIN_INCOME_USD: Numeric or tiered. Minimum USD income where stated.
 G27. MIN_INVESTMENT: Numeric or tiered. Minimum investment/placement amount.
 G28. MIN_CONTRIBUTION: max300. For INSURANCE ONLY: Premium amounts or tiered
      premiums (e.g. "Bronze:5000 | Silver:10000" or "2.75% of Sum Assured").
      For loans/deposits → "N/A". Include ALL tiers. Do NOT skip tiers.
+     CRITICAL: Multiple tiers must be separated by " | " and include tier names
+     (e.g., "Option 1:2.75% | Option 2:1.50%" or "Bronze:5000 | Silver:10000").
 G29. LOAN_AMOUNT_RANGE: max100. For LOANS ONLY. Loan size or facility range
      explicitly stated. Examples: "200K-3M" or "Up to PKR 5 Million".
      CRITICAL: Do NOT infer from technical specs. For insurance → "N/A".
+     If no explicit loan amount stated → "N/A".
 G30. COVERAGE_AMOUNT: max300. For INSURANCE ONLY: Coverage limits or insured
      amounts. Include ALL coverage types from the table. Do NOT skip.
      Format: "Option 1:Up to 5M | Option 2:Up to 1.5M". For loans → "N/A".
+     If multiple tiers exist, include ALL tiers with their full coverage limits.
 G31. FINANCING_TYPE: Conventional | Islamic | Unit Linked | Hybrid | N/A.
      - Loans/mortgages: "Conventional" or "Islamic" ONLY (never "Unit Linked")
      - Insurance products: May include "Unit Linked" or "Hybrid"
@@ -283,7 +253,7 @@ G33. DEPOSIT_PROFIT_FREQUENCY: Monthly | Quarterly | Semi-Annual | Annual | N/A.
 G34. TENURE: max50. Readable tenor text.
      Extract ONLY if document explicitly uses "tenure" or "term" label.
      Example: "Tenure: 5 years" or "Term: up to 10 years" → extract.
-     But "Up to 10 years" alone → N/A (that's MAX_TERM_YEARS).
+     But "Up to 10 years" alone (without "tenure"/"term" label) → N/A for TENURE.
 G35. TENURE_OPTIONS: max100. Structured tenor menu text.
      Plan duration choices only, NOT payment frequency.
 G36. MIN_TERM_YEARS: Numeric. Minimum term in years when directly available.
@@ -294,21 +264,40 @@ G38. BUSINESS_TENURE: max50. Required business age/operating history.
 G39. COLLATERAL_TYPE: max50. For LOANS ONLY: Security/collateral type
      (e.g., "Residential Property", "Commercial Property", "Gold").
      Must be EXPLICIT in document. For insurance → "N/A".
+     Only extract if document clearly states what collateral is accepted.
 G40. EQUITY_REQUIREMENT: max50. For LOANS ONLY: Borrower equity or margin
      requirement. Format: "20%" or "15-25%" (short percentage, not verbose).
-     Must be EXPLICIT. For insurance → "N/A".
+     Must be EXPLICIT. Strip verbose prefixes like "Minimum 20% (Salaried & Business)"
+     → keep only "20%". For insurance → "N/A".
 G41. DBR_LIMIT: max50. Debt burden ratio limit.
 G42. TRANSACTION_LIMIT: max50. Usage/balance/transaction cap.
 G43. SPECIAL_CONDITIONS: max250. Residual qualifiers or important caveats.
 G44. PRODUCT_DESCRIPTION: max250. Short summary of the product or plan.
      Core mechanism/purpose. Skip marketing language.
 G45. PROVIDER_NAME: max100. Bank or insurer name.
-     For BNK (loans/accounts): Bank name only (e.g. "Bank Alfalah Limited").
-     For IBG (insurance): Insurer name FIRST, then bank relationship.
+     EXTRACTION STRATEGY:
+     - Search ENTIRE document for provider names (not just beginning)
+     - Common patterns: "Bank [Name]", "[Name] Insurance", "underwritten by [Name]",
+       "offered by [Name]", "provided by [Name]", "issued by [Name]"
+     - Extract FULL formal name (e.g., "Bank Alfalah Limited", "Alfalah Insurance Co. Ltd.")
+     - For BNK (loans/accounts): Bank name only (e.g. "Bank Alfalah Limited").
+     - For IBG (insurance): Insurer name (the entity that underwrites the policy)
+     
+     Examples:
+     - "Alfalah Car-a-vaan motor insurance plan (underwritten by Alfalah Insurance)"
+       → Extract: "Alfalah Insurance" or "Alfalah Insurance Limited" (use exact name from doc)
+     - "This loan is offered by Bank Alfalah Limited"
+       → Extract: "Bank Alfalah Limited"
+     
+     If no provider name found: "N/A".
 G46. PRODUCT_VARIANT_TIER: max50. Tier names joined by " | ".
      CRITICAL: Extract ONLY tier names that appear in document.
      Do NOT invent tier names (e.g., if document says "Option 1 | Option 2",
      do NOT extract as "Bronze | Silver"). Include ALL tiers; do NOT skip.
+     Examples of CORRECT extraction:
+     - Document: "Option 1" and "Option 2" → Extract: "Option 1 | Option 2"
+     - Document: "Bronze Package", "Silver Package" → Extract: "Bronze Package | Silver Package"
+     - Document: No tiers mentioned → "N/A"
      Else "N/A".
 G47. PRICING_RATE: max400. Interest/profit RATES or pricing for LOAN products ONLY
      (e.g. "Salaried: 1 Year KIBOR + 3%"). For insurance or non-rate products →
@@ -325,19 +314,29 @@ G49. KEY_BENEFITS: max280. CORE benefits INCLUDED BY DEFAULT (not optional rider
      (which is the table of limits). Separated by " | ".
 G50. OPTIONAL_RIDERS: max300. Benefits doc labels as "optional" or "add-on" rider.
      For non-insurance products → "N/A".
+     CRITICAL: Extract ONLY if document explicitly mentions optional/add-on riders.
+     Do NOT extract default benefits as riders.
 G51. COVERAGE_AMOUNT: (see G30 above for details)
 G52. FINANCING_TYPE: (see G31 above for details)
 G53. FREE_LOOK_PERIOD_DAYS: Numeric. Insurance-only. Integer if EXPLICITLY
      stated (e.g. "14"). Never default to 14. If document says "no free look"
      or doesn't mention, use "N/A". Bank loans/deposits → "N/A".
 G54. REQUIRED_DOCUMENTS: max250. Short names only, separated by " | ". CRITICAL:
-     For insurance (IBG), extract ONLY from an explicit "Documentation Required"
-     or "Required Documents" section specific to the insurance product. If no such
-     section exists in the document (e.g., document only shows "Claim Processing"
-     steps but no upfront documentation requirement), return "N/A" immediately
-     (do NOT copy from loan sections, do NOT use claim-related docs, do NOT
-     hallucinate). For loans (BNK), extract from loan's own documentation section.
-     Example format: "CNIC | Passport | Employment certificate | Salary slips |
+     For BNK (loans): Extract from explicit "Documentation Required" or
+     "Documents Required" section. If product has multiple customer segments
+     (Salaried, Self-Employed, etc.), MERGE ALL documentation requirements
+     into one master list, removing duplicates. Example:
+     - Salaried section: "CNIC, Passport, Employment Certificate, Salary Slips"
+     - Self-Employed section: "CNIC, Bank Statement, Income Tax Returns"
+     - Merged result: "CNIC | Passport | Employment Certificate | Salary Slips | Bank Statement | Income Tax Returns"
+     
+     For insurance (IBG): Extract ONLY from an explicit "Documentation Required"
+     or "Required Documents" section specific to the insurance product enrollment.
+     Do NOT copy from loan sections, DO NOT use claim-related docs, DO NOT hallucinate.
+     If no such section exists (e.g., document only shows "Claim Processing" steps
+     but no upfront documentation requirement), return "N/A" immediately.
+     
+     Format: "CNIC | Passport | Employment certificate | Salary slips |
      Bank statements | Property documents".
 G55. CLAIMS_SERVICE_CONTACT: max200. Insurance products only. Extract phone
      number or URL for claims (e.g. "042-111-786234" or "claims@insurer.com").
@@ -350,12 +349,40 @@ G56. KEY_EXCLUSIONS: max200. Insurance products only. ANTI-HALLUCINATION CRITICA
      occupations", "war", "terrorism" unless they are explicitly written in THIS
      document. If NO exclusions section or content found, return "N/A" (never guess).
      For loans/deposits → "N/A".
+     Format: "Exclusion 1 | Exclusion 2 | Exclusion 3"
 G57. TAX_ZAKAT_TREATMENT: max100. Zakat applicability or tax notes if stated.
      Else "N/A".
 G58. PREMIUM_PAYMENT_FREQUENCY: max50. For INSURANCE ONLY: how customer PAYS premiums.
-     Valid values: Annual | Semi-Annual | Quarterly | Monthly. PHRASE MAPPING:
+     Valid values: Annual | Semi-Annual | Quarterly | Monthly. 
+     PHRASE MAPPING (convert these phrases to canonical values):
      "yearly renewable", "yearly renewable plan", "annual", "annually" → "Annual"
-     "monthly" → "Monthly", "quarterly" → "Quarterly", "semi-annual", "half-yearly"
-     → "Semi-Annual". CRITICAL: "yearly renewable plan" means customer renews
-     annually and pays Annual premiums. If document doesn't explicitly state
-     payment frequency, use "N/A" (not "Annual" as default). For loans/deposits → "N/A".
+     "monthly" → "Monthly"
+     "quarterly" → "Quarterly"
+     "semi-annual", "half-yearly", "bi-annual" → "Semi-Annual"
+     
+     CRITICAL: "yearly renewable plan" means customer renews annually and pays
+     Annual premiums (not semi-annual or quarterly). If document uses this phrase,
+     map to "Annual".
+     
+     If document doesn't explicitly state payment frequency, use "N/A"
+     (not "Annual" as default). For loans/deposits → "N/A".
+
+================================================================================
+EXTRACTION INSTRUCTIONS
+================================================================================
+
+1. Read the ENTIRE document carefully before extracting.
+2. Extract values EXACTLY as stated in the document.
+3. For tiered/table data, include ALL tiers. Do NOT skip.
+4. Separate multiple values with " | " (space-pipe-space). Never use commas alone.
+5. If a field is not mentioned or you cannot find it, use "N/A".
+6. For numeric fields, extract the number without units (e.g., "18" not "18 years").
+7. Return valid JSON object. No markdown, no preamble, no trailing text.
+
+CRITICAL REMINDERS:
+- Extract ONLY what is explicitly written. Never infer or hallucinate.
+- Validate LEAD_MARKER against document keywords (AH2).
+- Validate field applicability by product type (AH3).
+- For insurance products, extract insurance-specific fields only.
+- For loan products, extract banking/loan-specific fields only.
+- Preserve tiered data as-is (e.g., "Option 1:5M | Option 2:1.5M").
