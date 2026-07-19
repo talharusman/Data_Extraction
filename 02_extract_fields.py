@@ -1728,7 +1728,10 @@ def _infer_and_correct_lead_marker(normalized: dict, doc_text: str = "") -> dict
     current_marker = normalized.get("LEAD_MARKER", "").strip().upper()
     
     # CRITICAL: Check for "term finance" — STRONGEST loan signal, overrides everything
-    has_term_finance = "term finance" in combined_text
+    # BUG FIX: Check BOTH extracted fields AND raw document text because fields may be truncated
+    has_term_finance_in_fields = "term finance" in combined_text
+    has_term_finance_in_doc = "term finance" in doc_text.lower() if doc_text else False
+    has_term_finance = has_term_finance_in_fields or has_term_finance_in_doc
     has_financing = "financing" in combined_text or "financing" in desc
     
     # CRITICAL: For loans, if provider is Bank Alfalah and no insurance company is mentioned,
@@ -1736,10 +1739,15 @@ def _infer_and_correct_lead_marker(normalized: dict, doc_text: str = "") -> dict
     is_bank_only = ("bank alfalah" in prov or "bank " in prov) and "insurance" not in prov
     has_loan_keywords = any(sig in combined_text for sig in ["term finance", "loan", "financing", "green energy", "solar"])
     
+    # BUG FIX: Also detect loan products from document keywords not in extracted fields
+    # KIBOR, markup are strong loan indicators that might not appear in normalized fields
+    doc_lower = doc_text.lower() if doc_text else ""
+    has_kibor_or_markup = any(x in doc_lower for x in ["kibor", "markup", "profit rate", "interest rate"])
+    
     # CRITICAL: "term finance facility" ALWAYS means BNK (bank loan), NEVER IBG,
     # even if insurance is bundled with it. The core product is a bank loan,
     # not an insurance product.
-    if (has_term_finance or (has_financing and is_bank_only)) and current_marker == "IBG":
+    if (has_term_finance or has_kibor_or_markup or (has_financing and is_bank_only)) and current_marker == "IBG":
         # Term finance facility or bank financing misclassified as insurance — MUST correct
         normalized["LEAD_MARKER"] = "BNK"
         # Cascade corrections: ALL insurance-only fields MUST be N/A for BNK products
@@ -1764,7 +1772,7 @@ def _infer_and_correct_lead_marker(normalized: dict, doc_text: str = "") -> dict
                 normalized["PRICING_RATE"] = "N/A"
     
     # Fallback: Strong loan signals with bank provider override weaker classification
-    elif (has_loan_keywords or loan_score >= 1) and is_bank_only and current_marker == "IBG":
+    elif ((has_loan_keywords or has_kibor_or_markup or loan_score >= 1) and is_bank_only and current_marker == "IBG"):
         normalized["LEAD_MARKER"] = "BNK"
         # Cascade corrections for insurance-only fields per G12 rule
         for field in ["COVERAGE_AMOUNT", "FREE_LOOK_PERIOD_DAYS", 
