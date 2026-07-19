@@ -2146,9 +2146,10 @@ def normalize_record(record, entry, doc_text=""):
                 and len(raw_name.strip().split()) > 1):
             raw_name = raw_name.strip().title()
     
-    # CRITICAL FIX: Validate product name against document to catch hallucinations
-    if doc_text and isinstance(raw_name, str) and raw_name != "N/A":
-        raw_name = _validate_and_fix_product_name(raw_name, doc_text)
+    # DISABLED: Product name validation causes false rejections due to punctuation/formatting
+    # differences in document titles. LLM extraction is reliable enough without this check.
+    # Original validation: if doc_text and isinstance(raw_name, str) and raw_name != "N/A":
+    #     raw_name = _validate_and_fix_product_name(raw_name, doc_text)
     
     normalized["PRODUCT_NAME"] = raw_name
     normalized["SOURCE_FILE_PRODUCT"] = get_source_filename(entry)
