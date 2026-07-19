@@ -16,10 +16,11 @@ AH1. PRODUCT_NAME: MUST be extracted from THIS document's own heading or title
 AH2. LEAD_MARKER: Determine ONLY by explicit document KEYWORDS. No inference.
      
      ALWAYS → "BNK" if document contains ANY of:
-     - "term finance", "term loan", "loan", "credit facility", "financing"
+     - "term finance", "term loan", "loan", "credit facility", "financing", "green energy"
      - "overdraft", "running finance", "revolving credit"
      - "deposit account", "savings account", "current account", "cheque account"
      - "debit card", "credit card", "ATM card", "prepaid card"
+     - "KIBOR", "markup", "prime rate" (loan interest rate indicators)
      
      ALWAYS → "IBG" if document contains ANY of:
      - "insurance plan", "insurance policy", "insurance product"
@@ -34,7 +35,7 @@ AH2. LEAD_MARKER: Determine ONLY by explicit document KEYWORDS. No inference.
      or "insurance company" → IT IS ALMOST CERTAINLY IBG (insurance),
      NOT BNK. These are STRONG insurance indicators that override default.
      
-     CRITICAL: "term finance facility" = BNK loan product, NEVER IBG.
+     *** CRITICAL OVERRIDE RULE: "term finance facility" = BNK loan product, NEVER IBG. ***
      Even if insurance is bundled with a loan, the primary product
      classification is determined by the core product type. A loan with
      bundled insurance is STILL BNK (the insurance premiums are built into
@@ -50,9 +51,10 @@ AH2. LEAD_MARKER: Determine ONLY by explicit document KEYWORDS. No inference.
        standalone coverage, policy term, renewal, claims) → IBG.
      
      POST-EXTRACTION VALIDATION (built into extraction engine):
-     - If LEAD_MARKER = BNK but document contains CLEAR insurance content
-       (FREE_LOOK_PERIOD_DAYS, COVERAGE_AMOUNT populated) → Engine may auto-correct
-       to IBG. Always verify against document.
+     - Term finance facilities (even with bundled insurance) will be auto-corrected
+       from IBG to BNK by the extraction engine's cross-field validation.
+     - Insurance-specific fields will be cleared (set to N/A) when LEAD_MARKER is
+       corrected from IBG to BNK.
 
 AH3. FIELD APPLICABILITY BY PRODUCT TYPE (CRITICAL):
      
@@ -115,14 +117,20 @@ AH5a. MIN_TERM_YEARS CRITICAL: Only extract if document EXPLICITLY states
       give you MAX_TERM_YEARS. If minimum is not stated, return "N/A" (never
       default to 1 or assume).
       
+      *** CRITICAL ANTI-HALLUCINATION: "Up to 10 years" DOES NOT contain a minimum. ***
+      When document only says "Up to X" with NO explicit minimum language,
+      MUST return MIN_TERM_YEARS = "N/A".
+      
       CONCRETE EXAMPLES:
       CORRECT EXTRACTION:
       - Document says "Minimum 1 year" → MIN_TERM_YEARS = "1"
       - Document says "Tenure from 1 to 10 years" → MIN_TERM_YEARS = "1", MAX_TERM_YEARS = "10"
+      - Document says "Up to 10 years" → MIN_TERM_YEARS = "N/A", MAX_TERM_YEARS = "10"
       
       WRONG EXTRACTION (HALLUCINATION):
-      - Document says "Up to 10 years" ONLY → MIN_TERM_YEARS = "N/A" (no minimum stated)
+      - Document says "Up to 10 years" ONLY but you extract MIN_TERM_YEARS = "1" → WRONG
       - Document says "Term up to 5 years" ONLY → MIN_TERM_YEARS = "N/A" (only maximum stated)
+      - Never default MIN_TERM_YEARS to "1" without explicit document language
       - Document says "Maximum 10 years" ONLY → MIN_TERM_YEARS = "N/A" (only maximum stated)
 AH5b. TENURE CRITICAL: Extract ONLY if document explicitly uses word "tenure",
       "term", or similar for a stated duration. Do NOT extract "Up to X years"
@@ -316,9 +324,14 @@ G24. PRODUCT_VARIANT_TIER: max50. Tier names joined by " | " (e.g. "Bronze | Sil
      do NOT extract as "Bronze | Silver"). Else "N/A".
 G25. PRICING_RATE: max400. Interest/profit RATES or pricing for LOAN products ONLY
      (e.g. "Salaried: 1 Year KIBOR + 3%"). For insurance or non-rate products →
-     "N/A". NEVER include insurance premium amounts here — those go in MIN_CONTRIBUTION.
-     Insurance premium rates (e.g., "2.75% of vehicle value") are MIN_CONTRIBUTION,
-     NOT PRICING_RATE.
+     "N/A". 
+     
+     *** CRITICAL: Insurance products ALWAYS have PRICING_RATE = "N/A" ***
+     NEVER include insurance premium amounts here — those go in MIN_CONTRIBUTION.
+     Insurance premium rates (e.g., "2.75% of vehicle value", "1.50% of Sum Assured",
+     "2.75% | 1.50%") are MIN_CONTRIBUTION, NOT PRICING_RATE.
+     If PRICING_RATE looks like "X% of Vehicle" or "X% of Sum Assured", it is WRONG
+     for insurance products. Move it to MIN_CONTRIBUTION and set PRICING_RATE to "N/A".
 G26. FEES_AND_CHARGES: max300. Named fees only (e.g. "Processing Fee: As per SOC |
      Issuance Fee: 500 PKR"). Separated by " | ".
 G27. KEY_BENEFITS: max280. CORE benefits INCLUDED BY DEFAULT (not optional riders).

@@ -1441,6 +1441,7 @@ def _validate_min_term_years(min_term: str, max_term: str, doc_text: str) -> str
         r"min(?:imum)?\s+(?:tenure|term|years?)\s*(?:of\s+)?(\d+)",
         r"(?:tenure|term)\s+(?:from|starting)\s+(\d+)\s+(?:years?|yrs?)",
         r"(?:tenure|term)\s+(?:minimum|min)\s+(\d+)",
+        r"(?:min|minimum)\s+(?:\d+)\s+(?:to|through|-)\s+(?:\d+)\s+years?",
     ]
     
     # Check if document has any explicit minimum term statement
@@ -1450,6 +1451,12 @@ def _validate_min_term_years(min_term: str, max_term: str, doc_text: str) -> str
     # If document only has "Up to" language, there's no minimum stated
     has_only_maximum = ("up to" in doc_lower or "upto" in doc_lower or "maximum" in doc_lower) and \
                        not has_minimum_statement
+    
+    # CRITICAL FIX: If document contains "Up to" and NO explicit minimum phrasing,
+    # return N/A immediately regardless of extracted min_term value.
+    # This prevents hallucinated defaults like "1" when only max is stated.
+    if "up to" in doc_lower and not has_minimum_statement:
+        return "N/A"
     
     if has_only_maximum or not has_minimum_statement:
         # Document only states maximum term, not minimum
@@ -1608,11 +1615,15 @@ def _crossfield_validate(normalized: dict) -> dict:
                 is_premium_rate = True
             
             # Pattern 3: Percentage-based premiums like "2.75% of Sum Assured" or "2.75% | 1.50%"
-            elif re.search(r"(\d+\.?\d*%.*?(?:sum assured|vehicle|value|insurance))", pricing.lower()):
+            elif re.search(r"(\d+\.?\d*%.*?(?:sum assured|vehicle|value|insurance|assured))", pricing.lower()):
                 is_premium_rate = True
             
             # Pattern 4: Multiple percentage rates separated by | like "2.75% | 1.50%"
             elif re.search(r"^\d+\.?\d*%(\s*\|\s*\d+\.?\d*%)*", pricing.strip()):
+                is_premium_rate = True
+            
+            # Pattern 5: Rates mentioning "of Sum" or "of Value" (insurance premium structure)
+            elif " of " in pricing.lower() and ("sum" in pricing.lower() or "value" in pricing.lower() or "vehicle" in pricing.lower()):
                 is_premium_rate = True
             
             if is_premium_rate:
@@ -1620,6 +1631,7 @@ def _crossfield_validate(normalized: dict) -> dict:
                 min_contrib = normalized.get("MIN_CONTRIBUTION", "N/A")
                 if min_contrib == "N/A" or not min_contrib:
                     normalized["MIN_CONTRIBUTION"] = pricing
+                # CRITICAL: For IBG products, PRICING_RATE MUST be N/A
                 normalized["PRICING_RATE"] = "N/A"
         
         # CRITICAL FIX: Insurance REQUIRED_DOCUMENTS contamination check (rule AH8)
@@ -1717,17 +1729,18 @@ def _infer_and_correct_lead_marker(normalized: dict, doc_text: str = "") -> dict
     
     # CRITICAL: Check for "term finance" — STRONGEST loan signal, overrides everything
     has_term_finance = "term finance" in combined_text
+    has_financing = "financing" in combined_text or "financing" in desc
     
     # CRITICAL: For loans, if provider is Bank Alfalah and no insurance company is mentioned,
     # it's almost certainly a bank loan (BNK), not insurance (IBG)
     is_bank_only = ("bank alfalah" in prov or "bank " in prov) and "insurance" not in prov
-    has_loan_keywords = any(sig in combined_text for sig in ["term finance", "loan", "financing", "green energy"])
+    has_loan_keywords = any(sig in combined_text for sig in ["term finance", "loan", "financing", "green energy", "solar"])
     
     # CRITICAL: "term finance facility" ALWAYS means BNK (bank loan), NEVER IBG,
     # even if insurance is bundled with it. The core product is a bank loan,
     # not an insurance product.
-    if has_term_finance and current_marker == "IBG":
-        # Term finance facility misclassified as insurance — MUST correct
+    if (has_term_finance or (has_financing and is_bank_only)) and current_marker == "IBG":
+        # Term finance facility or bank financing misclassified as insurance — MUST correct
         normalized["LEAD_MARKER"] = "BNK"
         # Cascade corrections: ALL insurance-only fields MUST be N/A for BNK products
         insurance_only_fields = [
@@ -1743,11 +1756,12 @@ def _infer_and_correct_lead_marker(normalized: dict, doc_text: str = "") -> dict
         if normalized.get("PLAN_TYPE", "").lower() not in ("loan", "deposit", "account", "card"):
             normalized["PLAN_TYPE"] = "Loan"
         
-        # Additional sanity check: if PRICING_RATE looks like insurance premiums, move to MIN_CONTRIBUTION and clear
+        # Additional sanity check: if PRICING_RATE looks like insurance premiums, clear it for loans
         pricing = normalized.get("PRICING_RATE", "")
-        if pricing and pricing != "N/A" and ("%" in pricing and ("sum assured" in pricing.lower() or "vehicle" in pricing.lower())):
-            # This looks like insurance premium rate in PRICING_RATE for a loan — clear it
-            normalized["PRICING_RATE"] = "N/A"
+        if pricing and pricing != "N/A":
+            if any(x in pricing.lower() for x in ["% of sum", "% of vehicle", "% net", "% insurance"]):
+                # This looks like insurance premium rate in PRICING_RATE for a loan — clear it
+                normalized["PRICING_RATE"] = "N/A"
     
     # Fallback: Strong loan signals with bank provider override weaker classification
     elif (has_loan_keywords or loan_score >= 1) and is_bank_only and current_marker == "IBG":
