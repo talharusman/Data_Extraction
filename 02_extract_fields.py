@@ -2715,9 +2715,11 @@ def extract_one_product(model, tokenizer, entry, text, max_new_tokens=None):
         )
         return accumulated
 
-    # FIX (OOM): Use a smaller token budget for validation since its output
-    # is just a corrected copy of the already-extracted JSON (no new info).
-    validation_max = min(max_new_tokens or MAX_NEW_TOKENS, 1200)
+    # Use the same max_new_tokens as the rest of the pipeline (single source
+    # of truth).  A previous version hardcoded 1200 here, which silently
+    # overrode the auto-raised MAX_NEW_TOKENS (1500) and caused inconsistent
+    # "generation hit max_new_tokens" log values.
+    validation_max = max_new_tokens or MAX_NEW_TOKENS
     validation_prompt = build_validation_prompt(entry, accumulated)
     try:
         validation_raw = get_raw_generation(model, tokenizer, validation_prompt, max_new_tokens=validation_max)
