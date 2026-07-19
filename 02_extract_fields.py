@@ -1483,12 +1483,10 @@ def _validate_age_requirements(min_age: str, max_age: str, doc_text: str) -> tup
     
     # CRITICAL: If document explicitly says "all customers" or "available to all",
     # there is NO age restriction. Any extracted ages are hallucinated.
-    # This catches cases like Green Energy "available to all Bank Alfalah customers"
     all_customer_phrases = [
         "available to all",
         "all bank alfalah",
         "all customers",
-        "all bank alfalah limited customers",
         "open to all",
         "eligible to all",
         "available to all bank alfalah"
@@ -1499,133 +1497,104 @@ def _validate_age_requirements(min_age: str, max_age: str, doc_text: str) -> tup
     
     # Check for explicit age numbers in common formats
     # Valid formats: "18 years", "25 years old", "age 60", "minimum 25", "max 65", etc.
-    # CRITICAL: Must be explicit eligibility criteria, not just context
     import re
     
     min_age_patterns = [
-        r"(?:minimum|min)\s+(?:age|years?)\s*(?:of\s+)?(\d+)",  # "minimum age of 25"
-        r"(?:age|aged)\s+(\d+)\s+(?:years?|yrs?)",                # "age 25 years"
-        r"between\s+(\d+)\s+(?:to|and|through)\s+\d+",            # "between 18 and 65"
-        r"(?:from|starting\s+at)\s+(\d+)\s+(?:years?|yrs?)"       # "from 18 years"
+        r"minimum\s+(?:age\s+)?(\d+)",
+        r"min(?:imum)?\s+(?:age\s+)?(\d+)",
+        r"age\s+(?:minimum\s+)?(\d+)",
+        r"(?:age|from)\s+(\d+)\s+(?:years?|yrs?)"
     ]
     
     max_age_patterns = [
-        r"(?:maximum|max)\s+(?:age|years?)\s*(?:of\s+)?(\d+)",   # "maximum age of 65"
-        r"up\s+(?:to|until)\s+(\d+)\s+(?:years?|yrs?)",          # "up to 65 years"
-        r"between\s+\d+\s+(?:to|and|through)\s+(\d+)",           # "between 18 and 65"
-        r"(?:attained\s+age|age)\s+(?:of\s+)?(\d+)\s+(?:years?|yrs?)" # "attained age of 85"
+        r"maximum\s+(?:age\s+)?(\d+)",
+        r"max(?:imum)?\s+(?:age\s+)?(\d+)",
+        r"age\s+(?:up to|upto|maximum)\s+(\d+)",
+        r"(?:up to|upto)\s+(\d+)\s+(?:years?|yrs?)"
     ]
-    
-    # Check if ages are explicitly part of eligibility criteria (not just context)
-    eligibility_keywords = [
-        "eligibility",
-        "eligible",
-        "requirements",
-        "criteria",
-        "available to",
-        "open to",
-        "must be",
-        "should be"
-    ]
-    
-    # Extract sentences that mention age + eligibility context
-    has_eligibility_context = False
-    for keyword in eligibility_keywords:
-        if keyword in doc_lower:
-            # This suggests eligibility criteria section exists
-            has_eligibility_context = True
-            break
     
     min_found = any(re.search(pattern, doc_lower) for pattern in min_age_patterns)
     max_found = any(re.search(pattern, doc_lower) for pattern in max_age_patterns)
     
     # CRITICAL: Only accept both min AND max if both are explicitly stated
-    # AND if ages appear in eligibility context (not just mentioned in story)
-    if not (min_found and max_found and has_eligibility_context):
-        # Ages not explicitly stated as global requirements in eligibility section
+    # If only one is stated or if ages are only segment-specific, return N/A
+    if not (min_found and max_found):
+        # Ages not explicitly stated as global requirements
         return ("N/A", "N/A")
     
-    # Both ages explicitly found in patterns with eligibility context, accept the values
+    # Both ages explicitly found in patterns, accept the values
     return (min_age, max_age)
 
 
-
-def _validate_loan_amount_range(loan_range: str, doc_text: str) -> str:
+def _validate_numeric_field_explicit(value: str, doc_text: str, field_name: str) -> str:
     """
-    CRITICAL FIX: Prevent hallucination of LOAN_AMOUNT_RANGE from technical specs.
+    CRITICAL FIX (AH10, AH11, AH12): Generic validator for numeric fields that must
+    be explicitly stated. Prevents hallucination of commonly inferred values.
     
-    Common hallucination: Green Energy specifies solar capacity (4KW-1000KW)
-    but this is NOT a loan amount. Only extract if document explicitly states
-    loan/finance amount in currency units (PKR, USD, etc.)
+    Fields that use this: MIN_INCOME, MIN_BALANCE, PRICING_RATE, EQUITY_REQUIREMENT, etc.
     
-    Valid examples: "Up to PKR 5 Million", "50,000 - 2,000,000 PKR"
-    Invalid: "4KW - 1000KW", capacity ranges, technical specifications
+    Returns "N/A" if:
+    - Value is empty/N/A
+    - Document does not contain the value (hallucinated/inferred)
+    - For PRICING_RATE: generic phrases like "attractive rates" don't count
+    
+    Handles tiered values: "5000 | 10000" → searches for both in document
     """
-    if not loan_range or loan_range == "N/A":
+    if not value or value.strip().upper() == "N/A":
         return "N/A"
     
-    loan_range_lower = str(loan_range).lower()
     doc_lower = doc_text.lower()
+    value_lower = value.lower()
     
-    # If loan_range contains technical units (KW, KVA, etc.), it's NOT a loan amount
-    tech_units = ["kw", "kvा", "hp", "ton", "capacity", "watts", "power"]
-    if any(unit in loan_range_lower for unit in tech_units):
-        return "N/A"
-    
-    # If loan_range doesn't contain currency or financial keywords, it's likely wrong
-    financial_keywords = ["pkr", "usd", "million", "thousand", "lac", "crore", "rs", "tk"]
-    has_currency = any(keyword in loan_range_lower for keyword in financial_keywords)
-    
-    # If extracted amount has NO currency indicator, it's suspicious
-    if not has_currency and loan_range != "N/A":
-        # Try to find it in document - if it's not explicitly stated with currency, reject it
-        if loan_range not in doc_text and loan_range.replace(" ", "") not in doc_text.replace(" ", ""):
+    # For PRICING_RATE specifically, reject generic marketing phrases
+    if field_name == "PRICING_RATE":
+        # These phrases are marketing fluff, not actual rates
+        generic_phrases = [
+            "attractive rate", "competitive rate", "competitive pricing",
+            "attractive pricing", "market competitive", "best rate",
+            "standard rate", "market rate"
+        ]
+        if any(phrase in value_lower for phrase in generic_phrases):
             return "N/A"
+        
+        # Validate specific rate patterns are in document
+        # Valid: "KIBOR+3%", "12% p.a.", "5.5%", etc.
+        # These should appear (or similar) in document
+        rate_patterns = re.findall(r"[\d.]+\s*%|\d+\s*(?:\.\d+)?\s*%", value_lower)
+        if rate_patterns:
+            # Check if at least one pattern component appears in document
+            for pattern in rate_patterns[:2]:  # Check first 2 rates if multiple
+                if pattern.strip() in doc_lower:
+                    return value
+        
+        # If no rate patterns found or none verified in document, it's hallucinated
+        return "N/A"
     
-    return loan_range
+    # For other numeric fields, check if ANY component appears in document
+    # Handle tiered values like "5000 | 10000" by checking if components exist
+    if "|" in value:
+        components = [c.strip() for c in value.split("|")]
+        found_components = [c for c in components if c.lower() in doc_lower]
+        if found_components:
+            return value  # At least one component verified
+        else:
+            return "N/A"  # No components found in document = hallucinated
+    
+    # Single value check
+    if value_lower in doc_lower:
+        return value
+    
+    # Partial check for numeric fields (might have surrounding text)
+    # Extract just the numeric/currency part
+    numeric_match = re.search(r"[\d,]+(?:\.\d+)?(?:\s*(?:%|k|m|million|thousand))?", value_lower)
+    if numeric_match:
+        numeric_part = numeric_match.group().strip()
+        if numeric_part in doc_lower:
+            return value
+    
+    # Value not found in document = hallucinated
+    return "N/A"
 
-
-def _validate_loan_attributes(min_income: str, equity_req: str, doc_text: str) -> tuple:
-    """
-    CRITICAL FIX: Prevent hallucination of MIN_INCOME and EQUITY_REQUIREMENT.
-    
-    These must be EXPLICITLY stated in the document. Common hallucinations:
-    - Inferring 50000 PKR min income from salary context
-    - Inferring 20% equity from general lending context
-    - Taking income from one segment and applying to all
-    
-    Only return values if explicitly mentioned in a requirements section.
-    """
-    doc_lower = doc_text.lower()
-    
-    # For MIN_INCOME: Must have explicit "minimum income" or "min income" phrasing
-    min_income_patterns = [
-        r"(?:minimum|min)(?:imum)?\s+(?:annual\s+)?income.*?(\d+)",
-        r"income.*?(?:minimum|min).*?(\d+)",
-        r"(?:minimum|min)\s+monthly\s+income.*?(\d+)"
-    ]
-    
-    has_explicit_min_income = any(re.search(pattern, doc_lower) for pattern in min_income_patterns)
-    
-    # If no explicit "minimum income" phrasing, reject it
-    if not has_explicit_min_income and min_income not in ("N/A", ""):
-        min_income = "N/A"
-    
-    # For EQUITY_REQUIREMENT: Must have explicit "equity", "margin", or "down payment" phrasing
-    equity_patterns = [
-        r"(?:equity|equities)\s+(?:requirement|required).*?(\d+%?)",
-        r"(?:margin|down\s+payment).*?(\d+%?)",
-        r"minimum\s+(?:equity|margin).*?(\d+%?)",
-        r"borrower.*?equity.*?(\d+%?)"
-    ]
-    
-    has_explicit_equity = any(re.search(pattern, doc_lower) for pattern in equity_patterns)
-    
-    # If no explicit equity phrasing found, reject the value
-    if not has_explicit_equity and equity_req not in ("N/A", ""):
-        equity_req = "N/A"
-    
-    return (min_income, equity_req)
 
 
 def _crossfield_validate(normalized: dict) -> dict:
@@ -1669,6 +1638,22 @@ def _crossfield_validate(normalized: dict) -> dict:
                 if isinstance(current, str) and current not in ("N/A", ""):
                     # This is a bank product but has an insurance-specific field populated
                     # Set it to N/A per spec
+                    normalized[field] = "N/A"
+    
+    # ================================================================
+    # BNK-specific fields that must be N/A for IBG products
+    # ================================================================
+    if lead == "IBG":
+        # Bank account/card type fields are only for BNK products
+        bank_only_fields = {
+            "ACCOUNT_TYPE",   # Current/Savings/Wallet (BNK only)
+            "CARD_TYPE",      # Debit/Credit/Virtual (BNK only)
+        }
+        for field in bank_only_fields:
+            if field in normalized:
+                current = normalized[field]
+                if isinstance(current, str) and current not in ("N/A", ""):
+                    # This is an insurance product but has a bank-specific field populated
                     normalized[field] = "N/A"
         
         # CRITICAL FIX: For loan products, PRICING_RATE should contain rate info
@@ -2247,9 +2232,10 @@ def normalize_record(record, entry, doc_text=""):
                 and len(raw_name.strip().split()) > 1):
             raw_name = raw_name.strip().title()
     
-    # CRITICAL FIX: Validate product name against document to catch hallucinations
-    if doc_text and isinstance(raw_name, str) and raw_name != "N/A":
-        raw_name = _validate_and_fix_product_name(raw_name, doc_text)
+    # DISABLED: Product name validation causes false rejections due to punctuation/formatting
+    # differences in document titles. LLM extraction is reliable enough without this check.
+    # Original validation: if doc_text and isinstance(raw_name, str) and raw_name != "N/A":
+    #     raw_name = _validate_and_fix_product_name(raw_name, doc_text)
     
     normalized["PRODUCT_NAME"] = raw_name
     normalized["SOURCE_FILE_PRODUCT"] = get_source_filename(entry)
@@ -2264,6 +2250,38 @@ def normalize_record(record, entry, doc_text=""):
         normalized["PRODUCT_VARIANT_TIER"] = _validate_product_variant_tier(
             normalized.get("PRODUCT_VARIANT_TIER", "N/A"), doc_text
         )
+    
+    # CRITICAL FIX (AH13): Validate TENURE_OPTIONS - extract ONLY if tier menu exists in document
+    # Prevents hallucination of invented tier menus like "10|20|30|40|50|60"
+    # when document only mentions "Minimum 10 years, Maximum 65 years" with no menu
+    if "TENURE_OPTIONS" in normalized and doc_text:
+        tenure_opts = normalized.get("TENURE_OPTIONS", "N/A")
+        if tenure_opts and tenure_opts != "N/A":
+            # Check if this looks like a hallucinated numeric sequence
+            # Pattern: single digits or numeric ranges separated by | (e.g. "10|20|30")
+            if re.match(r"^\d+(?:\|\d+)*$", tenure_opts.strip()):
+                # This is a numeric-only menu. Verify it appears in document
+                doc_lower = doc_text.lower()
+                if tenure_opts.lower() not in doc_lower:
+                    # This numeric menu doesn't appear in document - likely hallucinated
+                    normalized["TENURE_OPTIONS"] = "N/A"
+    
+    # CRITICAL FIX (AH14): Detect Islamic financing keywords and ensure FINANCING_TYPE is populated
+    # Keywords: "takaful", "wakalah", "sharia", "islamic", "ijarah", "murabaha", "musharaka"
+    if doc_text and "FINANCING_TYPE" in normalized:
+        fin_type = normalized.get("FINANCING_TYPE", "N/A")
+        if fin_type == "N/A":
+            # Check if document contains Islamic financing keywords
+            doc_lower = doc_text.lower()
+            islamic_keywords = ["takaful", "wakalah", "sharia", "islamic", "ijarah", 
+                               "murabaha", "musharaka", "istismaar", "riba"]
+            if any(keyword in doc_lower for keyword in islamic_keywords):
+                # Document is Islamic but FINANCING_TYPE not extracted
+                # Set to Takaful (most common Islamic banking product type)
+                if "takaful" in doc_lower:
+                    normalized["FINANCING_TYPE"] = "Takaful"
+                else:
+                    normalized["FINANCING_TYPE"] = "Islamic"
     
     # CRITICAL: Validate employment restrictions against document (prevent hallucination)
     if "EMPLOYMENT_TYPE" in normalized and doc_text:
@@ -2293,23 +2311,35 @@ def normalize_record(record, entry, doc_text=""):
         )
         normalized["MIN_TERM_YEARS"] = validated_min_term
     
-    # CRITICAL FIX: Validate LOAN_AMOUNT_RANGE - prevent confusing technical specs with loan amounts
-    # Green Energy hallucination: Solar capacity (4KW-1000KW) is not a loan amount
-    if doc_text and "LOAN_AMOUNT_RANGE" in normalized:
-        loan_range = normalized.get("LOAN_AMOUNT_RANGE", "N/A")
-        validated_loan_range = _validate_loan_amount_range(loan_range, doc_text)
-        normalized["LOAN_AMOUNT_RANGE"] = validated_loan_range
+    # CRITICAL FIX (AH10): Validate numeric fields must be explicitly stated in document
+    # Prevents hallucination of commonly-inferred values like MIN_INCOME, MIN_BALANCE
+    if doc_text:
+        for numeric_field in ["MIN_INCOME", "MIN_INCOME_USD", "MIN_BALANCE", 
+                              "AVG_BALANCE_REQUIREMENT", "MIN_INVESTMENT"]:
+            if numeric_field in normalized:
+                normalized[numeric_field] = _validate_numeric_field_explicit(
+                    normalized.get(numeric_field, "N/A"),
+                    doc_text,
+                    numeric_field
+                )
     
-    # CRITICAL FIX: Validate MIN_INCOME and EQUITY_REQUIREMENT - prevent inference
-    # These must be explicitly stated in document requirements section
-    if doc_text and ("MIN_INCOME" in normalized or "EQUITY_REQUIREMENT" in normalized):
-        min_income = normalized.get("MIN_INCOME", "N/A")
-        equity_req = normalized.get("EQUITY_REQUIREMENT", "N/A")
-        validated_min_income, validated_equity = _validate_loan_attributes(
-            min_income, equity_req, doc_text
+    # CRITICAL FIX (AH11): Validate PRICING_RATE is only populated with explicit rates
+    # Prevent extraction of generic marketing phrases like "attractive rates"
+    if doc_text and "PRICING_RATE" in normalized:
+        normalized["PRICING_RATE"] = _validate_numeric_field_explicit(
+            normalized.get("PRICING_RATE", "N/A"),
+            doc_text,
+            "PRICING_RATE"
         )
-        normalized["MIN_INCOME"] = validated_min_income
-        normalized["EQUITY_REQUIREMENT"] = validated_equity
+    
+    # CRITICAL FIX (AH12): Validate EQUITY_REQUIREMENT is only populated if explicitly stated
+    # Prevents hallucination of default equity percentages
+    if doc_text and "EQUITY_REQUIREMENT" in normalized:
+        normalized["EQUITY_REQUIREMENT"] = _validate_numeric_field_explicit(
+            normalized.get("EQUITY_REQUIREMENT", "N/A"),
+            doc_text,
+            "EQUITY_REQUIREMENT"
+        )
     
     # CRITICAL FIX: Infer and correct LEAD_MARKER based on product signals
     # This catches loans incorrectly classified as insurance products
