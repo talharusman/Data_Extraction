@@ -1483,10 +1483,12 @@ def _validate_age_requirements(min_age: str, max_age: str, doc_text: str) -> tup
     
     # CRITICAL: If document explicitly says "all customers" or "available to all",
     # there is NO age restriction. Any extracted ages are hallucinated.
+    # This catches cases like Green Energy "available to all Bank Alfalah customers"
     all_customer_phrases = [
         "available to all",
         "all bank alfalah",
         "all customers",
+        "all bank alfalah limited customers",
         "open to all",
         "eligible to all",
         "available to all bank alfalah"
@@ -1497,34 +1499,133 @@ def _validate_age_requirements(min_age: str, max_age: str, doc_text: str) -> tup
     
     # Check for explicit age numbers in common formats
     # Valid formats: "18 years", "25 years old", "age 60", "minimum 25", "max 65", etc.
+    # CRITICAL: Must be explicit eligibility criteria, not just context
     import re
     
     min_age_patterns = [
-        r"minimum\s+(?:age\s+)?(\d+)",
-        r"min(?:imum)?\s+(?:age\s+)?(\d+)",
-        r"age\s+(?:minimum\s+)?(\d+)",
-        r"(?:age|from)\s+(\d+)\s+(?:years?|yrs?)"
+        r"(?:minimum|min)\s+(?:age|years?)\s*(?:of\s+)?(\d+)",  # "minimum age of 25"
+        r"(?:age|aged)\s+(\d+)\s+(?:years?|yrs?)",                # "age 25 years"
+        r"between\s+(\d+)\s+(?:to|and|through)\s+\d+",            # "between 18 and 65"
+        r"(?:from|starting\s+at)\s+(\d+)\s+(?:years?|yrs?)"       # "from 18 years"
     ]
     
     max_age_patterns = [
-        r"maximum\s+(?:age\s+)?(\d+)",
-        r"max(?:imum)?\s+(?:age\s+)?(\d+)",
-        r"age\s+(?:up to|upto|maximum)\s+(\d+)",
-        r"(?:up to|upto)\s+(\d+)\s+(?:years?|yrs?)"
+        r"(?:maximum|max)\s+(?:age|years?)\s*(?:of\s+)?(\d+)",   # "maximum age of 65"
+        r"up\s+(?:to|until)\s+(\d+)\s+(?:years?|yrs?)",          # "up to 65 years"
+        r"between\s+\d+\s+(?:to|and|through)\s+(\d+)",           # "between 18 and 65"
+        r"(?:attained\s+age|age)\s+(?:of\s+)?(\d+)\s+(?:years?|yrs?)" # "attained age of 85"
     ]
+    
+    # Check if ages are explicitly part of eligibility criteria (not just context)
+    eligibility_keywords = [
+        "eligibility",
+        "eligible",
+        "requirements",
+        "criteria",
+        "available to",
+        "open to",
+        "must be",
+        "should be"
+    ]
+    
+    # Extract sentences that mention age + eligibility context
+    has_eligibility_context = False
+    for keyword in eligibility_keywords:
+        if keyword in doc_lower:
+            # This suggests eligibility criteria section exists
+            has_eligibility_context = True
+            break
     
     min_found = any(re.search(pattern, doc_lower) for pattern in min_age_patterns)
     max_found = any(re.search(pattern, doc_lower) for pattern in max_age_patterns)
     
     # CRITICAL: Only accept both min AND max if both are explicitly stated
-    # If only one is stated or if ages are only segment-specific, return N/A
-    if not (min_found and max_found):
-        # Ages not explicitly stated as global requirements
+    # AND if ages appear in eligibility context (not just mentioned in story)
+    if not (min_found and max_found and has_eligibility_context):
+        # Ages not explicitly stated as global requirements in eligibility section
         return ("N/A", "N/A")
     
-    # Both ages explicitly found in patterns, accept the values
+    # Both ages explicitly found in patterns with eligibility context, accept the values
     return (min_age, max_age)
 
+
+
+def _validate_loan_amount_range(loan_range: str, doc_text: str) -> str:
+    """
+    CRITICAL FIX: Prevent hallucination of LOAN_AMOUNT_RANGE from technical specs.
+    
+    Common hallucination: Green Energy specifies solar capacity (4KW-1000KW)
+    but this is NOT a loan amount. Only extract if document explicitly states
+    loan/finance amount in currency units (PKR, USD, etc.)
+    
+    Valid examples: "Up to PKR 5 Million", "50,000 - 2,000,000 PKR"
+    Invalid: "4KW - 1000KW", capacity ranges, technical specifications
+    """
+    if not loan_range or loan_range == "N/A":
+        return "N/A"
+    
+    loan_range_lower = str(loan_range).lower()
+    doc_lower = doc_text.lower()
+    
+    # If loan_range contains technical units (KW, KVA, etc.), it's NOT a loan amount
+    tech_units = ["kw", "kvा", "hp", "ton", "capacity", "watts", "power"]
+    if any(unit in loan_range_lower for unit in tech_units):
+        return "N/A"
+    
+    # If loan_range doesn't contain currency or financial keywords, it's likely wrong
+    financial_keywords = ["pkr", "usd", "million", "thousand", "lac", "crore", "rs", "tk"]
+    has_currency = any(keyword in loan_range_lower for keyword in financial_keywords)
+    
+    # If extracted amount has NO currency indicator, it's suspicious
+    if not has_currency and loan_range != "N/A":
+        # Try to find it in document - if it's not explicitly stated with currency, reject it
+        if loan_range not in doc_text and loan_range.replace(" ", "") not in doc_text.replace(" ", ""):
+            return "N/A"
+    
+    return loan_range
+
+
+def _validate_loan_attributes(min_income: str, equity_req: str, doc_text: str) -> tuple:
+    """
+    CRITICAL FIX: Prevent hallucination of MIN_INCOME and EQUITY_REQUIREMENT.
+    
+    These must be EXPLICITLY stated in the document. Common hallucinations:
+    - Inferring 50000 PKR min income from salary context
+    - Inferring 20% equity from general lending context
+    - Taking income from one segment and applying to all
+    
+    Only return values if explicitly mentioned in a requirements section.
+    """
+    doc_lower = doc_text.lower()
+    
+    # For MIN_INCOME: Must have explicit "minimum income" or "min income" phrasing
+    min_income_patterns = [
+        r"(?:minimum|min)(?:imum)?\s+(?:annual\s+)?income.*?(\d+)",
+        r"income.*?(?:minimum|min).*?(\d+)",
+        r"(?:minimum|min)\s+monthly\s+income.*?(\d+)"
+    ]
+    
+    has_explicit_min_income = any(re.search(pattern, doc_lower) for pattern in min_income_patterns)
+    
+    # If no explicit "minimum income" phrasing, reject it
+    if not has_explicit_min_income and min_income not in ("N/A", ""):
+        min_income = "N/A"
+    
+    # For EQUITY_REQUIREMENT: Must have explicit "equity", "margin", or "down payment" phrasing
+    equity_patterns = [
+        r"(?:equity|equities)\s+(?:requirement|required).*?(\d+%?)",
+        r"(?:margin|down\s+payment).*?(\d+%?)",
+        r"minimum\s+(?:equity|margin).*?(\d+%?)",
+        r"borrower.*?equity.*?(\d+%?)"
+    ]
+    
+    has_explicit_equity = any(re.search(pattern, doc_lower) for pattern in equity_patterns)
+    
+    # If no explicit equity phrasing found, reject the value
+    if not has_explicit_equity and equity_req not in ("N/A", ""):
+        equity_req = "N/A"
+    
+    return (min_income, equity_req)
 
 
 def _crossfield_validate(normalized: dict) -> dict:
@@ -2146,10 +2247,9 @@ def normalize_record(record, entry, doc_text=""):
                 and len(raw_name.strip().split()) > 1):
             raw_name = raw_name.strip().title()
     
-    # DISABLED: Product name validation causes false rejections due to punctuation/formatting
-    # differences in document titles. LLM extraction is reliable enough without this check.
-    # Original validation: if doc_text and isinstance(raw_name, str) and raw_name != "N/A":
-    #     raw_name = _validate_and_fix_product_name(raw_name, doc_text)
+    # CRITICAL FIX: Validate product name against document to catch hallucinations
+    if doc_text and isinstance(raw_name, str) and raw_name != "N/A":
+        raw_name = _validate_and_fix_product_name(raw_name, doc_text)
     
     normalized["PRODUCT_NAME"] = raw_name
     normalized["SOURCE_FILE_PRODUCT"] = get_source_filename(entry)
@@ -2192,6 +2292,24 @@ def normalize_record(record, entry, doc_text=""):
             doc_text
         )
         normalized["MIN_TERM_YEARS"] = validated_min_term
+    
+    # CRITICAL FIX: Validate LOAN_AMOUNT_RANGE - prevent confusing technical specs with loan amounts
+    # Green Energy hallucination: Solar capacity (4KW-1000KW) is not a loan amount
+    if doc_text and "LOAN_AMOUNT_RANGE" in normalized:
+        loan_range = normalized.get("LOAN_AMOUNT_RANGE", "N/A")
+        validated_loan_range = _validate_loan_amount_range(loan_range, doc_text)
+        normalized["LOAN_AMOUNT_RANGE"] = validated_loan_range
+    
+    # CRITICAL FIX: Validate MIN_INCOME and EQUITY_REQUIREMENT - prevent inference
+    # These must be explicitly stated in document requirements section
+    if doc_text and ("MIN_INCOME" in normalized or "EQUITY_REQUIREMENT" in normalized):
+        min_income = normalized.get("MIN_INCOME", "N/A")
+        equity_req = normalized.get("EQUITY_REQUIREMENT", "N/A")
+        validated_min_income, validated_equity = _validate_loan_attributes(
+            min_income, equity_req, doc_text
+        )
+        normalized["MIN_INCOME"] = validated_min_income
+        normalized["EQUITY_REQUIREMENT"] = validated_equity
     
     # CRITICAL FIX: Infer and correct LEAD_MARKER based on product signals
     # This catches loans incorrectly classified as insurance products
