@@ -1646,6 +1646,60 @@ def _crossfield_validate(normalized: dict) -> dict:
     return normalized
 
 
+def _fix_coverage_loan_amount_confusion(normalized: dict) -> dict:
+    """
+    CRITICAL FIX: Detects and corrects the common mistake of extracting
+    insurance coverage amounts (sum insured) into LOAN_AMOUNT_RANGE instead
+    of COVERAGE_AMOUNT.
+    
+    For IBG (insurance) products:
+    - LOAN_AMOUNT_RANGE MUST be "N/A" always (it's loan-specific)
+    - Coverage amounts (sum insured) MUST go in COVERAGE_AMOUNT
+    
+    This fixes the case where "Sum Insured up to PKR 5 million" gets
+    extracted to LOAN_AMOUNT_RANGE instead of COVERAGE_AMOUNT.
+    """
+    lead = normalized.get("LEAD_MARKER", "").strip().upper()
+    
+    # Only validate for insurance products
+    if lead != "IBG":
+        return normalized
+    
+    loan_range = normalized.get("LOAN_AMOUNT_RANGE", "").strip()
+    coverage = normalized.get("COVERAGE_AMOUNT", "").strip()
+    
+    # If LOAN_AMOUNT_RANGE has values for an insurance product, check if they're actually coverage amounts
+    if loan_range and loan_range not in ("N/A", ""):
+        # Check if the value looks like sum insured / coverage (currency amounts with PKR/million/etc)
+        # Insurance coverage patterns typically have "million", "thousand", "K", "M", "PKR", etc.
+        is_coverage_amount = any(
+            keyword in loan_range.lower() 
+            for keyword in ["sum insured", "coverage", "covered", "option", "million", "thousand"]
+        )
+        
+        # If LOAN_AMOUNT_RANGE looks like coverage and COVERAGE_AMOUNT is empty, move it
+        if is_coverage_amount and (not coverage or coverage == "N/A"):
+            normalized["COVERAGE_AMOUNT"] = loan_range
+            normalized["LOAN_AMOUNT_RANGE"] = "N/A"
+        elif is_coverage_amount:
+            # Both fields have values - LOAN_AMOUNT_RANGE should still be N/A for insurance
+            normalized["LOAN_AMOUNT_RANGE"] = "N/A"
+    
+    # Final enforcement: IBG products MUST have LOAN_AMOUNT_RANGE = N/A
+    if lead == "IBG" and normalized.get("LOAN_AMOUNT_RANGE") not in ("N/A", ""):
+        # Additional check: does it really look like a loan amount or coverage?
+        value = normalized.get("LOAN_AMOUNT_RANGE", "").lower()
+        if "sum" in value or "coverage" in value or "option" in value:
+            normalized["COVERAGE_AMOUNT"] = normalized.get("COVERAGE_AMOUNT", "N/A")
+            if normalized["COVERAGE_AMOUNT"] == "N/A":
+                normalized["COVERAGE_AMOUNT"] = normalized["LOAN_AMOUNT_RANGE"]
+            normalized["LOAN_AMOUNT_RANGE"] = "N/A"
+    
+    return normalized
+
+
+
+
 def _validate_product_name(product_name: str, doc_text: str) -> bool:
     """
     Validate that PRODUCT_NAME appears somewhere in the document text.
@@ -2142,6 +2196,9 @@ def normalize_record(record, entry, doc_text=""):
     # This catches loans incorrectly classified as insurance products
     # Pass the full document text for validation and product name checking
     normalized = _infer_and_correct_lead_marker(normalized, doc_text=doc_text)
+    
+    # CRITICAL FIX: Correct coverage amounts that were misplaced into LOAN_AMOUNT_RANGE
+    normalized = _fix_coverage_loan_amount_confusion(normalized)
     
     return normalized
 
