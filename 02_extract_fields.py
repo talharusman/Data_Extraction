@@ -452,10 +452,13 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
     Split a long document into smaller pieces so each model call only has to
     process chunk_size characters instead of the whole document at once.
 
-    Breaks are made on a paragraph/sentence boundary near chunk_size where
-    possible so a field's value isn't split mid-sentence across two chunks.
-    A small overlap is carried into the next chunk so context right at a
-    boundary isn't lost.
+    Section-aware splitting strategy (generalization fix):
+    1. Prefer breaking at section headers (ALL CAPS lines, lines ending with
+       colon, numbered section lines) — these are natural document boundaries.
+    2. Fall back to paragraph boundaries (double newline).
+    3. Fall back to sentence boundaries (period + space).
+    4. A generous overlap carries context from the previous chunk so that
+       fields spanning a boundary aren't lost.
     """
     text = text.strip()
     if len(text) <= chunk_size:
@@ -469,10 +472,39 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
         end = min(start + chunk_size, length)
 
         if end < length:
-            search_from = max(start, end - 300)
+            # Look for the best break point in the last portion of the chunk.
+            search_from = max(start, end - 500)
+
+            # Priority 1: Section header boundary (line that looks like a
+            # heading — ALL CAPS, numbered section, or ends with colon).
+            best_section = -1
+            for match in re.finditer(
+                r'\n(?=[A-Z][A-Z ]{3,}:?\n|\d+[\.\)]\s+[A-Z]|\n[A-Z][A-Z ]{5,}\n)',
+                text[search_from:end]
+            ):
+                best_section = search_from + match.start()
+
+            # Priority 2: Double newline (paragraph boundary).
+            para_idx = text.rfind("\n\n", search_from, end)
+
+            # Priority 3: Single newline.
             newline_idx = text.rfind("\n", search_from, end)
+
+            # Priority 4: Sentence boundary.
             period_idx = text.rfind(". ", search_from, end)
-            boundary = max(newline_idx, period_idx)
+
+            # Pick the best boundary by priority.
+            if best_section > search_from:
+                boundary = best_section
+            elif para_idx > search_from:
+                boundary = para_idx
+            elif newline_idx > search_from:
+                boundary = newline_idx
+            elif period_idx > search_from:
+                boundary = period_idx
+            else:
+                boundary = -1
+
             if boundary > search_from:
                 end = boundary + 1
 
@@ -487,16 +519,49 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
     return chunks
 
 
+## Fields where chunks may contain COMPLEMENTARY information that should be
+# concatenated (with deduplication) rather than one value replacing the other.
+CONCATENATE_FIELDS = {
+    "KEY_BENEFITS", "KEY_EXCLUSIONS", "REQUIRED_DOCUMENTS", "OPTIONAL_RIDERS",
+    "FEES_AND_CHARGES", "SPECIAL_CONDITIONS", "COVERAGE_AMOUNT",
+}
+
+# Fields where the first non-N/A value should always win (identity fields).
+FIRST_WINS_FIELDS = {
+    "PRODUCT_NAME", "LEAD_MARKER", "SOURCE_FILE_PRODUCT", "PLAN_TYPE",
+    "PROVIDER_NAME", "IS_BANK_OFFERED", "FINANCING_TYPE", "GENDER",
+    "ACCOUNT_TYPE", "CARD_TYPE", "CURRENCY", "CURRENCY_TYPE",
+    "DEPOSIT_PROFIT_TYPE", "DEPOSIT_PROFIT_FREQUENCY", "SERVICE_TYPE",
+    "REWARD_TYPE",
+}
+
+
+def _deduplicate_pipe_values(combined: str) -> str:
+    """Deduplicate pipe-separated values while preserving order."""
+    parts = [p.strip() for p in combined.split("|")]
+    seen = set()
+    unique = []
+    for p in parts:
+        p_lower = p.lower()
+        if p and p_lower not in seen:
+            seen.add(p_lower)
+            unique.append(p)
+    return " | ".join(unique)
+
+
 def merge_records(accumulated: dict, new_record: dict, columns) -> dict:
     """
     Merge a single chunk's extracted record into the running accumulated
     record for the product.
 
-    Strategy (improved):
-    - Empty → real value: accept the new value
-    - Both real: for text fields, prefer the LONGER value (more likely to be
-      complete, e.g. a full tier table vs a partial one from a chunk boundary).
-      For strict numeric fields, keep the first value found.
+    Strategy (generalized for multi-chunk documents):
+    - Empty → real value: accept the new value.
+    - CONCATENATE_FIELDS (list-type text): combine values with " | " separator
+      and deduplicate, so complementary information from different chunks is
+      preserved instead of discarded.
+    - FIRST_WINS_FIELDS (identity/categorical): keep the first non-N/A value.
+    - STRICT_NUMERIC_COLUMNS: keep the first value found.
+    - All other text fields: prefer the longer value (more likely complete).
     """
     for col in columns:
         old = accumulated.get(col)
@@ -505,12 +570,19 @@ def merge_records(accumulated: dict, new_record: dict, columns) -> dict:
         new_is_real = new not in (None, "", DEFAULT_VALUE)
         if old_is_empty and new_is_real:
             accumulated[col] = new
-        elif not old_is_empty and new_is_real and col not in STRICT_NUMERIC_COLUMNS:
-            # Both have real values — prefer the longer one for non-strict-
-            # numeric fields, as it's more likely to be the complete value
-            # (e.g. a full tier table vs a partial one from a chunk boundary).
-            if len(str(new)) > len(str(old)) + 20:
-                accumulated[col] = new
+        elif not old_is_empty and new_is_real:
+            if col in STRICT_NUMERIC_COLUMNS or col in FIRST_WINS_FIELDS:
+                # Keep the first value found for identity/numeric fields.
+                pass
+            elif col in CONCATENATE_FIELDS:
+                # Combine complementary information from different chunks.
+                combined = f"{old} | {new}"
+                accumulated[col] = _deduplicate_pipe_values(combined)
+            else:
+                # For other text fields, prefer the longer value (more
+                # likely to be the complete extraction).
+                if len(str(new)) > len(str(old)) + 20:
+                    accumulated[col] = new
     return accumulated
 
 
@@ -743,51 +815,47 @@ def get_source_filename(entry) -> str:
     return entry.get("title", DEFAULT_VALUE)
 
 
-# Updated max lengths to match corrected-dataset ground-truth observations.
-# Fields absent from this dict are not truncated (e.g. EMPLOYMENT_TYPE can
-# be a long semicolon-separated Target Market list).
+# Generous max lengths for generalization across many banks/products.
+# Fields absent from this dict are not truncated.
 field_max_lengths = {
-    "PRODUCT_NAME": 50,
-    "PRODUCT_DESCRIPTION": 250,
-    "PROVIDER_NAME": 100,
-    "PRODUCT_VARIANT_TIER": 50,
-    "PRICING_RATE": 400,           # age-band pricing tables can be ~370 chars
-    "FEES_AND_CHARGES": 300,       # detailed fee schedules up to ~256 chars
-    "KEY_BENEFITS": 280,           # widened: full core-benefit lists observed >250 chars
-    "OPTIONAL_RIDERS": 300,        # rider lists up to ~253 chars
-    "REQUIRED_DOCUMENTS": 280,     # FIXED: widened from 220 to accommodate full document lists
-    "CLAIMS_SERVICE_CONTACT": 220, # FIXED: widened from 200 for insurance contact details
-    "KEY_EXCLUSIONS": 250,         # FIXED: widened from 200 for comprehensive exclusion lists
-    "TAX_ZAKAT_TREATMENT": 100,
-    "PLAN_TYPE": 30,                # widened: descriptive category, not single word
-    "TARGET_GOAL": 50,             # "Children's Education Planning" style values
-    "CUSTOMER_TYPE": 60,            # widened: may hold multiple "|"-joined enum values
-    "EMPLOYMENT_TYPE": 500,        # full Target Market list ~334 chars
-    "ACCOUNT_TYPE": 20,
-    "CARD_TYPE": 25,
-    "CHANNEL": 30,
-    "ELIGIBILITY_TYPE": 120,       # FIXED: widened from 100 for detailed eligibility rules
-    "SERVICE_TYPE": 25,
-    "REWARD_TYPE": 25,
-    "CURRENCY": 30,
-    "CURRENCY_TYPE": 15,
-    "LOAN_AMOUNT_RANGE": 60,       # FIXED: widened from 50 for capacity range descriptions
-    "COVERAGE_AMOUNT": 350,        # FIXED: widened from 300 for full 9-tier coverage tables
-    "FINANCING_TYPE": 50,          # "Hybrid (Bonus Based and Unit Linked)" = 36 chars
-    "DEPOSIT_PROFIT_TYPE": 30,
-    "DEPOSIT_PROFIT_FREQUENCY": 20,
-    "TENURE": 60,                  # FIXED: widened from 50 for complex tenor descriptions
-    "TENURE_OPTIONS": 60,          # FIXED: widened from 50 for multiple tenor options
-    "BUSINESS_TENURE": 100,        # widened: may contain tiered tenure like "2 years SEP | 3 years SEB"
-    "COLLATERAL_TYPE": 80,         # FIXED: widened from 50 for multiple property types
-    "EQUITY_REQUIREMENT": 25,      # FIXED: widened from 20 to handle percentage + qualifiers
-    "DBR_LIMIT": 20,
-    "TRANSACTION_LIMIT": 60,       # FIXED: widened from 50
-    "SPECIAL_CONDITIONS": 280,     # FIXED: widened from 250 for detailed multi-condition rules
-    "PREMIUM_PAYMENT_FREQUENCY": 50,
-    "PRODUCT_DESCRIPTION": 300,    # FIXED: widened from 250 for full feature descriptions
-    "KEY_BENEFITS": 320,           # FIXED: widened from 280 for complete benefit lists
-
+    "PRODUCT_NAME": 80,
+    "PRODUCT_DESCRIPTION": 450,
+    "PROVIDER_NAME": 150,
+    "PRODUCT_VARIANT_TIER": 80,
+    "PRICING_RATE": 500,
+    "FEES_AND_CHARGES": 450,
+    "KEY_BENEFITS": 500,
+    "OPTIONAL_RIDERS": 400,
+    "REQUIRED_DOCUMENTS": 400,
+    "CLAIMS_SERVICE_CONTACT": 300,
+    "KEY_EXCLUSIONS": 400,
+    "TAX_ZAKAT_TREATMENT": 150,
+    "PLAN_TYPE": 40,
+    "TARGET_GOAL": 80,
+    "CUSTOMER_TYPE": 120,
+    "EMPLOYMENT_TYPE": 500,
+    "ACCOUNT_TYPE": 40,
+    "CARD_TYPE": 40,
+    "CHANNEL": 100,
+    "ELIGIBILITY_TYPE": 200,
+    "SERVICE_TYPE": 40,
+    "REWARD_TYPE": 40,
+    "CURRENCY": 50,
+    "CURRENCY_TYPE": 30,
+    "LOAN_AMOUNT_RANGE": 100,
+    "COVERAGE_AMOUNT": 500,
+    "FINANCING_TYPE": 60,
+    "DEPOSIT_PROFIT_TYPE": 40,
+    "DEPOSIT_PROFIT_FREQUENCY": 30,
+    "TENURE": 80,
+    "TENURE_OPTIONS": 80,
+    "BUSINESS_TENURE": 120,
+    "COLLATERAL_TYPE": 120,
+    "EQUITY_REQUIREMENT": 40,
+    "DBR_LIMIT": 30,
+    "TRANSACTION_LIMIT": 80,
+    "SPECIAL_CONDITIONS": 400,
+    "PREMIUM_PAYMENT_FREQUENCY": 60,
 }
 
 # Fields where a comma is *always* a list separator (never a monetary or
@@ -878,34 +946,38 @@ def truncate_to_boundary(value: str, max_len: int) -> str:
 
 def _normalize_plan_type(value: str) -> str:
     """
-    PLAN_TYPE is now a short descriptive category (see prompt) rather than a
-    rigid single word. We only lightly clean it here:
-      - Preserve it as-is if it already contains "Insurance" (the anchor
-        word required for any insurer-underwritten product).
-      - Otherwise, map to the closest bank-only enum word if the value
-        clearly corresponds to one.
-      - Never silently discard an unrecognized but plausible value — that
-        would hide real extraction content behind "N/A" and doesn't
-        generalize well across 200+ documents with varied phrasing.
+    PLAN_TYPE is a short descriptive category. Lightly normalize without
+    discarding unrecognized-but-plausible values (generalization fix).
+    Handles compound types like "Loan Insurance" or "Credit Insurance".
     """
     stripped = value.strip()
     if not stripped or stripped.upper() == DEFAULT_VALUE:
         return DEFAULT_VALUE
 
-    if "insurance" in stripped.lower():
-        return stripped[:30]
+    lower = stripped.lower()
+    known = {"Deposit", "Loan", "Card", "Service", "Loyalty", "Investment", "Savings", "Insurance"}
 
-    bank_only = {"Deposit", "Loan", "Card", "Service", "Loyalty", "Investment", "Savings"}
-    for word in bank_only:
-        if stripped.lower() == word.lower():
+    # Check for compound types where "insurance" is a modifier (Issue 18).
+    # "Loan Insurance", "Credit Insurance" → the primary type is Loan/Credit.
+    loan_insurance_patterns = ["loan insurance", "credit insurance", "mortgage insurance"]
+    if any(p in lower for p in loan_insurance_patterns):
+        return "Loan"
+
+    # If it contains "insurance" or "takaful" as a primary concept, keep it.
+    if "insurance" in lower or "takaful" in lower:
+        return stripped[:40]
+
+    # Exact match to known enum
+    for word in known:
+        if lower == word.lower():
             return word
-    for word in bank_only:
-        if word.lower() in stripped.lower().split():
+    # First-word match (e.g., "Savings Plan" → "Savings")
+    for word in known:
+        if word.lower() in lower.split():
             return word
 
-    # Keep the model's descriptive value rather than forcing N/A — this
-    # preserves genuinely new categories seen in unseen documents.
-    return stripped[:30]
+    # Keep the model's value — preserves new categories from unseen documents.
+    return stripped[:40]
 
 
 def _normalize_financing_type(value: str) -> str:
@@ -922,30 +994,12 @@ def _normalize_financing_type(value: str) -> str:
     
     lower = stripped.lower()
 
-    # Check for clear loan signals — if found, override to Conventional/Islamic
-    # These keywords indicate a bank loan, not an insurance investment structure
-    loan_signals = {
-        "markup", "kibor", "murabaha", "musharaka", "ijarah",
-        "term loan", "credit facility", "financing facility", 
-        "overdraft", "conventional bank", "islamic bank"
-    }
-    
-    if any(sig in lower for sig in loan_signals):
-        # This is a loan product, not insurance
-        if any(word in lower for word in ["islamic", "murabaha", "musharaka", "ijarah", "shariah"]):
-            return "Islamic"
-        else:
-            return "Conventional"
-
     # Hybrid check (insurance-only structures)
     if "hybrid" in lower or ("bonus" in lower and "unit" in lower):
         return "Hybrid (Bonus Based and Unit Linked)"
 
     # Unit Linked (insurance-only)
     if "unit linked" in lower or "unit-linked" in lower or "pia" in lower:
-        # But if loan signals are present, this is a mistake — use Conventional
-        if any(sig in lower for sig in loan_signals):
-            return "Conventional"
         return "Unit Linked"
 
     # Single-word canonicals
@@ -973,35 +1027,15 @@ def _normalize_financing_type(value: str) -> str:
 def _normalize_target_goal(value: str) -> str:
     """Normalize TARGET_GOAL to corrected style.
 
-    Extended with solar/green energy/financing categories so that bank loan
-    products (term finance, auto finance, SME financing) are correctly
-    classified instead of being mapped to insurance-product goals like
-    'Protection'. More specific multi-word keys are checked before shorter
-    single-word keys to prevent partial matches (e.g. 'green energy' before
-    'energy' alone).
+    Normalize only clear, specific variants. The extracted value remains the
+    source of truth: single-word product-name matches are too ambiguous.
     """
     if not value or value == DEFAULT_VALUE:
         return DEFAULT_VALUE
     val_lower = value.lower()
     mappings = {
-        # Financing / loan categories — checked first so they take priority
-        # over shorter generic keys like "home" or "income".
-        "solar energy": "Solar Energy Financing",
-        "green energy": "Green Energy Financing",
         "working capital": "SME Financing",
         "income protection": "Income Protection",
-        # Single-word financing keys
-        "solar": "Solar Energy Financing",
-        "energy": "Green Energy Financing",
-        "green": "Green Energy Financing",
-        "vehicle": "Vehicle Financing",
-        "car": "Vehicle Financing",
-        "motor": "Vehicle Financing",
-        "housing": "Housing",
-        "sme": "SME Financing",
-        "business": "Business Financing",
-        "personal": "Personal Financing",
-        "micro": "Microfinance",
         # Insurance / savings plan categories
         "multipurpose": "Multipurpose Savings",
         "hospitalization": "Health",
@@ -1015,10 +1049,7 @@ def _normalize_target_goal(value: str) -> str:
         "children": "Education",
         "hajj": "Hajj Savings",
         "umrah": "Hajj Savings",
-        "home": "Housing",
-        "investment": "Investment",
-        "wealth": "Wealth Management",
-        "income": "Income Protection",
+        "wealth management": "Wealth Management",
     }
     for key, norm in mappings.items():
         if key in val_lower:
@@ -1027,13 +1058,38 @@ def _normalize_target_goal(value: str) -> str:
 
 
 def _normalize_channel(value: str) -> str:
-    """Standardize CHANNEL."""
+    """Standardize CHANNEL — preserve ALL channels, not just the first one."""
     if not value or value == DEFAULT_VALUE:
         return DEFAULT_VALUE
-    val_lower = value.lower()
-    if "branch" in val_lower or "branches" in val_lower:
-        return "Bank Branch"
-    return value.strip()[:30]
+    # Normalize each segment of a multi-value channel field.
+    segments = re.split(r'[|;,]+', value)
+    normalized = []
+    for seg in segments:
+        seg_clean = seg.strip()
+        if not seg_clean:
+            continue
+        seg_lower = seg_clean.lower()
+        if "branch" in seg_lower:
+            if "Bank Branch" not in normalized:
+                normalized.append("Bank Branch")
+        elif "mobile" in seg_lower or "app" in seg_lower:
+            if "Mobile App" not in normalized:
+                normalized.append("Mobile App")
+        elif "atm" in seg_lower:
+            if "ATM" not in normalized:
+                normalized.append("ATM")
+        elif "online" in seg_lower or "internet" in seg_lower:
+            if "Online" not in normalized:
+                normalized.append("Online")
+        elif "telephone" in seg_lower or "call" in seg_lower or "phone" in seg_lower:
+            if "Telephone" not in normalized:
+                normalized.append("Telephone")
+        else:
+            if seg_clean not in normalized:
+                normalized.append(seg_clean)
+    if normalized:
+        return " | ".join(normalized)
+    return value.strip()[:100]
 
 
 def _normalize_eligibility(value: str) -> str:
@@ -1047,17 +1103,32 @@ def _normalize_eligibility(value: str) -> str:
 
 def _normalize_customer_type(value: str) -> str:
     """
-    CUSTOMER_TYPE may legitimately hold MULTIPLE enum values (ground truth
-    shows e.g. "Salaried|Self-Employed"), so — unlike the previous version —
-    we no longer collapse to a single value. Each "|"-or-","-separated
-    segment is validated against the allowed enum; valid segments are kept
-    (deduplicated, order preserved) and joined with " | ". Segments that
-    don't match the enum are dropped rather than kept as free text, since
-    CUSTOMER_TYPE must stay a controlled vocabulary field.
+    CUSTOMER_TYPE: normalize known values to canonical form, but PRESERVE
+    unrecognized values instead of dropping them — unseen documents from
+    different banks may use customer types not in our original enum
+    (e.g., NRP, HNI, Agriculture, Student, Women, Senior Citizen).
     """
-    allowed = {
-        "Salaried", "Self-Employed", "SME",
-        "Corporate", "Retail", "Government",
+    canonical_map = {
+        "salaried": "Salaried",
+        "self-employed": "Self-Employed",
+        "self employed": "Self-Employed",
+        "sme": "SME",
+        "corporate": "Corporate",
+        "retail": "Retail",
+        "government": "Government",
+        "nrp": "NRP",
+        "hni": "HNI",
+        "agriculture": "Agriculture",
+        "student": "Student",
+        "women": "Women",
+        "female": "Women",
+        "senior citizen": "Senior Citizen",
+        "pensioner": "Senior Citizen",
+        "minor": "Minor",
+        "joint": "Joint",
+        "freelancer": "Freelancer",
+        "individual": "Retail",
+        "individuals": "Retail",
     }
     stripped = value.strip()
     if not stripped or stripped.upper() == DEFAULT_VALUE:
@@ -1069,10 +1140,15 @@ def _normalize_customer_type(value: str) -> str:
         seg_clean = seg.strip()
         if not seg_clean:
             continue
-        for vt in allowed:
-            if seg_clean.lower() == vt.lower() and vt not in kept:
-                kept.append(vt)
-                break
+        matched = canonical_map.get(seg_clean.lower())
+        if matched:
+            if matched not in kept:
+                kept.append(matched)
+        else:
+            # Preserve unrecognized values in Title Case instead of dropping.
+            title_val = seg_clean.title()
+            if title_val not in kept:
+                kept.append(title_val)
     if kept:
         return " | ".join(kept)
     return DEFAULT_VALUE
@@ -1081,14 +1157,30 @@ def _normalize_customer_type(value: str) -> str:
 
 def _normalize_employment_type(value: str) -> str:
     """
-    EMPLOYMENT_TYPE may hold MULTIPLE enum values (Salaried|Self-Employed|
-    Contract|Permanent|Proprietor|Partner|Director), so we preserve all valid
-    matches separated by " | ". This fixes the previous behavior of collapsing
-    to a single value, which lost employment eligibility information.
+    EMPLOYMENT_TYPE: normalize known values to canonical form, PRESERVE
+    unrecognized values. Expanded to cover employment types common across
+    many Pakistani and international banks.
     """
-    allowed = {
-        "Salaried", "Self-Employed", "Contract", "Permanent",
-        "Proprietor", "Partner", "Director", "Business Owner",
+    canonical_map = {
+        "salaried": "Salaried",
+        "self-employed": "Self-Employed",
+        "self employed": "Self-Employed",
+        "contract": "Contract",
+        "permanent": "Permanent",
+        "proprietor": "Proprietor",
+        "partner": "Partner",
+        "director": "Director",
+        "business owner": "Business Owner",
+        "professional": "Professional",
+        "freelancer": "Freelancer",
+        "pensioner": "Pensioner",
+        "retired": "Retired",
+        "agriculture": "Agriculture",
+        "armed forces": "Armed Forces",
+        "government employee": "Government Employee",
+        "daily wage": "Daily Wage",
+        "sep": "Self-Employed",
+        "seb": "Self-Employed",
     }
     stripped = value.strip()
     if not stripped or stripped.upper() == DEFAULT_VALUE:
@@ -1100,10 +1192,15 @@ def _normalize_employment_type(value: str) -> str:
         seg_clean = seg.strip()
         if not seg_clean:
             continue
-        for vt in allowed:
-            if seg_clean.lower() == vt.lower() and vt not in kept:
-                kept.append(vt)
-                break
+        matched = canonical_map.get(seg_clean.lower())
+        if matched:
+            if matched not in kept:
+                kept.append(matched)
+        else:
+            # Preserve unrecognized employment types in Title Case.
+            title_val = seg_clean.title()
+            if title_val not in kept:
+                kept.append(title_val)
     if kept:
         return " | ".join(kept)
     return DEFAULT_VALUE
@@ -1325,13 +1422,8 @@ def _clean_insurance_required_documents(required_docs: str) -> str:
     "Required Documents" or "Documentation Required". If this function gets garbage
     text (like hallucinated documents), it will reject it.
     
-    Loan keywords to NEVER appear in insurance REQUIRED_DOCUMENTS:
-    "salary slip", "employment certificate", "bank statement", "tax return",
-    "proprietorship", "processing fee", "property documents", "collateral"
-    
-    Claim processing phrases (these are CLAIMS procedures, not upfront documentation):
-    "claim processing", "step 1", "inform alfalah", "call and inform",
-    "for claims", "claims procedure", "filing a claim", "claim settlement", "fir"
+    Reject only unmistakable loan/collateral or claims-procedure language.
+    Income and identity documents can be valid insurance application documents.
     
     Hallucination indicators:
     If required_docs contains a mix of unrelated document types (e.g., "CNIC | Passport | 
@@ -1341,13 +1433,7 @@ def _clean_insurance_required_documents(required_docs: str) -> str:
         return "N/A"
     
     loan_contamination_keywords = {
-        "salary slip", "salary slips",
-        "employment certificate", "employment cert",
-        "bank statement", "bank statements",
-        "tax return", "tax returns", "income tax return",
-        "proprietorship", "proprietor",
         "processing fee",
-        "property document", "property documents",
         "collateral",
         "title deed", "ownership certificate",
         "noc",  # No Objection Certificate (used in loan collateral)
@@ -1367,7 +1453,7 @@ def _clean_insurance_required_documents(required_docs: str) -> str:
         "step 1", "step 2", "step 3", "step 4", "step 5",
         
         # Action-oriented procedures
-        "call and inform", "inform alfalah", "inform the insurer", "contact alfalah",
+        "call and inform", "inform the bank", "inform the insurer", "contact the provider",
         "inform police", "get a fir", "provide the required",
         
         # Time-based claim language
@@ -1616,7 +1702,7 @@ def _validate_product_variant_tier(tier_value: str, doc_text: str) -> str:
 def _validate_employment_restrictions(employment_value: str, doc_text: str) -> str:
     """
     CRITICAL FIX: Prevent hallucination of employment restrictions.
-    If document says "all Bank Alfalah customers" with no employment restriction,
+    If document says it is available to all customers with no employment restriction,
     do NOT hallucinate "Salaried | Self-Employed".
     
     If employment types are claimed but document says "all customers", return "N/A".
@@ -1628,15 +1714,15 @@ def _validate_employment_restrictions(employment_value: str, doc_text: str) -> s
     
     # Check for "all customers" language
     all_customer_phrases = [
-        "all bank alfalah customers",
-        "all bank alfalah limited customers",
+        r"all\s+(?:[\w.&'-]+\s+){0,4}(?:bank\s+)?customers?",
         "all customers",
         "available to all",
         "open to all",
         "eligible to all"
     ]
     
-    if any(phrase in doc_lower for phrase in all_customer_phrases):
+    if any(re.search(phrase, doc_lower) if phrase.startswith("all\\s") else phrase in doc_lower
+           for phrase in all_customer_phrases):
         # Document says "all customers" with no employment restriction
         # Any employment-based segmentation is hallucinated
         return "N/A"
@@ -1715,11 +1801,9 @@ def _validate_age_requirements(min_age: str, max_age: str, doc_text: str) -> tup
     # there is NO age restriction. Any extracted ages are hallucinated.
     all_customer_phrases = [
         "available to all",
-        "all bank alfalah",
         "all customers",
         "open to all",
         "eligible to all",
-        "available to all bank alfalah"
     ]
     
     if any(phrase in doc_lower for phrase in all_customer_phrases):
@@ -1929,14 +2013,12 @@ def _crossfield_validate(normalized: dict) -> dict:
             "LOAN_AMOUNT_RANGE",    # Only loans have amount ranges
             "COLLATERAL_TYPE",      # Only loans have collateral
             "DBR_LIMIT",           # Only loans have debt ratios
+            "EQUITY_REQUIREMENT",
+            "BUSINESS_TENURE",
         }
         for field in loan_fields:
             if field in normalized:
-                current = normalized[field]
-                # Only clear if it looks like a loan field got populated by mistake
-                if isinstance(current, str) and current not in ("N/A", "") and \
-                   any(kw in current.lower() for kw in ["million", "thousand", "k", "m", "pkr", "usd", "million", "lending"]):
-                    normalized[field] = "N/A"
+                normalized[field] = "N/A"
         
         # CRITICAL FIX: For insurance products, PRICING_RATE should be N/A
         # (insurance premiums go in MIN_CONTRIBUTION, not PRICING_RATE).
@@ -2127,10 +2209,10 @@ def _infer_and_correct_lead_marker(normalized: dict, doc_text: str = "") -> dict
     has_term_finance = has_term_finance_in_fields or has_term_finance_in_doc
     has_financing = "financing" in combined_text or "financing" in desc
     
-    # CRITICAL: For loans, if provider is Bank Alfalah and no insurance company is mentioned,
-    # it's almost certainly a bank loan (BNK), not insurance (IBG)
-    is_bank_only = ("bank alfalah" in prov or "bank " in prov) and "insurance" not in prov
-    has_loan_keywords = any(sig in combined_text for sig in ["term finance", "loan", "financing", "green energy", "solar"])
+    # A provider whose name contains "bank" (and no insurer/takaful signal) is
+    # likely offering a bank product, regardless of the institution's name.
+    is_bank_only = bool(re.search(r"\bbank\b", prov)) and not re.search(r"insurance|takaful|assurance", prov)
+    has_loan_keywords = any(sig in combined_text for sig in ["term finance", "loan", "financing", "credit facility"])
     
     # BUG FIX: Also detect loan products from document keywords not in extracted fields
     # KIBOR, markup are strong loan indicators that might not appear in normalized fields
@@ -2238,6 +2320,14 @@ def _normalize_employment_type(value: str) -> str:
             "corporate": "Corporate",
             "retail": "Retail",
             "government": "Government",
+            "professional": "Professional",
+            "freelancer": "Freelancer",
+            "pensioner": "Pensioner",
+            "retired": "Retired",
+            "agriculture": "Agriculture",
+            "armed forces": "Armed Forces",
+            "government employee": "Government Employee",
+            "daily wage": "Daily Wage",
         }
         lower = stripped.lower()
         for key, norm in normalized_map.items():
@@ -2261,6 +2351,14 @@ def _normalize_employment_type(value: str) -> str:
         "partnership": "Self-Employed",
         "corporate": "Corporate",
         "contractual": "Contractual",
+        "professional": "Professional",
+        "freelancer": "Freelancer",
+        "pensioner": "Pensioner",
+        "retired": "Retired",
+        "agriculture": "Agriculture",
+        "armed forces": "Armed Forces",
+        "government employee": "Government Employee",
+        "daily wage": "Daily Wage",
     }
     
     found = []
@@ -2493,28 +2591,18 @@ def normalize_record(record, entry, doc_text=""):
     normalized["PRODUCT_NAME"] = raw_name
     normalized["SOURCE_FILE_PRODUCT"] = get_source_filename(entry)
 
-    # ===== VALIDATION LAYER DISABLED =====
-    # Validation functions remain in code for future use but are NOT called
-    # To enable validation, uncomment the blocks below
-    # normalized = _crossfield_validate(normalized)
-    
-    # ===== VALIDATION LAYER DISABLED =====
-    # if "PRODUCT_VARIANT_TIER" in normalized and doc_text:
-    #     normalized["PRODUCT_VARIANT_TIER"] = _validate_product_variant_tier(
-    #         normalized.get("PRODUCT_VARIANT_TIER", "N/A"), doc_text
-    #     )
-    
-    # ===== VALIDATION LAYER DISABLED =====
-    # if "TENURE_OPTIONS" in normalized and doc_text:
-    #     normalized["TENURE_OPTIONS"] = _validate_tenure_options(
-    #         normalized.get("TENURE_OPTIONS", "N/A"), doc_text
-    #     )
-    
-    # ===== VALIDATION LAYER DISABLED =====
-    # if "LOAN_AMOUNT_RANGE" in normalized and doc_text:
-    #     normalized["LOAN_AMOUNT_RANGE"] = _validate_loan_amount_range(
-    #         normalized.get("LOAN_AMOUNT_RANGE", "N/A"), doc_text
-    #     )
+    if "PRODUCT_VARIANT_TIER" in normalized and doc_text:
+        normalized["PRODUCT_VARIANT_TIER"] = _validate_product_variant_tier(
+            normalized.get("PRODUCT_VARIANT_TIER", "N/A"), doc_text
+        )
+    if "TENURE_OPTIONS" in normalized and doc_text:
+        normalized["TENURE_OPTIONS"] = _validate_tenure_options(
+            normalized.get("TENURE_OPTIONS", "N/A"), doc_text
+        )
+    if "LOAN_AMOUNT_RANGE" in normalized and doc_text:
+        normalized["LOAN_AMOUNT_RANGE"] = _validate_loan_amount_range(
+            normalized.get("LOAN_AMOUNT_RANGE", "N/A"), doc_text
+        )
     
     # CRITICAL FIX: For insurance products (LEAD_MARKER="IBG"), ACCOUNT_TYPE must be "N/A"
     # ACCOUNT_TYPE is only for bank accounts (Current, Savings, Wallet), not insurance products
@@ -2522,37 +2610,25 @@ def normalize_record(record, entry, doc_text=""):
     if lead_marker == "IBG":
         normalized["ACCOUNT_TYPE"] = "N/A"
     
-    # ===== VALIDATION LAYER DISABLED =====
-    # if "EMPLOYMENT_TYPE" in normalized and doc_text:
-    #     normalized["EMPLOYMENT_TYPE"] = _validate_employment_restrictions(
-    #         normalized.get("EMPLOYMENT_TYPE", "N/A"), doc_text
-    #     )
-    
-    # ===== VALIDATION LAYER DISABLED =====
-    # if doc_text and ("MIN_AGE" in normalized or "MAX_AGE" in normalized):
-    #     min_age, max_age = _validate_age_requirements(
-    #         normalized.get("MIN_AGE", "N/A"),
-    #         normalized.get("MAX_AGE", "N/A"),
-    #         doc_text
-    #     )
-    #     normalized["MIN_AGE"] = min_age
-    #     normalized["MAX_AGE"] = max_age
-    
-    # ===== VALIDATION LAYER DISABLED =====
-    # if doc_text and "MIN_TERM_YEARS" in normalized:
-    #     min_term_value = normalized.get("MIN_TERM_YEARS", "N/A")
-    #     max_term_value = normalized.get("MAX_TERM_YEARS", "N/A")
-    #     validated_min_term = _validate_min_term_years(
-    #         min_term_value,
-    #         max_term_value,
-    #         doc_text
-    #     )
-    #     normalized["MIN_TERM_YEARS"] = validated_min_term
+    if "EMPLOYMENT_TYPE" in normalized and doc_text:
+        normalized["EMPLOYMENT_TYPE"] = _validate_employment_restrictions(
+            normalized.get("EMPLOYMENT_TYPE", "N/A"), doc_text
+        )
+    if doc_text and ("MIN_AGE" in normalized or "MAX_AGE" in normalized):
+        min_age, max_age = _validate_age_requirements(
+            normalized.get("MIN_AGE", "N/A"), normalized.get("MAX_AGE", "N/A"), doc_text
+        )
+        normalized["MIN_AGE"], normalized["MAX_AGE"] = min_age, max_age
+    if doc_text and "MIN_TERM_YEARS" in normalized:
+        normalized["MIN_TERM_YEARS"] = _validate_min_term_years(
+            normalized.get("MIN_TERM_YEARS", "N/A"), normalized.get("MAX_TERM_YEARS", "N/A"), doc_text
+        )
     
     # CRITICAL FIX: Infer and correct LEAD_MARKER based on product signals
     # This catches loans incorrectly classified as insurance products
     # Pass the full document text for validation and product name checking
     normalized = _infer_and_correct_lead_marker(normalized, doc_text=doc_text)
+    normalized = _crossfield_validate(normalized)
     
     # CRITICAL FIX: Correct coverage amounts that were misplaced into LOAN_AMOUNT_RANGE
     normalized = _fix_coverage_loan_amount_confusion(normalized)
@@ -2829,7 +2905,7 @@ VALIDATION RULES — check each and FIX if violated:
 
 23. LEAD_MARKER + PROVIDER_NAME:
     If LEAD_MARKER="BNK": PROVIDER_NAME must be the bank name only (e.g.
-    "Bank Alfalah Limited"). It must NOT contain an insurance or takaful
+    "Example Bank Limited"). It must NOT contain an insurance or takaful
     company name. Fix to the bank name found in the document.
 
 24. LEAD_MARKER + COVERAGE_AMOUNT:
