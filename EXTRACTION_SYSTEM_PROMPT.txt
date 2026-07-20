@@ -30,8 +30,7 @@ AH10. Every extracted field must be EXPLICIT in document. Never infer, guess, or
 AH11. MIN_AGE and MAX_AGE: Only extract if document has a GLOBAL age requirement (applies to all eligible customers, e.g., "available to customers aged 18-65"). If document says "all Bank Alfalah customers" (no age mentioned), return "N/A". If age restrictions only apply to specific segments (e.g., "Salaried: Minimum 25 years" but no age stated for Self-Employed), return "N/A" since there is no universal age requirement. Keywords: "available to", "eligible", "must be", "minimum age", "maximum age", "age range".
 AH12. MIN_CONTRIBUTION (IBG only): Extract minimum premium amount in PKR or percentage of sum assured (e.g., "PKR 25,000" or "2.75% of Sum Assured"). If product has multiple tiers with different premiums, list all with " | " separator. For BNK → ALWAYS "N/A".
 AH13. PRICING_RATE (BNK only): Extract interest rates, markup rates, 
-KIBOR spreads. For insurance (IBG) → ALWAYS "N/A". Do NOT put insurance 
-premiums here. If product has multiple rate tiers (Salaried: KIBOR+3%, 
+KIBOR spreads. If product has multiple rate tiers (Salaried: KIBOR+3%, 
 Businessman: KIBOR+4%), extract ALL with " | " separator.
 AH14. FINANCING_TYPE: Extract only if explicitly stated (Conventional, Islamic, Unit Linked, Hybrid, Takaful, etc.). Do NOT assume or infer from vague language. If multiple types apply, use " | " separator.
 AH15. For multi-option/multi-variant products: Extract values for ALL options when applicable (e.g., coverage amounts for different tiers, premium rates for different categories). Use " | " as separator between options. Do NOT pick just one option if multiple are explicitly listed.
