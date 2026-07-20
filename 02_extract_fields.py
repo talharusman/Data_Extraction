@@ -1157,6 +1157,7 @@ def _extract_tenure_years(tenure_text: str) -> tuple[int | None, int | None]:
     Examples:
       "Up to 10 years" → (None, 10)  # No minimum stated
       "Minimum 2 to 10 years" → (2, 10)
+      "Minimum Term: 10 years" → (10, None)  # Only minimum, no max
       "5-10 years" → (5, 10)
       "1 Year" → (1, 1)  # Only if explicitly "1 year"
       "10-67 years" → (10, 67)
@@ -1168,24 +1169,43 @@ def _extract_tenure_years(tenure_text: str) -> tuple[int | None, int | None]:
     
     text = tenure_text.lower().strip()
     
+    # Pattern 0: "Minimum Term: X years" or "Minimum Term: X-Y years" (CRITICAL FIX for Products 1 & 3)
+    # This handles formats like "Minimum Term: 10 years" which documents use with colon separator
+    match = re.search(r"minimum\s+term\s*:\s*(\d+)\s*[-to\s]*(\d+)?\s+years?", text)
+    if match:
+        min_year = int(match.group(1))
+        if match.group(2):  # Has both min and max (e.g., "Minimum Term: 10-65 years")
+            max_year = int(match.group(2))
+            return min_year, max_year
+        else:  # Only minimum (e.g., "Minimum Term: 10 years")
+            return min_year, None
+    
     # Pattern 1: "Up to X years" or "Up to X year" — NO minimum
     match = re.search(r"up\s+to\s+(\d+)\s+years?", text)
     if match:
         max_year = int(match.group(1))
         return None, max_year  # No minimum, only maximum
     
-    # Pattern 2: "X-Y years" or "X to Y years"
+    # Pattern 2: "Minimum X to Y years" or "Minimum X-Y years" or "Min X to Y years"
+    match = re.search(r"(?:minimum|min\.?)\s+(\d+)\s*[-to\s]+\s*(\d+)\s+years?", text)
+    if match:
+        min_year = int(match.group(1))
+        max_year = int(match.group(2))
+        return min_year, max_year
+    
+    # Pattern 3: "X-Y years" or "X to Y years"
     match = re.search(r"(\d+)\s*[-to\s]+\s*(\d+)\s+years?", text)
     if match:
         min_year = int(match.group(1))
         max_year = int(match.group(2))
         return min_year, max_year
     
-    # Pattern 3: Single value "X year" or "X years"
-    match = re.search(r"^(\d+)\s+years?$", text)
-    if match:
-        year = int(match.group(1))
-        return year, year
+    # Pattern 4: Single value "X year" or "X years" (but NOT when preceded by "up to")
+    if "up to" not in text:
+        match = re.search(r"^(\d+)\s+years?$", text)
+        if match:
+            year = int(match.group(1))
+            return year, year
     
     return None, None
 
@@ -1306,7 +1326,8 @@ def _clean_insurance_required_documents(required_docs: str) -> str:
     
     Claim processing phrases to detect (these are CLAIMS procedures, not
     upfront documentation requirements):
-    "claim processing", "step 1", "step 2", "inform alfalah", "call and inform"
+    "claim processing", "step 1", "step 2", "inform alfalah", "call and inform",
+    "for claims", "claims procedure", "filing a claim", "when filing", "claim settlement"
     
     These indicate incorrect extraction from a loan section, claim section,
     or hallucination, rather than an insurance-specific documentation section.
@@ -1325,15 +1346,32 @@ def _clean_insurance_required_documents(required_docs: str) -> str:
         "collateral",
         "title deed", "ownership certificate",
         "noc",  # No Objection Certificate (used in loan collateral)
+        "equity", "down payment", "equity requirement",
     }
     
+    # CRITICAL: Extended claims contamination phrases to catch all claim-related text
     claim_processing_phrases = {
-        "claim processing", "processing a claim",
-        "step 1", "step 2", "step 3",
-        "call and inform", "inform alfalah", "inform the insurer",
-        "inform police", "get a fir", "provide the required",
-        "claim has never been", "within 24 hours", "within 48 hours",
-        "fir", "police"
+        # Explicit "for claims" or "for claim" references
+        "for claims", "for claim", "claims procedure", "claim procedure",
+        "claims service", "claim service", "filing a claim", "when filing",
+        "claim settlement", "claims settlement", "claim filing",
+        
+        # Step-by-step claim procedures
+        "step 1", "step 2", "step 3", "step 4",
+        
+        # Action-oriented claim procedures
+        "call and inform", "inform alfalah", "inform the insurer", "contact alfalah",
+        "inform police", "get a fir", "provide the required", "claim has never been",
+        
+        # Time-based claim language
+        "within 24 hours", "within 48 hours", "within 30 days",
+        
+        # Claim document references
+        "fir", "police", "medical report", "death certificate",
+        "physician statement", "claimant statement",
+        
+        # Generic claim references that shouldn't be in REQUIRED_DOCUMENTS
+        "claim", "claims"  # FINAL CATCH-ALL for standalone "claim" or "claims" (if nothing else matches)
     }
     
     docs_lower = required_docs.lower()
@@ -1341,18 +1379,163 @@ def _clean_insurance_required_documents(required_docs: str) -> str:
     # Check if ANY loan contamination keyword appears
     for keyword in loan_contamination_keywords:
         if keyword in docs_lower:
-            # This REQUIRED_DOCUMENTS field is contaminated with loan-specific docs
-            # For insurance, if explicit documentation section wasn't found, return N/A
             return "N/A"
     
-    # Check if this is actually CLAIM PROCESSING text, not documentation requirement
+    # FIRST: Check specific claim processing phrases (before generic "claim" check)
+    # This prevents false positives from phrases like "claim forms" which might legitimately
+    # appear if they refer to the form templates, not the claim procedures
     for phrase in claim_processing_phrases:
-        if phrase in docs_lower:
-            # This is claim processing procedure, not upfront documentation requirement
-            return "N/A"
+        if phrase != "claim" and phrase != "claims":  # Skip generic phrases for now
+            if phrase in docs_lower:
+                return "N/A"
+    
+    # FINAL CHECK: If the text contains "for claims" or "claims procedure" or similar
+    # strong claim indicators, reject it
+    if any(x in docs_lower for x in ["for claims", "claims procedure", "claim procedure", "claim service", "claims service"]):
+        return "N/A"
     
     return required_docs
 
+
+
+def _validate_tenure_options(tenure_options: str, doc_text: str) -> str:
+    """
+    CRITICAL FIX: Validate that TENURE_OPTIONS values actually appear in the document.
+    Prevents hallucination of option schedules like "10|20|30|40|50|60" when document
+    doesn't explicitly list them.
+    
+    TENURE_OPTIONS should ONLY be extracted if explicitly listed or shown in a
+    schedule/table. If options cannot be verified in document, return "N/A".
+    
+    Examples:
+      "1|3|5|7|10" - verify that each option or "1, 3, 5, 7, 10" appears in doc
+      "1Y, 2Y, 3Y" - verify these appear in doc
+      "Flexible" - vague, should be "N/A"
+    """
+    if not tenure_options or tenure_options == "N/A":
+        return "N/A"
+    
+    doc_lower = doc_text.lower()
+    
+    # Extract the options (might be pipe or comma separated)
+    options = re.split(r'[|,]', tenure_options)
+    verified_count = 0
+    
+    for opt in options:
+        opt_clean = opt.strip()
+        if not opt_clean:
+            continue
+        
+        # Check if this option appears in document
+        # Accept variations like "1 year", "1Y", "1 year", "1M", etc.
+        opt_lower = opt_clean.lower()
+        
+        # Remove common suffixes for matching (year, years, month, months, etc.)
+        opt_base = re.sub(r'\s*(years?|year|months?|month|m|y)\s*$', '', opt_lower)
+        
+        # Check for exact match or variations
+        if opt_lower in doc_lower:
+            verified_count += 1
+        elif opt_base and opt_base in doc_lower:
+            verified_count += 1
+        elif re.search(rf'\b{re.escape(opt_base)}\b', doc_lower):
+            verified_count += 1
+    
+    # If at least 50% of options are verified, keep the value
+    # (some options might be implied or stated differently)
+    verification_rate = verified_count / len([o for o in options if o.strip()])
+    if verification_rate >= 0.5:
+        return tenure_options
+    
+    # If less than 50% verified, it's likely hallucinated
+    return "N/A"
+
+
+def _validate_loan_amount_range(loan_amount: str, doc_text: str) -> str:
+    """
+    CRITICAL FIX: Validate that LOAN_AMOUNT_RANGE does not contain measurement
+    units like KW, MW, capacity, size, etc. These are technical specifications,
+    not loan amounts.
+    
+    Examples of REJECTION:
+      "4KW-1000KW" → "N/A" (this is solar capacity, not loan amount)
+      "300MW-1000MW" → "N/A" (this is power capacity, not loan amount)
+      "4.5m2-1000m2" → "N/A" (this is area, not loan amount)
+    
+    Examples of ACCEPTANCE:
+      "Up to PKR 5 Million" → keep
+      "200,000-3,000,000" → keep
+      "PKR 100K-500K" → keep
+    """
+    if not loan_amount or loan_amount == "N/A":
+        return loan_amount
+    
+    loan_lower = loan_amount.lower()
+    
+    # REJECTION PATTERNS: Technical specification keywords that indicate measurement, not monetary
+    measurement_keywords = {
+        "kw", "kilowatt", "mw", "megawatt", "gw", "gigawatt",  # Power
+        "m2", "m²", "square meter", "sqm",  # Area
+        "m3", "m³", "cubic meter",  # Volume
+        "tonnes", "tons", "kg", "kilogram",  # Weight
+        "capacity", "size", "dimension",  # Generic size
+        "output", "generation", "wattage",  # Power generation
+        "rpm", "horsepower", "hp",  # Engine specs
+        "btu",  # Heat measurement
+    }
+    
+    for keyword in measurement_keywords:
+        if keyword in loan_lower:
+            # This looks like a technical specification, not a loan amount
+            return "N/A"
+    
+    # If we get here, it passed validation
+    return loan_amount
+
+
+def _validate_min_age(min_age_value, doc_text: str) -> int | None:
+    """
+    CRITICAL FIX: Validate that MIN_AGE actually appears in the document
+    or is the stated minimum age in an age range.
+    
+    REJECTION CASES:
+      - Age not explicitly mentioned as "minimum" or in a range like "18-65"
+      - Age appears to be from an unrelated table or example
+      - Age seems invented
+    
+    ACCEPTANCE CASES:
+      - "Minimum age: 18"
+      - "Age 18-65"
+      - "Eligibility: Ages 21-60"
+    """
+    if not min_age_value:
+        return None
+    
+    try:
+        age = int(min_age_value)
+    except (ValueError, TypeError):
+        return None
+    
+    doc_lower = doc_text.lower()
+    
+    # Check if age appears with age-related keywords
+    age_keywords = {"age", "year", "minimum", "min", "eligibility", "eligible"}
+    
+    # Check various patterns where this age might appear
+    patterns_to_check = [
+        rf"\b{age}\s*[-–]\s*\d+\s+years?\b",  # "18-65 years"
+        rf"\bages?\s+{age}\b",  # "Age 18"
+        rf"\bmin(?:imum)?\s+ages?\s*:\s*{age}\b",  # "Minimum age: 18"
+        rf"\beligible\s+.*\b{age}\b",  # "Eligible ... 18"
+    ]
+    
+    # Check if ANY pattern matches
+    for pattern in patterns_to_check:
+        if re.search(pattern, doc_lower):
+            return age
+    
+    # Age not found in context with age-related keywords
+    return None
 
 
 def _validate_product_variant_tier(tier_value: str, doc_text: str) -> str:
@@ -1526,76 +1709,6 @@ def _validate_age_requirements(min_age: str, max_age: str, doc_text: str) -> tup
     return (min_age, max_age)
 
 
-def _validate_numeric_field_explicit(value: str, doc_text: str, field_name: str) -> str:
-    """
-    CRITICAL FIX (AH10, AH11, AH12): Generic validator for numeric fields that must
-    be explicitly stated. Prevents hallucination of commonly inferred values.
-    
-    Fields that use this: MIN_INCOME, MIN_BALANCE, PRICING_RATE, EQUITY_REQUIREMENT, etc.
-    
-    Returns "N/A" if:
-    - Value is empty/N/A
-    - Document does not contain the value (hallucinated/inferred)
-    - For PRICING_RATE: generic phrases like "attractive rates" don't count
-    
-    Handles tiered values: "5000 | 10000" → searches for both in document
-    """
-    if not value or value.strip().upper() == "N/A":
-        return "N/A"
-    
-    doc_lower = doc_text.lower()
-    value_lower = value.lower()
-    
-    # For PRICING_RATE specifically, reject generic marketing phrases
-    if field_name == "PRICING_RATE":
-        # These phrases are marketing fluff, not actual rates
-        generic_phrases = [
-            "attractive rate", "competitive rate", "competitive pricing",
-            "attractive pricing", "market competitive", "best rate",
-            "standard rate", "market rate"
-        ]
-        if any(phrase in value_lower for phrase in generic_phrases):
-            return "N/A"
-        
-        # Validate specific rate patterns are in document
-        # Valid: "KIBOR+3%", "12% p.a.", "5.5%", etc.
-        # These should appear (or similar) in document
-        rate_patterns = re.findall(r"[\d.]+\s*%|\d+\s*(?:\.\d+)?\s*%", value_lower)
-        if rate_patterns:
-            # Check if at least one pattern component appears in document
-            for pattern in rate_patterns[:2]:  # Check first 2 rates if multiple
-                if pattern.strip() in doc_lower:
-                    return value
-        
-        # If no rate patterns found or none verified in document, it's hallucinated
-        return "N/A"
-    
-    # For other numeric fields, check if ANY component appears in document
-    # Handle tiered values like "5000 | 10000" by checking if components exist
-    if "|" in value:
-        components = [c.strip() for c in value.split("|")]
-        found_components = [c for c in components if c.lower() in doc_lower]
-        if found_components:
-            return value  # At least one component verified
-        else:
-            return "N/A"  # No components found in document = hallucinated
-    
-    # Single value check
-    if value_lower in doc_lower:
-        return value
-    
-    # Partial check for numeric fields (might have surrounding text)
-    # Extract just the numeric/currency part
-    numeric_match = re.search(r"[\d,]+(?:\.\d+)?(?:\s*(?:%|k|m|million|thousand))?", value_lower)
-    if numeric_match:
-        numeric_part = numeric_match.group().strip()
-        if numeric_part in doc_lower:
-            return value
-    
-    # Value not found in document = hallucinated
-    return "N/A"
-
-
 
 def _crossfield_validate(normalized: dict) -> dict:
     """
@@ -1638,22 +1751,6 @@ def _crossfield_validate(normalized: dict) -> dict:
                 if isinstance(current, str) and current not in ("N/A", ""):
                     # This is a bank product but has an insurance-specific field populated
                     # Set it to N/A per spec
-                    normalized[field] = "N/A"
-    
-    # ================================================================
-    # BNK-specific fields that must be N/A for IBG products
-    # ================================================================
-    if lead == "IBG":
-        # Bank account/card type fields are only for BNK products
-        bank_only_fields = {
-            "ACCOUNT_TYPE",   # Current/Savings/Wallet (BNK only)
-            "CARD_TYPE",      # Debit/Credit/Virtual (BNK only)
-        }
-        for field in bank_only_fields:
-            if field in normalized:
-                current = normalized[field]
-                if isinstance(current, str) and current not in ("N/A", ""):
-                    # This is an insurance product but has a bank-specific field populated
                     normalized[field] = "N/A"
         
         # CRITICAL FIX: For loan products, PRICING_RATE should contain rate info
@@ -2251,37 +2348,25 @@ def normalize_record(record, entry, doc_text=""):
             normalized.get("PRODUCT_VARIANT_TIER", "N/A"), doc_text
         )
     
-    # CRITICAL FIX (AH13): Validate TENURE_OPTIONS - extract ONLY if tier menu exists in document
-    # Prevents hallucination of invented tier menus like "10|20|30|40|50|60"
-    # when document only mentions "Minimum 10 years, Maximum 65 years" with no menu
+    # CRITICAL FIX: Validate TENURE_OPTIONS are actually listed in document (Product 3 issue)
+    # Prevents hallucination of option schedules like "10|20|30|40|50|60" not in document
     if "TENURE_OPTIONS" in normalized and doc_text:
-        tenure_opts = normalized.get("TENURE_OPTIONS", "N/A")
-        if tenure_opts and tenure_opts != "N/A":
-            # Check if this looks like a hallucinated numeric sequence
-            # Pattern: single digits or numeric ranges separated by | (e.g. "10|20|30")
-            if re.match(r"^\d+(?:\|\d+)*$", tenure_opts.strip()):
-                # This is a numeric-only menu. Verify it appears in document
-                doc_lower = doc_text.lower()
-                if tenure_opts.lower() not in doc_lower:
-                    # This numeric menu doesn't appear in document - likely hallucinated
-                    normalized["TENURE_OPTIONS"] = "N/A"
+        normalized["TENURE_OPTIONS"] = _validate_tenure_options(
+            normalized.get("TENURE_OPTIONS", "N/A"), doc_text
+        )
     
-    # CRITICAL FIX (AH14): Detect Islamic financing keywords and ensure FINANCING_TYPE is populated
-    # Keywords: "takaful", "wakalah", "sharia", "islamic", "ijarah", "murabaha", "musharaka"
-    if doc_text and "FINANCING_TYPE" in normalized:
-        fin_type = normalized.get("FINANCING_TYPE", "N/A")
-        if fin_type == "N/A":
-            # Check if document contains Islamic financing keywords
-            doc_lower = doc_text.lower()
-            islamic_keywords = ["takaful", "wakalah", "sharia", "islamic", "ijarah", 
-                               "murabaha", "musharaka", "istismaar", "riba"]
-            if any(keyword in doc_lower for keyword in islamic_keywords):
-                # Document is Islamic but FINANCING_TYPE not extracted
-                # Set to Takaful (most common Islamic banking product type)
-                if "takaful" in doc_lower:
-                    normalized["FINANCING_TYPE"] = "Takaful"
-                else:
-                    normalized["FINANCING_TYPE"] = "Islamic"
+    # CRITICAL FIX: Validate LOAN_AMOUNT_RANGE doesn't contain measurement units (Product 1 issue)
+    # Rejects capacity specs like "4KW-1000KW" that aren't loan amounts
+    if "LOAN_AMOUNT_RANGE" in normalized and doc_text:
+        normalized["LOAN_AMOUNT_RANGE"] = _validate_loan_amount_range(
+            normalized.get("LOAN_AMOUNT_RANGE", "N/A"), doc_text
+        )
+    
+    # CRITICAL FIX: For insurance products (LEAD_MARKER="IBG"), ACCOUNT_TYPE must be "N/A"
+    # ACCOUNT_TYPE is only for bank accounts (Current, Savings, Wallet), not insurance products
+    lead_marker = normalized.get("LEAD_MARKER", "").strip().upper()
+    if lead_marker == "IBG":
+        normalized["ACCOUNT_TYPE"] = "N/A"
     
     # CRITICAL: Validate employment restrictions against document (prevent hallucination)
     if "EMPLOYMENT_TYPE" in normalized and doc_text:
@@ -2310,36 +2395,6 @@ def normalize_record(record, entry, doc_text=""):
             doc_text
         )
         normalized["MIN_TERM_YEARS"] = validated_min_term
-    
-    # CRITICAL FIX (AH10): Validate numeric fields must be explicitly stated in document
-    # Prevents hallucination of commonly-inferred values like MIN_INCOME, MIN_BALANCE
-    if doc_text:
-        for numeric_field in ["MIN_INCOME", "MIN_INCOME_USD", "MIN_BALANCE", 
-                              "AVG_BALANCE_REQUIREMENT", "MIN_INVESTMENT"]:
-            if numeric_field in normalized:
-                normalized[numeric_field] = _validate_numeric_field_explicit(
-                    normalized.get(numeric_field, "N/A"),
-                    doc_text,
-                    numeric_field
-                )
-    
-    # CRITICAL FIX (AH11): Validate PRICING_RATE is only populated with explicit rates
-    # Prevent extraction of generic marketing phrases like "attractive rates"
-    if doc_text and "PRICING_RATE" in normalized:
-        normalized["PRICING_RATE"] = _validate_numeric_field_explicit(
-            normalized.get("PRICING_RATE", "N/A"),
-            doc_text,
-            "PRICING_RATE"
-        )
-    
-    # CRITICAL FIX (AH12): Validate EQUITY_REQUIREMENT is only populated if explicitly stated
-    # Prevents hallucination of default equity percentages
-    if doc_text and "EQUITY_REQUIREMENT" in normalized:
-        normalized["EQUITY_REQUIREMENT"] = _validate_numeric_field_explicit(
-            normalized.get("EQUITY_REQUIREMENT", "N/A"),
-            doc_text,
-            "EQUITY_REQUIREMENT"
-        )
     
     # CRITICAL FIX: Infer and correct LEAD_MARKER based on product signals
     # This catches loans incorrectly classified as insurance products

@@ -8,30 +8,24 @@ LEAD_MARKER RULES (CRITICAL):
 
 FIELD APPLICABILITY (CRITICAL):
 BNK products (loans/deposits/cards):
-  MUST be "N/A": COVERAGE_AMOUNT, FREE_LOOK_PERIOD_DAYS, KEY_EXCLUSIONS, MIN_CONTRIBUTION, OPTIONAL_RIDERS, PREMIUM_PAYMENT_FREQUENCY, CLAIMS_SERVICE_CONTACT, ACCOUNT_TYPE, CARD_TYPE
+  MUST be "N/A": COVERAGE_AMOUNT, FREE_LOOK_PERIOD_DAYS, KEY_EXCLUSIONS, MIN_CONTRIBUTION, OPTIONAL_RIDERS, PREMIUM_PAYMENT_FREQUENCY, CLAIMS_SERVICE_CONTACT, ACCOUNT_TYPE
   CAN have: LOAN_AMOUNT_RANGE (if explicit), COLLATERAL_TYPE, PRICING_RATE (interest rates)
 
 IBG products (insurance):
-  MUST be "N/A": LOAN_AMOUNT_RANGE (CRITICAL: never extract coverage here), COLLATERAL_TYPE, EQUITY_REQUIREMENT, PRICING_RATE, ACCOUNT_TYPE, CARD_TYPE
+  MUST be "N/A": LOAN_AMOUNT_RANGE (CRITICAL: never extract coverage here), COLLATERAL_TYPE, EQUITY_REQUIREMENT, PRICING_RATE
   CAN have: COVERAGE_AMOUNT (sum insured, coverage limits), MIN_CONTRIBUTION (premiums), FREE_LOOK_PERIOD_DAYS, KEY_EXCLUSIONS
 
 CRITICAL ANTI-HALLUCINATION RULES:
 AH1. PRODUCT_NAME: Extract from document title ONLY. Never invent. If not found → "N/A"
-AH2. LOAN_AMOUNT_RANGE (BNK only): Extract ONLY if explicitly stated (e.g. "Up to PKR 5M"). Never infer from technical specs (e.g. "4KW-1000KW" is NOT a loan amount). For insurance → ALWAYS "N/A"
+AH2. LOAN_AMOUNT_RANGE (BNK only): Extract ONLY if explicitly stated as a monetary amount (e.g. "Up to PKR 5M"). Never infer from technical specs (e.g. "4KW-1000KW" is NOT a loan amount). For insurance → ALWAYS "N/A"
 AH3. COVERAGE_AMOUNT (IBG only): Extract sum insured, coverage limits. For loans → "N/A"
-AH4. MIN_TERM_YEARS: Extract ONLY if explicitly stated as minimum (e.g. "Minimum 1 year"). "Up to 10 years" has NO minimum → "N/A"
-AH5. MAX_TERM_YEARS: Extract ONLY if explicitly stated maximum. "Up to 10 years" means MAX=10. Extract integer ONLY.
-AH6. PREMIUM_PAYMENT_FREQUENCY (IBG only): "yearly renewable plan" → "Annual". For loans → "N/A"
-AH7. REQUIRED_DOCUMENTS (IBG): Extract ONLY from explicit "Documentation Required" section (upfront docs). Never use claim-processing docs. If none exists → "N/A"
-AH8. KEY_EXCLUSIONS (IBG): Extract ONLY from explicit "Exclusions" section. Never invent. If none → "N/A"
-AH9. MIN_AGE / MAX_AGE: Extract ONLY if explicitly stated (e.g. "18-65 years"). Never default, never infer. If not stated → "N/A"
-AH10. MIN_INCOME / MIN_INCOME_USD / MIN_BALANCE / AVG_BALANCE_REQUIREMENT / MIN_INVESTMENT: Extract ONLY if explicitly stated. Never infer from industry standards. If not stated → "N/A"
-AH11. PRICING_RATE (BNK only): Extract specific rates ONLY (e.g. "KIBOR+3%", "12% p.a."). Generic phrases like "attractive rates" or "competitive pricing" do NOT count. For insurance → "N/A"
-AH12. EQUITY_REQUIREMENT: Extract ONLY if explicitly stated percentage (e.g. "20% equity"). Never infer. If not stated → "N/A"
-AH13. TENURE_OPTIONS: Extract ONLY tier names/options that appear in document. Never invent (e.g. "10|20|30|40|50|60" is hallucinated if not listed). If no menu → "N/A"
-AH14. FINANCING_TYPE: Check for "Islamic", "Takaful", "Unit Linked", "Conventional", "Hybrid". Look for "Takaful contribution", "Wakalah", "Sharia", etc. If explicitly stated → extract. If not stated → "N/A"
-AH15. TARGET_GOAL: Use case. For insurance must say "protection/coverage", not "financing". Example: "Vehicle Protection" not "Vehicle Financing"
-AH16. Every extracted field must be EXPLICIT in document. Never infer, guess, or assume. Zero tolerance for hallucination.
+AH4. MIN_TERM_YEARS: Extract ONLY if explicitly stated as minimum (e.g. "Minimum 1 year" OR "Minimum Term: 1 year"). "Up to 10 years" has NO minimum → "N/A". Document must use keywords like "minimum", "min", or "minimum term" before the number.
+AH5. PREMIUM_PAYMENT_FREQUENCY (IBG only): Extract payment options if explicitly listed (e.g. "Annual", "Semi-Annual or Quarterly"). For loans → "N/A". If document says "yearly renewable plan" → "Annual".
+AH6. REQUIRED_DOCUMENTS (IBG): Extract ONLY from explicit "Documentation Required" or "Required Documents" section header. If section uses other names like "Documentation" or "Upfront Documents", extract. If document has NO such section (only eligibility, claims procedures, or general T&C) → "N/A". CRITICAL: Do NOT extract from Claims sections or claim procedures — those are claim-filing requirements, not upfront documentation.
+AH7. KEY_EXCLUSIONS (IBG): Extract ONLY from explicit "Exclusions" section. Never invent. If none → "N/A"
+AH8. TENURE_OPTIONS: Extract ONLY if explicitly listed or shown in a table/schedule. Examples: "1M, 2M, 3M, 6M, 12M" or "1|3|5|7|10 years". Do NOT invent tier schedules (e.g., if document says "flexible tenure", do NOT generate "1|2|3|5|10" because it's not explicitly listed). If not found → "N/A".
+AH9. ACCOUNT_TYPE: For insurance products (LEAD_MARKER="IBG"), MUST be "N/A". ACCOUNT_TYPE is only for bank accounts (Current, Savings, Wallet). Insurance is not an account type.
+AH10. Every extracted field must be EXPLICIT in document. Never infer, guess, or assume. No hallucinated values.
 
 FIELD DEFINITIONS (56 COLUMNS):
 
@@ -39,74 +33,71 @@ FIELD DEFINITIONS (56 COLUMNS):
 2. LEAD_MARKER: Exactly "IBG" or "BNK"
 3. SOURCE_FILE_PRODUCT: Batch/source group name
 4. PLAN_TYPE: Loan|Deposit|Savings|Card|Investment|Insurance|Service|Loyalty
-5. TARGET_GOAL: Use case (max 50 chars). For insurance: "Protection/Coverage", not "Financing"
+5. TARGET_GOAL: Use case (max 50 chars)
 6. CUSTOMER_TYPE: Salaried|Self-Employed|SME|Corporate|Retail|Government (multiple with " | ")
-7. EMPLOYMENT_TYPE: Eligibility restriction (max 100 chars). Only if document explicitly restricts.
-8. CUSTOMER_SEGMENT: Behavioral segment (max 50 chars). Only if explicit.
-9. TARGET_SEGMENT: Positioning segment (max 100 chars). Only if explicit.
-10. SEGMENT_TIER: Premium|HNW|Standard etc (max 50 chars). Only if named in document.
-11. MIN_AGE: Integer only. Extract ONLY if explicitly stated (e.g. "18 years", "minimum age 21"). Never default to common values.
-12. MAX_AGE: Integer only. Extract ONLY if explicitly stated. Never default.
-13. GENDER: Male|Female|All|N/A. Extract only if explicitly restricted.
+7. EMPLOYMENT_TYPE: Eligibility restriction (max 100 chars)
+8. CUSTOMER_SEGMENT: Behavioral segment (max 50 chars)
+9. TARGET_SEGMENT: Positioning segment (max 100 chars)
+10. SEGMENT_TIER: Premium|HNW|Standard etc (max 50 chars)
+11. MIN_AGE: Integer only. Must be explicitly stated or be the lower bound of an explicitly stated age range (e.g. "18-65" → MIN_AGE=18).
+12. MAX_AGE: Integer only
+13. GENDER: Male|Female|All|N/A
 14. IS_BANK_OFFERED: 1 or 0
-15. ACCOUNT_TYPE: Current|Savings|Wallet|Digital etc (BNK only). "N/A" for IBG products.
-16. CARD_TYPE: Debit|Credit|Virtual etc (BNK only). "N/A" for IBG products.
+15. ACCOUNT_TYPE: Current|Savings|Wallet|Digital etc (BNK only). MUST be "N/A" for IBG products.
+16. CARD_TYPE: Debit|Credit|Virtual etc (BNK only)
 17. CHANNEL: Bank Branch|Mobile App|ATM|Telephone etc (max 50 chars)
-18. ELIGIBILITY_TYPE: Short eligibility logic (max 100 chars). Only explicit criteria.
+18. ELIGIBILITY_TYPE: Short eligibility logic (max 100 chars)
 19. SERVICE_TYPE: Payments|Transfers etc (max 50 chars)
 20. REWARD_TYPE: Points|Cashback etc (max 50 chars)
 21. CURRENCY: PKR|USD|EUR etc
 22. CURRENCY_TYPE: Local|FCY etc (max 50 chars)
-23. MIN_BALANCE: Integer. Extract ONLY if explicitly stated. "N/A" otherwise.
-24. AVG_BALANCE_REQUIREMENT: Integer. Extract ONLY if explicitly stated. "N/A" otherwise.
-25. MIN_INCOME: Integer (PKR). Extract ONLY if explicitly stated. Never infer. "N/A" otherwise.
-26. MIN_INCOME_USD: Integer (USD). Extract ONLY if explicitly stated. "N/A" otherwise.
-27. MIN_INVESTMENT: Integer. Extract ONLY if explicitly stated. "N/A" otherwise.
-28. MIN_CONTRIBUTION: Integer (insurance premiums only, for IBG). "N/A" for BNK.
-29. LOAN_AMOUNT_RANGE: "200K-3M" or "Up to PKR 5M" (BNK only). Extract ONLY explicit loan amounts. NEVER infer from tech specs. ALWAYS "N/A" for IBG.
-30. COVERAGE_AMOUNT: Coverage limits (IBG only, max 100 chars). ALWAYS "N/A" for BNK.
-31. FINANCING_TYPE: Conventional|Islamic|Unit Linked|Hybrid|Takaful|N/A. Extract only if explicitly stated or keywords present (Takaful, Wakalah, Sharia, Unit Linked).
-32. DEPOSIT_PROFIT_TYPE: Simple|Compound|N/A. Extract only if explicitly stated.
-33. DEPOSIT_PROFIT_FREQUENCY: Monthly|Quarterly|Semi-Annual|Annual|N/A. Extract only if explicitly stated.
-34. TENURE: "1-5 years" or "1 Year" (readable format). Extract range or single value.
-35. TENURE_OPTIONS: "1M -> 5Y" or "1|2|3|5|10" (structured menu). Extract ONLY if document lists tiers/options. Never invent. If no menu → "N/A"
-36. MIN_TERM_YEARS: Integer if explicitly stated as minimum (e.g. "Minimum 1 year"). "Up to X" → "N/A". Extract ONLY explicit minimums.
-37. MAX_TERM_YEARS: Integer. Extract from "Up to X years" or "Maximum X years". Extract ONLY if explicitly stated.
-38. BUSINESS_TENURE: ">=3 years" or "min 2 years" (max 50 chars). Extract only if explicitly stated.
-39. COLLATERAL_TYPE: Property Mortgage|Gold|Vehicle etc (BNK only). "N/A" for IBG.
-40. EQUITY_REQUIREMENT: "20%" or "15-25%" (BNK only, stripped of verbose prefixes). Extract ONLY if explicitly stated percentage. "N/A" for IBG.
+23. MIN_BALANCE: Integer
+24. AVG_BALANCE_REQUIREMENT: Integer
+25. MIN_INCOME: Integer (PKR)
+26. MIN_INCOME_USD: Integer (USD)
+27. MIN_INVESTMENT: Integer
+28. MIN_CONTRIBUTION: Integer (insurance premiums only, for IBG)
+29. LOAN_AMOUNT_RANGE: "200K-3M" or "Up to PKR 5M" (BNK only, MUST be "N/A" for IBG). NEVER extract if it looks like a capacity range (e.g. "4KW-1000KW").
+30. COVERAGE_AMOUNT: Coverage limits (IBG only, MUST be "N/A" for BNK)
+31. FINANCING_TYPE: Conventional|Islamic|Unit Linked|Hybrid|Takaful|N/A
+32. DEPOSIT_PROFIT_TYPE: Simple|Compound|N/A
+33. DEPOSIT_PROFIT_FREQUENCY: Monthly|Quarterly|Semi-Annual|Annual|N/A
+34. TENURE: "1-5 years" or "1 Year" (readable format)
+35. TENURE_OPTIONS: "1M -> 5Y" or "1|2|3|5|10" (structured menu). ONLY if explicitly listed in document.
+36. MIN_TERM_YEARS: Integer if explicitly stated as minimum (keywords: "minimum", "min", "minimum term"). "Up to X" → "N/A". CRITICAL: Check for formats like "Minimum Term: 10 years" or "Min. 2 years" or "Minimum 5-10 years".
+37. MAX_TERM_YEARS: Integer
+38. BUSINESS_TENURE: ">=3 years" or "min 2 years" (max 50 chars)
+39. COLLATERAL_TYPE: Property Mortgage|Gold|Vehicle etc (BNK only)
+40. EQUITY_REQUIREMENT: "20%" or "15-25%" (BNK only, stripped of verbose prefixes)
 41. DBR_LIMIT: "<=40%" (max 50 chars)
 42. TRANSACTION_LIMIT: "1M monthly" (max 50 chars)
-43. SPECIAL_CONDITIONS: Important caveats (max 200 chars). Extract only if explicit.
-44. PRODUCT_DESCRIPTION: What it is, who provides, core mechanism (max 250 chars). Use document intro.
+43. SPECIAL_CONDITIONS: Important caveats (max 200 chars)
+44. PRODUCT_DESCRIPTION: What it is, who provides, core mechanism (max 250 chars)
 45. PROVIDER_NAME: Bank or insurer name (max 100 chars)
-46. PRODUCT_VARIANT_TIER: "Bronze | Silver | Gold" (tier names from document ONLY, NOT invented). Extract ONLY if tiers/variants explicitly named.
-47. PRICING_RATE: Interest/markup rates for BNK only (e.g. "KIBOR+3%"). Extract ONLY specific rates. Phrases like "attractive rates" do NOT count. IBG → "N/A"
-48. FEES_AND_CHARGES: "Processing Fee: X | Issuance Fee: Y" (max 300 chars). Extract only if explicitly stated.
-49. KEY_BENEFITS: Core included benefits (max 280 chars). Extract from features/benefits section.
-50. OPTIONAL_RIDERS: Optional add-on covers (IBG only). "N/A" for BNK. Extract ONLY if explicitly listed. Generic "optional riders provided" without enumeration → "N/A"
-51. COVERAGE_AMOUNT: Coverage limits (IBG only). Duplicate field 30, use consistently.
-52. FREE_LOOK_PERIOD_DAYS: Integer if explicitly stated (IBG only, e.g. "14-day period"). Never default to 14. For loans → "N/A"
-53. REQUIRED_DOCUMENTS: "CNIC | Passport | Salary slips" (explicit upfront section only, max 250 chars). For insurance: Extract ONLY from "Documentation Required" section (upfront docs), NEVER from claims procedure. For loans: Extract from application section. If no explicit section → "N/A"
-54. CLAIMS_SERVICE_CONTACT: Phone or email for claims (IBG only, from document only). For loans → "N/A"
-55. KEY_EXCLUSIONS: From explicit Exclusions section only, NOT invented (IBG only, max 200 chars). For loans → "N/A"
-56. TAX_ZAKAT_TREATMENT: Zakat/tax notes if stated (max 100 chars). Extract only if explicit.
-57. PREMIUM_PAYMENT_FREQUENCY: Annual|Semi-Annual|Quarterly|Monthly (IBG only). Extract from "Payment Frequency" or "Premium Mode" sections. For loans → "N/A"
+46. PRODUCT_VARIANT_TIER: "Bronze | Silver | Gold" (tier names from document only, NOT invented)
+47. PRICING_RATE: Interest/markup rates for BNK only (e.g. "KIBOR+3%"). IBG → "N/A". Do NOT use for insurance premiums (use MIN_CONTRIBUTION instead).
+48. FEES_AND_CHARGES: "Processing Fee: X | Issuance Fee: Y" (max 300 chars)
+49. KEY_BENEFITS: Core included benefits (max 280 chars)
+50. OPTIONAL_RIDERS: Optional add-on covers (IBG only)
+51. COVERAGE_AMOUNT: Coverage limits (IBG only)
+52. FREE_LOOK_PERIOD_DAYS: Integer if explicitly stated (IBG only). Never default to 14.
+53. REQUIRED_DOCUMENTS: "CNIC | Passport | Salary slips" (explicit section only, max 250 chars). Do NOT extract from claims or claim-filing procedures.
+54. CLAIMS_SERVICE_CONTACT: Phone or email for claims (IBG only, from document only)
+55. KEY_EXCLUSIONS: From explicit Exclusions section only, NOT invented (IBG only, max 200 chars)
+56. TAX_ZAKAT_TREATMENT: Zakat/tax notes if stated (max 100 chars)
+57. PREMIUM_PAYMENT_FREQUENCY: Annual|Semi-Annual|Quarterly|Monthly (IBG only). Extract if explicitly listed (e.g. "contributions can be made on Annual, Semi-Annual or Quarterly basis"). For BNK → "N/A".
 
 DO NOT:
 × Extract hallucinated product names not in document
-× Extract loan amounts from technical specs (4KW-1000KW is NOT a loan amount)
+× Extract loan amounts from technical specs (4KW-1000KW is NOT a loan amount, reject with "N/A")
 × Extract coverage amounts to LOAN_AMOUNT_RANGE (for insurance, use COVERAGE_AMOUNT)
-× Default MIN_TERM_YEARS to "1" or any value without explicit "minimum" in document
-× Extract MIN_AGE/MAX_AGE/MIN_INCOME/PRICING_RATE/EQUITY without explicit statement
+× Default MIN_TERM_YEARS to "1" without explicit "minimum" in document
 × Extract insurance fields for BNK products (these must be "N/A")
 × Extract loan fields for IBG products (these must be "N/A")
 × Invent tier names (extract ONLY names that appear in document)
 × Put insurance premiums in PRICING_RATE (use MIN_CONTRIBUTION instead)
 × Invent employment types, age restrictions, or exclusions not explicitly stated
-× Use claim-processing docs for insurance REQUIRED_DOCUMENTS (must be upfront doc section)
+× Extract from claim-processing docs for insurance REQUIRED_DOCUMENTS (must be upfront doc section)
 × Extract premium payment frequency as "N/A" when document explicitly states Annual/Monthly/etc
-× Extract "attractive rates" or "competitive pricing" as PRICING_RATE (must be specific e.g. "12% p.a.")
-× Invent TENURE_OPTIONS menu if not listed in document
-× Classify insurance as "Financing" (use "Protection" or "Coverage")
-× Extract ACCOUNT_TYPE or CARD_TYPE for insurance products
+× Extract ACCOUNT_TYPE for insurance products (must be "N/A")
+× Invent TENURE_OPTIONS schedules not explicitly listed in document
