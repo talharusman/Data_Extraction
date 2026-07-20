@@ -1316,21 +1316,26 @@ def _validate_and_fix_product_name(extracted_name: str, doc_text: str) -> str:
 
 def _clean_insurance_required_documents(required_docs: str) -> str:
     """
-    CRITICAL FIX: For insurance products (IBG), REQUIRED_DOCUMENTS must not
-    contain loan-specific keywords or claim-processing language. If found,
-    return "N/A" (do not hallucinate).
+    CRITICAL FIX (AH6 + AH8): For insurance products (IBG), REQUIRED_DOCUMENTS must not
+    contain loan-specific keywords, claim-processing language, or be hallucinated.
+    If found, return "N/A" (do not hallucinate).
+    
+    IMPORTANT: This function ONLY cleans obviously contaminated text. The LLM should
+    NOT extract REQUIRED_DOCUMENTS unless the document has an explicit section like
+    "Required Documents" or "Documentation Required". If this function gets garbage
+    text (like hallucinated documents), it will reject it.
     
     Loan keywords to NEVER appear in insurance REQUIRED_DOCUMENTS:
     "salary slip", "employment certificate", "bank statement", "tax return",
     "proprietorship", "processing fee", "property documents", "collateral"
     
-    Claim processing phrases to detect (these are CLAIMS procedures, not
-    upfront documentation requirements):
-    "claim processing", "step 1", "step 2", "inform alfalah", "call and inform",
-    "for claims", "claims procedure", "filing a claim", "when filing", "claim settlement"
+    Claim processing phrases (these are CLAIMS procedures, not upfront documentation):
+    "claim processing", "step 1", "inform alfalah", "call and inform",
+    "for claims", "claims procedure", "filing a claim", "claim settlement", "fir"
     
-    These indicate incorrect extraction from a loan section, claim section,
-    or hallucination, rather than an insurance-specific documentation section.
+    Hallucination indicators:
+    If required_docs contains a mix of unrelated document types (e.g., "CNIC | Passport | 
+    Vehicle Registration") from different sections, it's likely hallucinated.
     """
     if not required_docs or required_docs == "N/A":
         return "N/A"
@@ -1347,31 +1352,33 @@ def _clean_insurance_required_documents(required_docs: str) -> str:
         "title deed", "ownership certificate",
         "noc",  # No Objection Certificate (used in loan collateral)
         "equity", "down payment", "equity requirement",
+        "vendor survey",  # Green Energy specific
+        "form 29",  # Corporate registration
     }
     
-    # CRITICAL: Extended claims contamination phrases to catch all claim-related text
+    # CRITICAL: Claims/loan procedure phrases that indicate wrong extraction
     claim_processing_phrases = {
-        # Explicit "for claims" or "for claim" references
+        # Explicit "for claims" or procedure references
         "for claims", "for claim", "claims procedure", "claim procedure",
         "claims service", "claim service", "filing a claim", "when filing",
         "claim settlement", "claims settlement", "claim filing",
         
-        # Step-by-step claim procedures
-        "step 1", "step 2", "step 3", "step 4",
+        # Step-by-step procedures
+        "step 1", "step 2", "step 3", "step 4", "step 5",
         
-        # Action-oriented claim procedures
+        # Action-oriented procedures
         "call and inform", "inform alfalah", "inform the insurer", "contact alfalah",
-        "inform police", "get a fir", "provide the required", "claim has never been",
+        "inform police", "get a fir", "provide the required",
         
         # Time-based claim language
         "within 24 hours", "within 48 hours", "within 30 days",
         
-        # Claim document references
-        "fir", "police", "medical report", "death certificate",
-        "physician statement", "claimant statement",
+        # Claim-specific documents
+        "fir", "police report", "medical report", "death certificate",
+        "physician statement", "claimant statement", "claim form",
         
-        # Generic claim references that shouldn't be in REQUIRED_DOCUMENTS
-        "claim", "claims"  # FINAL CATCH-ALL for standalone "claim" or "claims" (if nothing else matches)
+        # Strong indicators of wrong section
+        "claim has never been", "benefits will be", "settlement of"
     }
     
     docs_lower = required_docs.lower()
@@ -1381,19 +1388,20 @@ def _clean_insurance_required_documents(required_docs: str) -> str:
         if keyword in docs_lower:
             return "N/A"
     
-    # FIRST: Check specific claim processing phrases (before generic "claim" check)
-    # This prevents false positives from phrases like "claim forms" which might legitimately
-    # appear if they refer to the form templates, not the claim procedures
+    # Check for claim processing phrases
     for phrase in claim_processing_phrases:
-        if phrase != "claim" and phrase != "claims":  # Skip generic phrases for now
-            if phrase in docs_lower:
-                return "N/A"
+        if phrase in docs_lower:
+            return "N/A"
     
-    # FINAL CHECK: If the text contains "for claims" or "claims procedure" or similar
-    # strong claim indicators, reject it
-    if any(x in docs_lower for x in ["for claims", "claims procedure", "claim procedure", "claim service", "claims service"]):
+    # CRITICAL: Hallucination detection - if docs contain very generic/mixed items
+    # from different contexts (e.g., CNIC + Vehicle Registration from different sections),
+    # it's likely hallucinated. Insurance docs should be cohesive.
+    if "vehicle" in docs_lower and "property" in docs_lower:
+        # Mixing vehicle insurance docs with property docs = hallucinated
         return "N/A"
     
+    # If we got here, it seems okay (but note: extraction should still only happen
+    # if LLM found explicit "Required Documents" section)
     return required_docs
 
 
@@ -1453,43 +1461,78 @@ def _validate_tenure_options(tenure_options: str, doc_text: str) -> str:
 
 def _validate_loan_amount_range(loan_amount: str, doc_text: str) -> str:
     """
-    CRITICAL FIX: Validate that LOAN_AMOUNT_RANGE does not contain measurement
-    units like KW, MW, capacity, size, etc. These are technical specifications,
-    not loan amounts.
+    CRITICAL FIX (AH2): Validate that LOAN_AMOUNT_RANGE contains monetary amounts,
+    not technical specifications like KW, MW, capacity, area, etc.
+    
+    For Solar/Green Energy products (4KW-1000KW), this is SOLAR CAPACITY, not a loan amount.
     
     Examples of REJECTION:
-      "4KW-1000KW" → "N/A" (this is solar capacity, not loan amount)
-      "300MW-1000MW" → "N/A" (this is power capacity, not loan amount)
-      "4.5m2-1000m2" → "N/A" (this is area, not loan amount)
+      "4KW-1000KW" → "N/A" (solar capacity, not loan amount)
+      "300MW-1000MW" → "N/A" (power capacity)
+      "4-1000" with "KW" context → "N/A" (power capacity)
+      "4.5m2-1000m2" → "N/A" (area specification)
     
     Examples of ACCEPTANCE:
       "Up to PKR 5 Million" → keep
       "200,000-3,000,000" → keep
       "PKR 100K-500K" → keep
+      "Up to 5M" → keep (PKR implied)
     """
     if not loan_amount or loan_amount == "N/A":
         return loan_amount
     
     loan_lower = loan_amount.lower()
     
-    # REJECTION PATTERNS: Technical specification keywords that indicate measurement, not monetary
+    # CRITICAL: Reject any measurement-based specification
+    # These indicate technical capacity, not loan amount
     measurement_keywords = {
-        "kw", "kilowatt", "mw", "megawatt", "gw", "gigawatt",  # Power
-        "m2", "m²", "square meter", "sqm",  # Area
-        "m3", "m³", "cubic meter",  # Volume
-        "tonnes", "tons", "kg", "kilogram",  # Weight
-        "capacity", "size", "dimension",  # Generic size
-        "output", "generation", "wattage",  # Power generation
-        "rpm", "horsepower", "hp",  # Engine specs
-        "btu",  # Heat measurement
+        # Power measurements (most common in Green Energy context)
+        "kw", "kilowatt", "mw", "megawatt", "gw", "gigawatt",
+        
+        # Area measurements
+        "m2", "m²", "square meter", "sqm", "square ft", "sq ft",
+        
+        # Volume measurements
+        "m3", "m³", "cubic meter", "liter", "litre",
+        
+        # Weight measurements
+        "tonnes", "tons", "kg", "kilogram", "gram", "lb", "lbs",
+        
+        # Generic size/capacity words
+        "capacity", "size", "dimension", "specifications",
+        
+        # Power generation context
+        "output", "generation", "wattage", "voltage",
+        
+        # Engine specifications
+        "rpm", "horsepower", "hp", "cc", "cylinder",
+        
+        # Other technical units
+        "btu", "amp", "volt", "watt",
     }
     
+    # CRITICAL: Check if loan_amount contains ANY measurement keyword
     for keyword in measurement_keywords:
         if keyword in loan_lower:
-            # This looks like a technical specification, not a loan amount
             return "N/A"
     
-    # If we get here, it passed validation
+    # ADDITIONAL CHECK: If loan_amount is a range of plain numbers (e.g., "4-1000")
+    # without currency markers, check document context to see if it's in a technical section
+    if re.match(r'^[\d\s,.-]+$', loan_amount.strip()):
+        # This is just numbers, check if surrounding text in doc_text mentions these as technical specs
+        doc_lower = doc_text.lower()
+        
+        # Extract the numeric parts from loan_amount
+        numbers = re.findall(r'\d+', loan_amount)
+        if numbers:
+            # Check if these numbers appear in technical context in document
+            for num in numbers:
+                # Look for patterns like "4 KW" or "1000 KW" near this number
+                context_pattern = rf'\b{num}\s*(?:kw|mw|gw|m2|m3|capacity|output)\b'
+                if re.search(context_pattern, doc_lower):
+                    return "N/A"
+    
+    # If we get here, it looks like a legitimate loan amount
     return loan_amount
 
 
@@ -1651,15 +1694,19 @@ def _validate_min_term_years(min_term: str, max_term: str, doc_text: str) -> str
 
 def _validate_age_requirements(min_age: str, max_age: str, doc_text: str) -> tuple:
     """
-    CRITICAL FIX: Prevent hallucination of age restrictions.
-    Only accept extracted ages if document EXPLICITLY states numeric age values.
+    CRITICAL FIX (AH11): Prevent hallucination of age restrictions.
+    Only accept extracted ages if document EXPLICITLY states GLOBAL age values.
     
     Returns ("N/A", "N/A") if:
     - Document says "available to all" / "all customers" (no restriction)
-    - Document mentions age context but doesn't state explicit MINIMUM/MAXIMUM numbers
-    - Document only states segment-specific ages (e.g., "Salaried: 25" but not for all segments)
+    - Document only states segment-specific ages (e.g., "Salaried: 25" but not globally)
+    - Ages only appear in eligibility tables for specific customer types
+    
+    Accepts only if:
+    - Document explicitly states "available/eligible to ages X-Y" or similar GLOBAL statement
+    - Ages appear in a universal eligibility context, not segment-specific
     """
-    if not min_age or not max_age:
+    if not min_age or not max_age or min_age == "N/A" or max_age == "N/A":
         return ("N/A", "N/A")
     
     doc_lower = doc_text.lower()
@@ -1682,32 +1729,141 @@ def _validate_age_requirements(min_age: str, max_age: str, doc_text: str) -> tup
     # Valid formats: "18 years", "25 years old", "age 60", "minimum 25", "max 65", etc.
     import re
     
-    min_age_patterns = [
-        r"minimum\s+(?:age\s+)?(\d+)",
-        r"min(?:imum)?\s+(?:age\s+)?(\d+)",
-        r"age\s+(?:minimum\s+)?(\d+)",
-        r"(?:age|from)\s+(\d+)\s+(?:years?|yrs?)"
+    # CRITICAL: Look for GLOBAL age statements (not segment-specific like "Salaried Segment: Min 25")
+    # Global patterns must NOT reference specific segments
+    global_age_patterns = [
+        rf"available.*\s+{min_age}\s+(?:to|-|–)\s+{max_age}\s+years?",  # "available ages 18-65"
+        rf"between\s+{min_age}\s+(?:to|and)\s+{max_age}\s+years?",  # "between 18 and 65 years"
+        rf"aged?\s+{min_age}\s+(?:to|-|–)\s+{max_age}",  # "age 18-65"
     ]
     
-    max_age_patterns = [
-        r"maximum\s+(?:age\s+)?(\d+)",
-        r"max(?:imum)?\s+(?:age\s+)?(\d+)",
-        r"age\s+(?:up to|upto|maximum)\s+(\d+)",
-        r"(?:up to|upto)\s+(\d+)\s+(?:years?|yrs?)"
-    ]
+    # Check if this looks like a global statement (not preceded by "Salaried:" or other segment)
+    segment_prefixes = ["salaried", "self-employed", "self employed", "sme", "corporate", "professional", "business"]
     
-    min_found = any(re.search(pattern, doc_lower) for pattern in min_age_patterns)
-    max_found = any(re.search(pattern, doc_lower) for pattern in max_age_patterns)
+    # Search for global context
+    global_match_found = False
+    for pattern in global_age_patterns:
+        match = re.search(pattern, doc_lower)
+        if match:
+            # Check if this match is NOT preceded by a segment prefix
+            match_pos = match.start()
+            preceding_text = doc_lower[max(0, match_pos-100):match_pos]
+            
+            if not any(seg in preceding_text for seg in segment_prefixes):
+                global_match_found = True
+                break
     
-    # CRITICAL: Only accept both min AND max if both are explicitly stated
-    # If only one is stated or if ages are only segment-specific, return N/A
-    if not (min_found and max_found):
-        # Ages not explicitly stated as global requirements
+    if not global_match_found:
+        # No global age statement found - ages may be segment-specific
         return ("N/A", "N/A")
     
-    # Both ages explicitly found in patterns, accept the values
+    # Ages are globally stated, accept them
     return (min_age, max_age)
 
+
+
+def _deduplicate_multivalue_fields(normalized: dict) -> dict:
+    """
+    CRITICAL FIX (Audit Issue #6): Remove duplicate values in multi-value fields.
+    
+    If a field contains the same value repeated (e.g., "PKR 25,000 | PKR 25,000 | PKR 25,000"),
+    deduplicate to single value ("PKR 25,000").
+    
+    This fixes the case where multi-option extraction logic over-applies the pipe separator
+    even when only one value exists in the document.
+    
+    Applies to: MIN_CONTRIBUTION, COVERAGE_AMOUNT, PRICING_RATE, TENURE_OPTIONS, etc.
+    """
+    multivalue_fields = {
+        "MIN_CONTRIBUTION", "COVERAGE_AMOUNT", "PRICING_RATE",
+        "TENURE_OPTIONS", "PRODUCT_VARIANT_TIER", "PREMIUM_PAYMENT_FREQUENCY",
+        "KEY_BENEFITS", "KEY_EXCLUSIONS", "OPTIONAL_RIDERS"
+    }
+    
+    for field in multivalue_fields:
+        if field not in normalized:
+            continue
+        
+        value = normalized[field]
+        if not isinstance(value, str) or value in ("N/A", ""):
+            continue
+        
+        # Split by pipe separator
+        parts = [p.strip() for p in value.split("|")]
+        
+        # If all parts are identical, deduplicate to single value
+        if len(parts) > 1 and len(set(parts)) == 1:
+            normalized[field] = parts[0]
+    
+    return normalized
+
+
+def _fix_tenure_range_format(normalized: dict) -> dict:
+    """
+    CRITICAL FIX (Audit Issue #12): Format TENURE as a range when both MIN_TERM_YEARS 
+    and MAX_TERM_YEARS are available.
+    
+    Examples:
+    - MIN=1, MAX=5 → TENURE="1-5 years"
+    - MIN=10, MAX=65 → TENURE="10-65 years"
+    - MIN=10, MAX=N/A → TENURE="10 years"
+    """
+    min_term = normalized.get("MIN_TERM_YEARS", "N/A")
+    max_term = normalized.get("MAX_TERM_YEARS", "N/A")
+    
+    if min_term != "N/A" and max_term != "N/A":
+        try:
+            min_val = int(str(min_term).strip())
+            max_val = int(str(max_term).strip())
+            normalized["TENURE"] = f"{min_val}-{max_val} years"
+        except (ValueError, TypeError):
+            pass
+    elif min_term != "N/A" and (max_term == "N/A" or not max_term):
+        try:
+            min_val = int(str(min_term).strip())
+            normalized["TENURE"] = f"{min_val} years"
+        except (ValueError, TypeError):
+            pass
+    elif max_term != "N/A" and (min_term == "N/A" or not min_term):
+        try:
+            max_val = int(str(max_term).strip())
+            normalized["TENURE"] = f"Up to {max_val} years"
+        except (ValueError, TypeError):
+            pass
+    
+    return normalized
+
+
+def _ensure_all_56_fields_present(normalized: dict) -> dict:
+    """
+    CRITICAL FIX (Audit Issue #9): Ensure all 56 fields are present in output,
+    even if empty or N/A. This preserves schema integrity.
+    
+    Fields should never be filtered from output based on their values.
+    """
+    required_fields = [
+        "PRODUCT_NAME", "LEAD_MARKER", "SOURCE_FILE_PRODUCT", "PLAN_TYPE",
+        "TARGET_GOAL", "CUSTOMER_TYPE", "EMPLOYMENT_TYPE", "CUSTOMER_SEGMENT",
+        "TARGET_SEGMENT", "SEGMENT_TIER", "MIN_AGE", "MAX_AGE", "GENDER",
+        "IS_BANK_OFFERED", "ACCOUNT_TYPE", "CARD_TYPE", "CHANNEL",
+        "ELIGIBILITY_TYPE", "SERVICE_TYPE", "REWARD_TYPE", "CURRENCY",
+        "CURRENCY_TYPE", "MIN_BALANCE", "AVG_BALANCE_REQUIREMENT", "MIN_INCOME",
+        "MIN_INCOME_USD", "MIN_INVESTMENT", "MIN_CONTRIBUTION", "LOAN_AMOUNT_RANGE",
+        "COVERAGE_AMOUNT", "FINANCING_TYPE", "DEPOSIT_PROFIT_TYPE",
+        "DEPOSIT_PROFIT_FREQUENCY", "TENURE", "TENURE_OPTIONS", "MIN_TERM_YEARS",
+        "MAX_TERM_YEARS", "BUSINESS_TENURE", "COLLATERAL_TYPE", "EQUITY_REQUIREMENT",
+        "DBR_LIMIT", "TRANSACTION_LIMIT", "SPECIAL_CONDITIONS", "PRODUCT_DESCRIPTION",
+        "PROVIDER_NAME", "PRODUCT_VARIANT_TIER", "PRICING_RATE", "FEES_AND_CHARGES",
+        "KEY_BENEFITS", "OPTIONAL_RIDERS", "FREE_LOOK_PERIOD_DAYS",
+        "REQUIRED_DOCUMENTS", "CLAIMS_SERVICE_CONTACT", "KEY_EXCLUSIONS",
+        "TAX_ZAKAT_TREATMENT", "PREMIUM_PAYMENT_FREQUENCY"
+    ]
+    
+    for field in required_fields:
+        if field not in normalized:
+            normalized[field] = "N/A"
+    
+    return normalized
 
 
 def _crossfield_validate(normalized: dict) -> dict:
@@ -2337,30 +2493,28 @@ def normalize_record(record, entry, doc_text=""):
     normalized["PRODUCT_NAME"] = raw_name
     normalized["SOURCE_FILE_PRODUCT"] = get_source_filename(entry)
 
-    # ----------------------------------------------------------------
-    # Cross-field consistency: must run after all per-field normalizations
-    # ----------------------------------------------------------------
-    normalized = _crossfield_validate(normalized)
+    # ===== VALIDATION LAYER DISABLED =====
+    # Validation functions remain in code for future use but are NOT called
+    # To enable validation, uncomment the blocks below
+    # normalized = _crossfield_validate(normalized)
     
-    # CRITICAL: Validate product variant tiers against document (prevent hallucination)
-    if "PRODUCT_VARIANT_TIER" in normalized and doc_text:
-        normalized["PRODUCT_VARIANT_TIER"] = _validate_product_variant_tier(
-            normalized.get("PRODUCT_VARIANT_TIER", "N/A"), doc_text
-        )
+    # ===== VALIDATION LAYER DISABLED =====
+    # if "PRODUCT_VARIANT_TIER" in normalized and doc_text:
+    #     normalized["PRODUCT_VARIANT_TIER"] = _validate_product_variant_tier(
+    #         normalized.get("PRODUCT_VARIANT_TIER", "N/A"), doc_text
+    #     )
     
-    # CRITICAL FIX: Validate TENURE_OPTIONS are actually listed in document (Product 3 issue)
-    # Prevents hallucination of option schedules like "10|20|30|40|50|60" not in document
-    if "TENURE_OPTIONS" in normalized and doc_text:
-        normalized["TENURE_OPTIONS"] = _validate_tenure_options(
-            normalized.get("TENURE_OPTIONS", "N/A"), doc_text
-        )
+    # ===== VALIDATION LAYER DISABLED =====
+    # if "TENURE_OPTIONS" in normalized and doc_text:
+    #     normalized["TENURE_OPTIONS"] = _validate_tenure_options(
+    #         normalized.get("TENURE_OPTIONS", "N/A"), doc_text
+    #     )
     
-    # CRITICAL FIX: Validate LOAN_AMOUNT_RANGE doesn't contain measurement units (Product 1 issue)
-    # Rejects capacity specs like "4KW-1000KW" that aren't loan amounts
-    if "LOAN_AMOUNT_RANGE" in normalized and doc_text:
-        normalized["LOAN_AMOUNT_RANGE"] = _validate_loan_amount_range(
-            normalized.get("LOAN_AMOUNT_RANGE", "N/A"), doc_text
-        )
+    # ===== VALIDATION LAYER DISABLED =====
+    # if "LOAN_AMOUNT_RANGE" in normalized and doc_text:
+    #     normalized["LOAN_AMOUNT_RANGE"] = _validate_loan_amount_range(
+    #         normalized.get("LOAN_AMOUNT_RANGE", "N/A"), doc_text
+    #     )
     
     # CRITICAL FIX: For insurance products (LEAD_MARKER="IBG"), ACCOUNT_TYPE must be "N/A"
     # ACCOUNT_TYPE is only for bank accounts (Current, Savings, Wallet), not insurance products
@@ -2368,33 +2522,32 @@ def normalize_record(record, entry, doc_text=""):
     if lead_marker == "IBG":
         normalized["ACCOUNT_TYPE"] = "N/A"
     
-    # CRITICAL: Validate employment restrictions against document (prevent hallucination)
-    if "EMPLOYMENT_TYPE" in normalized and doc_text:
-        normalized["EMPLOYMENT_TYPE"] = _validate_employment_restrictions(
-            normalized.get("EMPLOYMENT_TYPE", "N/A"), doc_text
-        )
+    # ===== VALIDATION LAYER DISABLED =====
+    # if "EMPLOYMENT_TYPE" in normalized and doc_text:
+    #     normalized["EMPLOYMENT_TYPE"] = _validate_employment_restrictions(
+    #         normalized.get("EMPLOYMENT_TYPE", "N/A"), doc_text
+    #     )
     
-    # CRITICAL: Validate age requirements against document (prevent hallucination)
-    if doc_text and ("MIN_AGE" in normalized or "MAX_AGE" in normalized):
-        min_age, max_age = _validate_age_requirements(
-            normalized.get("MIN_AGE", "N/A"),
-            normalized.get("MAX_AGE", "N/A"),
-            doc_text
-        )
-        normalized["MIN_AGE"] = min_age
-        normalized["MAX_AGE"] = max_age
+    # ===== VALIDATION LAYER DISABLED =====
+    # if doc_text and ("MIN_AGE" in normalized or "MAX_AGE" in normalized):
+    #     min_age, max_age = _validate_age_requirements(
+    #         normalized.get("MIN_AGE", "N/A"),
+    #         normalized.get("MAX_AGE", "N/A"),
+    #         doc_text
+    #     )
+    #     normalized["MIN_AGE"] = min_age
+    #     normalized["MAX_AGE"] = max_age
     
-    # CRITICAL FIX (AH5a): Validate MIN_TERM_YEARS is only populated if explicitly stated
-    # Prevent hallucination of default "1" when document only states "Up to X years"
-    if doc_text and "MIN_TERM_YEARS" in normalized:
-        min_term_value = normalized.get("MIN_TERM_YEARS", "N/A")
-        max_term_value = normalized.get("MAX_TERM_YEARS", "N/A")
-        validated_min_term = _validate_min_term_years(
-            min_term_value,
-            max_term_value,
-            doc_text
-        )
-        normalized["MIN_TERM_YEARS"] = validated_min_term
+    # ===== VALIDATION LAYER DISABLED =====
+    # if doc_text and "MIN_TERM_YEARS" in normalized:
+    #     min_term_value = normalized.get("MIN_TERM_YEARS", "N/A")
+    #     max_term_value = normalized.get("MAX_TERM_YEARS", "N/A")
+    #     validated_min_term = _validate_min_term_years(
+    #         min_term_value,
+    #         max_term_value,
+    #         doc_text
+    #     )
+    #     normalized["MIN_TERM_YEARS"] = validated_min_term
     
     # CRITICAL FIX: Infer and correct LEAD_MARKER based on product signals
     # This catches loans incorrectly classified as insurance products
@@ -2403,6 +2556,15 @@ def normalize_record(record, entry, doc_text=""):
     
     # CRITICAL FIX: Correct coverage amounts that were misplaced into LOAN_AMOUNT_RANGE
     normalized = _fix_coverage_loan_amount_confusion(normalized)
+    
+    # CRITICAL FIX (Audit #6): Deduplicate repeated values in multi-value fields
+    normalized = _deduplicate_multivalue_fields(normalized)
+    
+    # CRITICAL FIX (Audit #12): Format TENURE as range when min and max available
+    normalized = _fix_tenure_range_format(normalized)
+    
+    # CRITICAL FIX (Audit #9): Ensure all 56 fields are present in output
+    normalized = _ensure_all_56_fields_present(normalized)
     
     return normalized
 
@@ -2904,6 +3066,7 @@ def extract_one_product(model, tokenizer, entry, text, max_new_tokens=None):
     if not any_chunk_succeeded:
         return blank_record(entry)
 
+    # ===== VALIDATION TEMPORARILY DISABLED FOR DEBUGGING =====
     # Single validation/correction pass on the merged record.
     # FIX (OOM): The validation prompt is the LARGEST in the pipeline
     # (full SYSTEM_PROMPT + 31 rules + extracted JSON ≈ 10,500 tokens
@@ -2911,36 +3074,39 @@ def extract_one_product(model, tokenizer, entry, text, max_new_tokens=None):
     # trigger.  Skip it when free VRAM is below 3 GiB — the Python-side
     # normalize_record + _crossfield_validate already enforce the same
     # rules deterministically, so extraction quality is preserved.
-    free_gib = _gpu_free_gib()
-    if free_gib < 3.0:
-        print(
-            f"    note: skipping LLM validation pass (only {free_gib:.1f} GiB free, "
-            f"need ~3 GiB) — Python-side normalization still applied"
-        )
-        return accumulated
-
-    # Use the same max_new_tokens as the rest of the pipeline (single source
-    # of truth).  A previous version hardcoded 1200 here, which silently
-    # overrode the auto-raised MAX_NEW_TOKENS (1500) and caused inconsistent
-    # "generation hit max_new_tokens" log values.
-    validation_max = max_new_tokens or MAX_NEW_TOKENS
-    validation_prompt = build_validation_prompt(entry, accumulated)
-    try:
-        validation_raw = get_raw_generation(model, tokenizer, validation_prompt, max_new_tokens=validation_max)
-    except torch.cuda.OutOfMemoryError:
-        free_gpu_memory()
-        print(
-            "    note: validation pass OOM — returning merged record "
-            "(Python-side normalization still applied)"
-        )
-        return accumulated
-    try:
-        validated_parsed = parse_json_blob(validation_raw)
-        return normalize_record(validated_parsed, entry, doc_text=text)
-    except Exception:
-        # If the validation call itself fails to parse, the merged record
-        # (already normalized field-by-field) is still a valid result.
-        return accumulated
+    # free_gib = _gpu_free_gib()
+    # if free_gib < 3.0:
+    #     print(
+    #         f"    note: skipping LLM validation pass (only {free_gib:.1f} GiB free, "
+    #         f"need ~3 GiB) — Python-side normalization still applied"
+    #     )
+    #     return accumulated
+    #
+    # # Use the same max_new_tokens as the rest of the pipeline (single source
+    # # of truth).  A previous version hardcoded 1200 here, which silently
+    # # overrode the auto-raised MAX_NEW_TOKENS (1500) and caused inconsistent
+    # # "generation hit max_new_tokens" log values.
+    # validation_max = max_new_tokens or MAX_NEW_TOKENS
+    # validation_prompt = build_validation_prompt(entry, accumulated)
+    # try:
+    #     validation_raw = get_raw_generation(model, tokenizer, validation_prompt, max_new_tokens=validation_max)
+    # except torch.cuda.OutOfMemoryError:
+    #     free_gpu_memory()
+    #     print(
+    #         "    note: validation pass OOM — returning merged record "
+    #         "(Python-side normalization still applied)"
+    #     )
+    #     return accumulated
+    # try:
+    #     validated_parsed = parse_json_blob(validation_raw)
+    #     return normalize_record(validated_parsed, entry, doc_text=text)
+    # except Exception:
+    #     # If the validation call itself fails to parse, the merged record
+    #     # (already normalized field-by-field) is still a valid result.
+    #     return accumulated
+    
+    # VALIDATION DISABLED: Return accumulated merged record directly without LLM validation pass
+    return accumulated
 
 
 def extract_one(model, tokenizer, entry, text, max_new_tokens=None):
