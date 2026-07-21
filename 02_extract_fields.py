@@ -1713,49 +1713,57 @@ def _validate_employment_restrictions(employment_value: str, doc_text: str) -> s
 def _validate_min_term_years(min_term: str, max_term: str, doc_text: str) -> str:
     """
     CRITICAL FIX (AH4): MIN_TERM_YEARS must ONLY be extracted if document
-    EXPLICITLY states a minimum tenure/term with keywords "minimum", "min", "minimum term".
+    EXPLICITLY states a minimum tenure/term with keywords "minimum", "min", or "minimum term".
     
-    Do NOT extract from "Up to X years" (that's only MAX_TERM_YEARS).
-    Do NOT default to 1.
+    CRITICAL RULES:
+    - "Up to 10 years" (NO minimum keyword) → ALWAYS "N/A" (not MIN_TERM, it's MAX_TERM only)
+    - "Minimum 1 year" → extract 1
+    - "Min 2 years" → extract 2
+    - "Minimum Term: 10 years" → extract 10
+    - "Between 1-10 years" (vague range, no min keyword) → "N/A"
     
-    CRITICAL LOGIC:
-    - If document says "Up to 10 years" (no minimum keyword) → ALWAYS return "N/A"
-    - If document says "Minimum 1 year" → extract the 1
-    - If document says "Minimum Term: 10 years" → extract the 10
-    
-    Valid formats: "Minimum 1 year", "Min 2 years", "Minimum Term: 10 years", etc.
-    Invalid: "Up to 10 years" (only MAX), "Generally 5-10 years" (vague range)
+    NEVER default to 1 or any other value.
+    Document must explicitly use keywords: "minimum", "min", "minimum term"
     """
     if not min_term or min_term == "N/A":
         return "N/A"
     
     doc_lower = doc_text.lower()
     
-    # CRITICAL FIX: If document EXPLICITLY contains "up to" with NO minimum keyword anywhere,
-    # return N/A immediately. This is the most important check.
-    if ("up to" in doc_lower or "upto" in doc_lower) and "minimum" not in doc_lower and "min " not in doc_lower:
-        # Document only states maximum, no minimum mentioned
+    # CRITICAL FIX: First check if document has ONLY "Up to" (maximum) language
+    # If ONLY "up to X years" exists with NO minimum keyword, return N/A immediately
+    has_up_to = "up to" in doc_lower or "upto" in doc_lower
+    has_minimum_keyword = any(kw in doc_lower for kw in ["minimum", "min ", "minimum term", "min."])
+    
+    # CRITICAL LOGIC: If document says ONLY "Up to X" with no minimum keyword anywhere
+    # This is definitely just a maximum, not a minimum
+    if has_up_to and not has_minimum_keyword:
         return "N/A"
     
-    # Patterns that indicate explicit MINIMUM terms (with required keywords)
+    # Patterns that EXPLICITLY indicate minimum terms (keywords REQUIRED)
     min_term_patterns = [
         r"minimum\s+(?:tenure|term|years?)\s*(?:of\s+|:\s*)?(\d+)",
-        r"min(?:imum)?\s+(?:tenure|term|years?)\s*(?:of\s+|:\s*)?(\d+)",
-        r"(?:tenure|term)\s+(?:from|starting)\s+at\s+(\d+)\s+(?:years?|yrs?)",
-        r"(?:tenure|term)\s+(?:minimum|min)\s+(\d+)",
-        r"(?:min|minimum)\s+(?:\d+)\s+(?:to|through|-)\s+(?:\d+)\s+years?",
+        r"min\.?\s+(?:tenure|term|years?)\s*(?:of\s+|:\s*)?(\d+)",
+        r"(?:tenure|term)\s+(?:from|starting|minimum)\s+(\d+)\s+(?:years?|yrs?)",
+        r"minimum\s+(?:term|tenure):\s*(\d+)",
+        r"min\s+(\d+)\s+years?(?:\s+to|-)?",
     ]
     
-    # Check if document has ANY explicit minimum term statement using required keywords
-    has_minimum_statement = any(re.search(pattern, doc_lower) for pattern in min_term_patterns)
+    # Check if document has ANY explicit minimum term using required keywords
+    has_explicit_minimum = any(re.search(pattern, doc_lower) for pattern in min_term_patterns)
     
-    # If no minimum keyword found in document, return N/A
-    # This prevents hallucinated defaults like "1" when only max is stated
-    if not has_minimum_statement:
+    if not has_explicit_minimum:
+        # No explicit minimum found, even if min_term has a value
+        # Do NOT return it (would be hallucinated/inferred)
         return "N/A"
     
-    # Minimum term is explicitly stated with required keywords
-    return min_term
+    # Minimum term is EXPLICITLY stated with required keyword — safe to return it
+    try:
+        # Validate it's an actual integer
+        int(min_term)
+        return min_term
+    except (ValueError, TypeError):
+        return "N/A"
 
 
 def _validate_age_requirements(min_age: str, max_age: str, doc_text: str) -> tuple:
@@ -1856,7 +1864,7 @@ def _crossfield_validate(normalized: dict) -> dict:
         # Insurance-specific fields MUST be N/A for bank products per G12
         insurance_fields = {
             "COVERAGE_AMOUNT",          # Insurance coverage amounts
-            "FREE_LOOK_PERIOD_DAYS",    # Insurance free-look period
+            "FREE_LOOK_PERIOD_DAYS",    # Insurance free-look period (CRITICAL: must be N/A for BNK)
             "OPTIONAL_RIDERS",          # Insurance optional riders
             "PREMIUM_PAYMENT_FREQUENCY", # Insurance premium payment mode
             "MIN_CONTRIBUTION",         # Insurance premium minimum
@@ -2468,7 +2476,7 @@ def normalize_record(record, entry, doc_text=""):
     # ===== VALIDATION LAYER DISABLED =====
     # Validation functions remain in code for future use but are NOT called
     # To enable validation, uncomment the blocks below
-    # normalized = _crossfield_validate(normalized)
+    normalized = _crossfield_validate(normalized)  # ENABLED: Critical field applicability validation
     
     # ===== VALIDATION LAYER DISABLED =====
     # if "PRODUCT_VARIANT_TIER" in normalized and doc_text:
@@ -2510,16 +2518,16 @@ def normalize_record(record, entry, doc_text=""):
     #     normalized["MIN_AGE"] = min_age
     #     normalized["MAX_AGE"] = max_age
     
-    # ===== VALIDATION LAYER DISABLED =====
-    # if doc_text and "MIN_TERM_YEARS" in normalized:
-    #     min_term_value = normalized.get("MIN_TERM_YEARS", "N/A")
-    #     max_term_value = normalized.get("MAX_TERM_YEARS", "N/A")
-    #     validated_min_term = _validate_min_term_years(
-    #         min_term_value,
-    #         max_term_value,
-    #         doc_text
-    #     )
-    #     normalized["MIN_TERM_YEARS"] = validated_min_term
+    # ENABLED: Validate MIN_TERM_YEARS only if explicitly stated with minimum keyword
+    if doc_text and "MIN_TERM_YEARS" in normalized:
+        min_term_value = normalized.get("MIN_TERM_YEARS", "N/A")
+        max_term_value = normalized.get("MAX_TERM_YEARS", "N/A")
+        validated_min_term = _validate_min_term_years(
+            min_term_value,
+            max_term_value,
+            doc_text
+        )
+        normalized["MIN_TERM_YEARS"] = validated_min_term
     
     # CRITICAL FIX: Infer and correct LEAD_MARKER based on product signals
     # This catches loans incorrectly classified as insurance products
