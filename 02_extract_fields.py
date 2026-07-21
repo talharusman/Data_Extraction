@@ -156,7 +156,7 @@ REPETITION_PENALTY = env_float("HF_REPETITION_PENALTY", 1.03)
 # system prompt each chunk call was ~8,500 input tokens.  At 4000 chars
 # the input drops to ~7,000 tokens, saving ~25% KV-cache memory per call.
 TEXT_CHUNK_SIZE = env_int("TEXT_CHUNK_SIZE", 4000)
-TEXT_CHUNK_OVERLAP = env_int("TEXT_CHUNK_OVERLAP", 500)
+TEXT_CHUNK_OVERLAP = env_int("TEXT_CHUNK_OVERLAP", 1000)  # Increased from 500 to capture compound values across chunk boundaries
 LOAD_IN_4BIT = env_bool("HF_LOAD_IN_4BIT", False)
 LOAD_IN_8BIT = env_bool("HF_LOAD_IN_8BIT", False)
 DEVICE_MAP = os.environ.get("HF_DEVICE_MAP", "auto").strip() or "auto"
