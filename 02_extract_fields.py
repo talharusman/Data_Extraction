@@ -29,9 +29,10 @@ Resumable: already-extracted products (present in OUT_JSONL) are skipped,
 so you can safely re-run after an interruption.
 
 CHANGES IN THIS VERSION (comprehensive audit fixes — generic, not product-specific):
-- CRITICAL LEAD_MARKER FIX: "term finance facility" is ALWAYS a BNK (bank loan)
-  product, NEVER IBG (insurance). Added explicit "green energy" and "term finance"
-  signal detection that overrides any IBG classification for loan products.
+- CRITICAL LEAD_MARKER REDESIGN: LEAD_MARKER now represents the banking division
+  (IBG = Islamic Banking Group, BNK = Conventional Banking), NOT product type.
+  Removed all keyword-based inference. LEAD_MARKER must be determined by examining
+  which division of the bank is offering the product.
 
 - CRITICAL MIN_AGE FIX: Extract MOST RESTRICTIVE minimum age across all segments.
 
@@ -1842,17 +1843,30 @@ def _crossfield_validate(normalized: dict) -> dict:
     field-by-field basis during per-column normalization.
 
     Called before other cross-field corrections to enforce basic consistency
-    between product type (LEAD_MARKER) and field-level values.
-    """
-    lead = normalized.get("LEAD_MARKER", "").strip().upper()
+    between product PLAN_TYPE and field-level values.
     
-    if not isinstance(lead, str) or lead not in ("BNK", "IBG"):
+    CRITICAL CHANGE: This function now uses PLAN_TYPE to determine field
+    applicability, NOT LEAD_MARKER. LEAD_MARKER now represents the banking
+    division (Islamic vs Conventional), not the product type.
+    """
+    plan_type = (normalized.get("PLAN_TYPE", "") or "").strip().lower()
+    
+    # Determine if this is a loan/deposit/card product or insurance product
+    # based on PLAN_TYPE, not LEAD_MARKER
+    loan_plan_types = {"loan", "deposit", "savings", "card", "account"}
+    insurance_plan_types = {"insurance"}
+    
+    is_loan_product = any(pt in plan_type for pt in loan_plan_types)
+    is_insurance_product = any(pt in plan_type for pt in insurance_plan_types)
+    
+    if not (is_loan_product or is_insurance_product):
+        # If PLAN_TYPE is unclear, we cannot determine field applicability
         return normalized
 
     # ================================================================
-    # BNK (Bank-Direct Loan/Deposit/Account/Card) Product Rules
+    # LOAN/DEPOSIT/CARD/ACCOUNT Products (based on PLAN_TYPE)
     # ================================================================
-    if lead == "BNK":
+    if is_loan_product:
         # Bank products cannot have fund-based financing (Unit Linked or Hybrid)
         # These are insurance/investment structures, not bank lending structures
         fin_type = normalized.get("FINANCING_TYPE", "")
@@ -1890,9 +1904,9 @@ def _crossfield_validate(normalized: dict) -> dict:
                 normalized["MIN_CONTRIBUTION"] = "N/A"
 
     # ================================================================
-    # IBG (Insurance/Takaful-Underwritten Product) Rules
+    # INSURANCE/TAKAFUL Products (based on PLAN_TYPE)
     # ================================================================
-    elif lead == "IBG":
+    elif is_insurance_product:
         # Insurance products should not have loan-specific fields populated
         # with actual values (these are for BNK products only)
         loan_fields = {
@@ -1971,17 +1985,18 @@ def _fix_coverage_loan_amount_confusion(normalized: dict) -> dict:
     insurance coverage amounts (sum insured) into LOAN_AMOUNT_RANGE instead
     of COVERAGE_AMOUNT.
     
-    For IBG (insurance) products:
+    For insurance products (PLAN_TYPE contains "Insurance"):
     - LOAN_AMOUNT_RANGE MUST be "N/A" always (it's loan-specific)
     - Coverage amounts (sum insured) MUST go in COVERAGE_AMOUNT
     
     This fixes the case where "Sum Insured up to PKR 5 million" gets
     extracted to LOAN_AMOUNT_RANGE instead of COVERAGE_AMOUNT.
     """
-    lead = normalized.get("LEAD_MARKER", "").strip().upper()
+    plan_type = (normalized.get("PLAN_TYPE", "") or "").strip().lower()
     
-    # Only validate for insurance products
-    if lead != "IBG":
+    # Only validate for insurance products based on PLAN_TYPE
+    is_insurance = "insurance" in plan_type
+    if not is_insurance:
         return normalized
     
     loan_range = normalized.get("LOAN_AMOUNT_RANGE", "").strip()
@@ -2004,8 +2019,8 @@ def _fix_coverage_loan_amount_confusion(normalized: dict) -> dict:
             # Both fields have values - LOAN_AMOUNT_RANGE should still be N/A for insurance
             normalized["LOAN_AMOUNT_RANGE"] = "N/A"
     
-    # Final enforcement: IBG products MUST have LOAN_AMOUNT_RANGE = N/A
-    if lead == "IBG" and normalized.get("LOAN_AMOUNT_RANGE") not in ("N/A", ""):
+    # Final enforcement: Insurance products MUST have LOAN_AMOUNT_RANGE = N/A
+    if is_insurance and normalized.get("LOAN_AMOUNT_RANGE") not in ("N/A", ""):
         # Additional check: does it really look like a loan amount or coverage?
         value = normalized.get("LOAN_AMOUNT_RANGE", "").lower()
         if "sum" in value or "coverage" in value or "option" in value:
@@ -2051,129 +2066,37 @@ def _validate_product_name(product_name: str, doc_text: str) -> bool:
 
 def _infer_and_correct_lead_marker(normalized: dict, doc_text: str = "") -> dict:
     """
-    Smart inference and correction of LEAD_MARKER based on explicit content signals.
-    Also validates PRODUCT_NAME against the document to catch hallucinations.
+    CRITICAL CHANGE: This function NO LONGER infers LEAD_MARKER from keywords.
     
-    Corrects common misclassifications:
-    - A loan product (contains "term finance", "loan", "KIBOR", markup rates) 
-      should be BNK, not IBG
-    - An insurance product (contains "insurance", "policy", "premium", "coverage plan")
-      should be IBG, not BNK
+    LEAD_MARKER must be extracted directly from the document by the model,
+    as it represents the banking division offering the product:
+    - "BNK" = Conventional Banking division
+    - "IBG" = Islamic Banking Group (Shariah-compliant) division
     
-    Priority: Trust the extracted LEAD_MARKER FIRST (the model may have it right).
-    Only correct if product description + field content contradict it.
+    This function only performs basic validation to ensure LEAD_MARKER is
+    one of the valid values. No keyword-based inference is performed.
     """
     if not isinstance(normalized, dict):
         return normalized
     
-    desc = (normalized.get("PRODUCT_DESCRIPTION", "") or "").lower()
-    plan = (normalized.get("PLAN_TYPE", "") or "").lower()
-    prov = (normalized.get("PROVIDER_NAME", "") or "").lower()
-    pricing = (normalized.get("PRICING_RATE", "") or "").lower()
-    loan_amt = (normalized.get("LOAN_AMOUNT_RANGE", "") or "").lower()
-    collateral = (normalized.get("COLLATERAL_TYPE", "") or "").lower()
-    equity = (normalized.get("EQUITY_REQUIREMENT", "") or "").lower()
-    
-    # Signals that indicate a LOAN product (should be BNK)
-    # CRITICAL: "term finance" is the strongest BNK signal — a term finance facility
-    # is ALWAYS a bank loan product, never insurance, even if insurance is bundled
-    loan_signals = {
-        "term finance", "loan", "credit", "financing", "overdraft", 
-        "markup", "kibor", "murabaha", "musharaka", "ijarah",
-        "working capital", "auto", "housing", "vehicle", "sme",
-        "business loan", "term facility", "credit facility", "green energy",
-        "solar energy", "electricity generation", "renewable energy"
-    }
-    
-    # Signals that indicate an INSURANCE product (should be IBG)
-    insurance_signals = {
-        "insurance", "protection", "takaful", "endowment",
-        "unit-linked", "unit linked", "investment-linked", "cover",
-        "policy", "premium", "rider", "hospitalization", "death benefit",
-        "claims", "underwritten by"
-    }
-    
-    combined_text = f"{desc} {plan} {prov} {pricing} {loan_amt} {collateral} {equity}".lower()
-    
-    loan_score = sum(1 for sig in loan_signals if sig in combined_text)
-    insurance_score = sum(1 for sig in insurance_signals if sig in combined_text)
+    # CRITICAL CHANGE: Validation only, no keyword-based inference.
+    # Simply ensure LEAD_MARKER is one of the valid values.
+    # The model must extract LEAD_MARKER directly from the document.
     
     current_marker = normalized.get("LEAD_MARKER", "").strip().upper()
     
-    # CRITICAL: Check for "term finance" — STRONGEST loan signal, overrides everything
-    # BUG FIX: Check BOTH extracted fields AND raw document text because fields may be truncated
-    has_term_finance_in_fields = "term finance" in combined_text
-    has_term_finance_in_doc = "term finance" in doc_text.lower() if doc_text else False
-    has_term_finance = has_term_finance_in_fields or has_term_finance_in_doc
-    has_financing = "financing" in combined_text or "financing" in desc
+    # Validate LEAD_MARKER has a valid value
+    if current_marker not in ("BNK", "IBG"):
+        # If LEAD_MARKER is missing or invalid, default to "N/A"
+        # The system prompt should guide the model to extract it directly
+        if not current_marker:
+            normalized["LEAD_MARKER"] = "N/A"
+        else:
+            # Invalid value (not BNK or IBG), set to N/A
+            normalized["LEAD_MARKER"] = "N/A"
     
-    # CRITICAL: For loans, if provider is Bank Alfalah and no insurance company is mentioned,
-    # it's almost certainly a bank loan (BNK), not insurance (IBG)
-    is_bank_only = ("bank alfalah" in prov or "bank " in prov) and "insurance" not in prov
-    has_loan_keywords = any(sig in combined_text for sig in ["term finance", "loan", "financing", "green energy", "solar"])
-    
-    # BUG FIX: Also detect loan products from document keywords not in extracted fields
-    # KIBOR, markup are strong loan indicators that might not appear in normalized fields
-    doc_lower = doc_text.lower() if doc_text else ""
-    has_kibor_or_markup = any(x in doc_lower for x in ["kibor", "markup", "profit rate", "interest rate"])
-    
-    # CRITICAL: "term finance facility" ALWAYS means BNK (bank loan), NEVER IBG,
-    # even if insurance is bundled with it. The core product is a bank loan,
-    # not an insurance product.
-    if (has_term_finance or has_kibor_or_markup or (has_financing and is_bank_only)) and current_marker == "IBG":
-        # Term finance facility or bank financing misclassified as insurance — MUST correct
-        normalized["LEAD_MARKER"] = "BNK"
-        # Cascade corrections: ALL insurance-only fields MUST be N/A for BNK products
-        insurance_only_fields = [
-            "COVERAGE_AMOUNT", "FREE_LOOK_PERIOD_DAYS", 
-            "OPTIONAL_RIDERS", "PREMIUM_PAYMENT_FREQUENCY", 
-            "MIN_CONTRIBUTION", "KEY_EXCLUSIONS", "CLAIMS_SERVICE_CONTACT"
-        ]
-        for field in insurance_only_fields:
-            if field in normalized and normalized.get(field) not in ("N/A", "", None):
-                normalized[field] = "N/A"
-        
-        # For BNK loan products, PLAN_TYPE should be "Loan"
-        if normalized.get("PLAN_TYPE", "").lower() not in ("loan", "deposit", "account", "card"):
-            normalized["PLAN_TYPE"] = "Loan"
-        
-        # Additional sanity check: if PRICING_RATE looks like insurance premiums, clear it for loans
-        pricing = normalized.get("PRICING_RATE", "")
-        if pricing and pricing != "N/A":
-            if any(x in pricing.lower() for x in ["% of sum", "% of vehicle", "% net", "% insurance"]):
-                # This looks like insurance premium rate in PRICING_RATE for a loan — clear it
-                normalized["PRICING_RATE"] = "N/A"
-    
-    # Fallback: Strong loan signals with bank provider override weaker classification
-    elif ((has_loan_keywords or has_kibor_or_markup or loan_score >= 1) and is_bank_only and current_marker == "IBG"):
-        normalized["LEAD_MARKER"] = "BNK"
-        # Cascade corrections for insurance-only fields per G12 rule
-        for field in ["COVERAGE_AMOUNT", "FREE_LOOK_PERIOD_DAYS", 
-                      "OPTIONAL_RIDERS", "PREMIUM_PAYMENT_FREQUENCY", 
-                      "MIN_CONTRIBUTION", "KEY_EXCLUSIONS", "CLAIMS_SERVICE_CONTACT"]:
-            if field in normalized:
-                normalized[field] = "N/A"
-        # For BNK loan products, PLAN_TYPE should be "Loan"
-        if normalized.get("PLAN_TYPE", "").lower() != "loan":
-            normalized["PLAN_TYPE"] = "Loan"
-    
-    elif loan_score >= 2 and current_marker == "IBG":
-        # This is clearly a loan product but marked as insurance — correct it
-        normalized["LEAD_MARKER"] = "BNK"
-        # Cascade corrections for insurance-only fields per G12 rule
-        for field in ["COVERAGE_AMOUNT", "FREE_LOOK_PERIOD_DAYS", 
-                      "OPTIONAL_RIDERS", "PREMIUM_PAYMENT_FREQUENCY", 
-                      "MIN_CONTRIBUTION", "KEY_EXCLUSIONS", "CLAIMS_SERVICE_CONTACT"]:
-            if field in normalized:
-                normalized[field] = "N/A"
-    
-    elif insurance_score >= 2 and current_marker == "BNK":
-        # This is clearly an insurance product but marked as bank-only — correct it
-        normalized["LEAD_MARKER"] = "IBG"
-        # Cascade corrections for loan-only fields
-        for field in ["LOAN_AMOUNT_RANGE", "COLLATERAL_TYPE", "EQUITY_REQUIREMENT", "DBR_LIMIT"]:
-            if field in normalized:
-                normalized[field] = "N/A"
+    # No longer perform keyword-based inference or cascade corrections based on LEAD_MARKER
+    # Those corrections are now based on PLAN_TYPE in _crossfield_validate()
     
     return normalized
 
@@ -2496,10 +2419,10 @@ def normalize_record(record, entry, doc_text=""):
     #         normalized.get("LOAN_AMOUNT_RANGE", "N/A"), doc_text
     #     )
     
-    # CRITICAL FIX: For insurance products (LEAD_MARKER="IBG"), ACCOUNT_TYPE must be "N/A"
+    # CRITICAL FIX: For insurance products (PLAN_TYPE="Insurance"), ACCOUNT_TYPE must be "N/A"
     # ACCOUNT_TYPE is only for bank accounts (Current, Savings, Wallet), not insurance products
-    lead_marker = normalized.get("LEAD_MARKER", "").strip().upper()
-    if lead_marker == "IBG":
+    plan_type = (normalized.get("PLAN_TYPE", "") or "").strip().lower()
+    if "insurance" in plan_type:
         normalized["ACCOUNT_TYPE"] = "N/A"
     
     # ===== VALIDATION LAYER DISABLED =====
@@ -2794,34 +2717,39 @@ VALIDATION RULES — check each and FIX if violated:
     FREE_LOOK_PERIOD_DAYS, REQUIRED_DOCUMENTS, CLAIMS_SERVICE_CONTACT,
     KEY_EXCLUSIONS, TAX_ZAKAT_TREATMENT, PREMIUM_PAYMENT_FREQUENCY
 
-21. LEAD_MARKER + PLAN_TYPE consistency:
-    If LEAD_MARKER="BNK" → PLAN_TYPE must NOT contain "Insurance". Fix to the
-    correct bank-only value: Loan|Deposit|Card|Service|Loyalty|Investment|Savings.
-    If LEAD_MARKER="IBG" → PLAN_TYPE MUST contain "Insurance".
+21. LEAD_MARKER consistency:
+    LEAD_MARKER must be exactly "IBG" or "BNK" (represents the banking division:
+    IBG = Islamic Banking Group, BNK = Conventional Banking).
+    If the value is anything else → fix to "IBG" or "BNK" based on document.
 
-22. LEAD_MARKER + FINANCING_TYPE consistency:
-    If LEAD_MARKER="BNK" and the document has no fund/unit-allocation/PIA language:
-    FINANCING_TYPE must be Conventional|Islamic|N/A — never "Unit Linked" or
-    "Hybrid (Bonus Based and Unit Linked)". A bank loan with KIBOR-based markup
-    and no Shariah/Islamic wording → "Conventional".
+22. PLAN_TYPE + Product Field Consistency:
+    If PLAN_TYPE contains "Insurance" → Product should have insurance-specific
+    fields like COVERAGE_AMOUNT, FREE_LOOK_PERIOD_DAYS, OPTIONAL_RIDERS,
+    PREMIUM_PAYMENT_FREQUENCY, MIN_CONTRIBUTION. Loan fields like
+    LOAN_AMOUNT_RANGE, COLLATERAL_TYPE, PRICING_RATE should be "N/A".
+    
+    If PLAN_TYPE is one of Loan|Deposit|Card|Service → Product should have
+    loan/deposit-specific fields. Insurance fields should be "N/A".
 
-23. LEAD_MARKER + PROVIDER_NAME:
-    If LEAD_MARKER="BNK": PROVIDER_NAME must be the bank name only (e.g.
-    "Bank Alfalah Limited"). It must NOT contain an insurance or takaful
-    company name. Fix to the bank name found in the document.
+23. FINANCING_TYPE consistency:
+    For insurance/investment-linked products (PLAN_TYPE contains "Insurance"):
+    FINANCING_TYPE should reflect the structure (Conventional, Islamic, Unit Linked,
+    Takaful, Hybrid). Never "N/A" for structured insurance products.
+    For bank loans/deposits: FINANCING_TYPE may be Conventional, Islamic, or N/A
+    (not Unit Linked unless the document explicitly states fund allocation).
 
-24. LEAD_MARKER + COVERAGE_AMOUNT:
-    If LEAD_MARKER="BNK": COVERAGE_AMOUNT="N/A" unless the document explicitly
-    states rupee or dollar sum-assured amounts for a bundled insurance component.
-    Insurance RATES such as "0.49% p.a." or "0.5% p.a." are NOT coverage
-    amounts — they belong in PRICING_RATE or FEES_AND_CHARGES. Fix accordingly.
+24. PROVIDER_NAME consistency:
+    If the product is offered by a bank → PROVIDER_NAME should be the bank name
+    (e.g. "Bank Alfalah Limited", "MCB", "HBL").
+    If the product is underwritten by an insurance/takaful company → PROVIDER_NAME
+    should include that company name (e.g. "Jubilee General Insurance", "EasyPaisa Takaful").
 
-25. LEAD_MARKER + insurance-specific fields:
-    If LEAD_MARKER="BNK" and the product is a loan/deposit/card with no
-    insurance plan structure: the following should all be "N/A" unless the
-    document explicitly provides these values for a bundled insurance component:
-    FREE_LOOK_PERIOD_DAYS, OPTIONAL_RIDERS, PREMIUM_PAYMENT_FREQUENCY,
-    MIN_CONTRIBUTION.
+25. COVERAGE_AMOUNT and insurance fields:
+    If PLAN_TYPE contains "Insurance" → expect COVERAGE_AMOUNT, FREE_LOOK_PERIOD_DAYS,
+    OPTIONAL_RIDERS, PREMIUM_PAYMENT_FREQUENCY, MIN_CONTRIBUTION to have values.
+    If PLAN_TYPE is Loan|Deposit|Card → all insurance fields should be "N/A".
+    Insurance RATES such as "0.49% p.a." are NOT coverage amounts — they belong
+    in PRICING_RATE or FEES_AND_CHARGES. Fix accordingly.
 
 26. EQUITY_REQUIREMENT: Must be a short percentage (e.g. "20%"), not a verbose
     phrase. Strip "Minimum", "Min.", "At least" prefixes and parenthetical
