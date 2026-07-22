@@ -1723,10 +1723,19 @@ def _validate_min_term_years(min_term: str, max_term: str, doc_text: str) -> str
     - "Minimum Term: 10 years" → extract 10
     - "Between 1-10 years" (vague range, no min keyword) → "N/A"
     
-    NEVER default to 1 or any other value.
-    Document must explicitly use keywords: "minimum", "min", "minimum term"
+    PRODUCTION FIX: Validate that keyword actually appears in document, not just in extracted value.
     """
     if not min_term or min_term == "N/A":
+        return "N/A"
+    
+    try:
+        # Validate it's an actual integer first
+        term_int = int(min_term)
+    except (ValueError, TypeError):
+        return "N/A"
+    
+    if not doc_text:
+        # If we have no document text to validate against, be conservative
         return "N/A"
     
     doc_lower = doc_text.lower()
@@ -1750,21 +1759,25 @@ def _validate_min_term_years(min_term: str, max_term: str, doc_text: str) -> str
         r"min\s+(\d+)\s+years?(?:\s+to|-)?",
     ]
     
-    # Check if document has ANY explicit minimum term using required keywords
-    has_explicit_minimum = any(re.search(pattern, doc_lower) for pattern in min_term_patterns)
+    # PRODUCTION FIX: Check if document has ANY explicit minimum term AND if the keyword
+    # actually appears near the extracted number
+    for pattern in min_term_patterns:
+        match = re.search(pattern, doc_lower)
+        if match:
+            # Keyword found and number extracted from document
+            extracted_num_str = match.group(1)
+            try:
+                extracted_num = int(extracted_num_str)
+                # Check if the extracted number matches our min_term (allow most restrictive)
+                if extracted_num <= term_int:
+                    # Minimum term is EXPLICITLY stated with required keyword in document
+                    return min_term
+            except (ValueError, TypeError):
+                pass
     
-    if not has_explicit_minimum:
-        # No explicit minimum found, even if min_term has a value
-        # Do NOT return it (would be hallucinated/inferred)
-        return "N/A"
-    
-    # Minimum term is EXPLICITLY stated with required keyword — safe to return it
-    try:
-        # Validate it's an actual integer
-        int(min_term)
-        return min_term
-    except (ValueError, TypeError):
-        return "N/A"
+    # No explicit minimum found in document, even if min_term has a value
+    # Do NOT return it (would be hallucinated/inferred)
+    return "N/A"
 
 
 def _validate_age_requirements(min_age: str, max_age: str, doc_text: str) -> tuple:
@@ -1772,16 +1785,24 @@ def _validate_age_requirements(min_age: str, max_age: str, doc_text: str) -> tup
     CRITICAL FIX (AH11): Prevent hallucination of age restrictions.
     Only accept extracted ages if document EXPLICITLY states GLOBAL age values.
     
+    PRODUCTION FIX: Also validate that the extracted age numbers actually appear
+    in the document with age-related keywords, not just inferred.
+    
     Returns ("N/A", "N/A") if:
     - Document says "available to all" / "all customers" (no restriction)
     - Document only states segment-specific ages (e.g., "Salaried: 25" but not globally)
     - Ages only appear in eligibility tables for specific customer types
+    - Extracted ages don't appear in document at all (hallucinated)
     
     Accepts only if:
     - Document explicitly states "available/eligible to ages X-Y" or similar GLOBAL statement
     - Ages appear in a universal eligibility context, not segment-specific
+    - Extracted age numbers exist in document with age keywords
     """
     if not min_age or not max_age or min_age == "N/A" or max_age == "N/A":
+        return ("N/A", "N/A")
+    
+    if not doc_text:
         return ("N/A", "N/A")
     
     doc_lower = doc_text.lower()
@@ -1800,9 +1821,41 @@ def _validate_age_requirements(min_age: str, max_age: str, doc_text: str) -> tup
     if any(phrase in doc_lower for phrase in all_customer_phrases):
         return ("N/A", "N/A")
     
-    # Check for explicit age numbers in common formats
-    # Valid formats: "18 years", "25 years old", "age 60", "minimum 25", "max 65", etc.
-    import re
+    # PRODUCTION FIX: Validate that extracted ages actually appear in document
+    # Check for age keywords near the extracted numbers
+    age_keywords = ["age", "years", "year", "aged", "minimum age", "maximum age", "eligible", "available"]
+    
+    # Verify that min_age appears in document with age context
+    min_age_pattern = rf"\b{min_age}\b"
+    max_age_pattern = rf"\b{max_age}\b"
+    
+    min_age_found = re.search(min_age_pattern, doc_lower)
+    max_age_found = re.search(max_age_pattern, doc_lower)
+    
+    # If ages don't appear in document at all, they're hallucinated
+    if not min_age_found or not max_age_found:
+        return ("N/A", "N/A")
+    
+    # Check if extracted ages appear in age-related context
+    min_age_context_ok = False
+    if min_age_found:
+        # Check surrounding text for age keywords
+        start = max(0, min_age_found.start() - 50)
+        end = min(len(doc_lower), min_age_found.end() + 50)
+        context = doc_lower[start:end]
+        min_age_context_ok = any(kw in context for kw in age_keywords)
+    
+    max_age_context_ok = False
+    if max_age_found:
+        # Check surrounding text for age keywords
+        start = max(0, max_age_found.start() - 50)
+        end = min(len(doc_lower), max_age_found.end() + 50)
+        context = doc_lower[start:end]
+        max_age_context_ok = any(kw in context for kw in age_keywords)
+    
+    if not (min_age_context_ok and max_age_context_ok):
+        # Ages found but not in age context - likely hallucinated
+        return ("N/A", "N/A")
     
     # CRITICAL: Look for GLOBAL age statements (not segment-specific like "Salaried Segment: Min 25")
     # Global patterns must NOT reference specific segments
@@ -1810,6 +1863,7 @@ def _validate_age_requirements(min_age: str, max_age: str, doc_text: str) -> tup
         rf"available.*\s+{min_age}\s+(?:to|-|–)\s+{max_age}\s+years?",  # "available ages 18-65"
         rf"between\s+{min_age}\s+(?:to|and)\s+{max_age}\s+years?",  # "between 18 and 65 years"
         rf"aged?\s+{min_age}\s+(?:to|-|–)\s+{max_age}",  # "age 18-65"
+        rf"customers\s+(?:aged?|between)\s+{min_age}.*{max_age}",  # "customers aged/between 18-65"
     ]
     
     # Check if this looks like a global statement (not preceded by "Salaried:" or other segment)
@@ -1832,7 +1886,7 @@ def _validate_age_requirements(min_age: str, max_age: str, doc_text: str) -> tup
         # No global age statement found - ages may be segment-specific
         return ("N/A", "N/A")
     
-    # Ages are globally stated, accept them
+    # Ages are globally stated AND appear in document, accept them
     return (min_age, max_age)
 
 
@@ -1983,23 +2037,55 @@ def _fix_coverage_loan_amount_confusion(normalized: dict) -> dict:
     """
     CRITICAL FIX: Detects and corrects the common mistake of extracting
     insurance coverage amounts (sum insured) into LOAN_AMOUNT_RANGE instead
-    of COVERAGE_AMOUNT.
+    of COVERAGE_AMOUNT. Also validates that LOAN_AMOUNT_RANGE contains actual
+    monetary amounts, not technical specifications (capacity, dimensions, etc.).
     
     For insurance products (PLAN_TYPE contains "Insurance"):
     - LOAN_AMOUNT_RANGE MUST be "N/A" always (it's loan-specific)
     - Coverage amounts (sum insured) MUST go in COVERAGE_AMOUNT
     
-    This fixes the case where "Sum Insured up to PKR 5 million" gets
-    extracted to LOAN_AMOUNT_RANGE instead of COVERAGE_AMOUNT.
+    For loan products:
+    - LOAN_AMOUNT_RANGE MUST contain currency (PKR/USD) or monetary keywords
+    - MUST NOT be capacity specs (KW, MW, sqft, units, etc.)
     """
     plan_type = (normalized.get("PLAN_TYPE", "") or "").strip().lower()
+    
+    # Validate loan amounts for loan products
+    loan_range = normalized.get("LOAN_AMOUNT_RANGE", "").strip()
+    
+    if loan_range and loan_range not in ("N/A", ""):
+        # Check for technical/capacity specs that should NOT be loan amounts
+        # These patterns indicate capacity, not monetary amounts
+        capacity_specs = [
+            r"\d+\s*(?:kw|kilowatt|mw|megawatt|gw)",  # Power: KW, MW
+            r"\d+\s*(?:sqft|sq\.?ft|sqm|m2|square)",   # Area: sqft, sqm
+            r"\d+\s*(?:ton|tonne|kg|gram)",             # Weight: tons, kg
+            r"\d+\s*hp(?:\s|$)",                        # Horsepower
+            r"option\s+\d+",                            # Not a monetary amount
+        ]
+        
+        is_capacity_spec = any(re.search(pattern, loan_range.lower(), re.IGNORECASE) for pattern in capacity_specs)
+        
+        # Check if it has valid monetary indicators
+        monetary_indicators = [
+            r"pkr|usd|eur|gbp|aed|sar|inr",  # Currency codes
+            r"million|thousand|crore|lakh",   # Monetary scale
+            r"\d+\s*[km](?:\s|$)",            # K/M shorthand (100K, 5M)
+        ]
+        
+        is_monetary = any(re.search(pattern, loan_range.lower(), re.IGNORECASE) for pattern in monetary_indicators)
+        
+        # PRODUCTION FIX: Reject if it looks like capacity, accept only if it has monetary indicators
+        if is_capacity_spec or not is_monetary:
+            # This looks like a technical spec or capacity range, not a loan amount
+            normalized["LOAN_AMOUNT_RANGE"] = "N/A"
+            loan_range = "N/A"
     
     # Only validate for insurance products based on PLAN_TYPE
     is_insurance = "insurance" in plan_type
     if not is_insurance:
         return normalized
     
-    loan_range = normalized.get("LOAN_AMOUNT_RANGE", "").strip()
     coverage = normalized.get("COVERAGE_AMOUNT", "").strip()
     
     # If LOAN_AMOUNT_RANGE has values for an insurance product, check if they're actually coverage amounts
@@ -2066,39 +2152,175 @@ def _validate_product_name(product_name: str, doc_text: str) -> bool:
 
 def _infer_and_correct_lead_marker(normalized: dict, doc_text: str = "") -> dict:
     """
-    CRITICAL CHANGE: This function NO LONGER infers LEAD_MARKER from keywords.
+    PRODUCTION FIX: Infer LEAD_MARKER from document signals when model extraction fails.
     
-    LEAD_MARKER must be extracted directly from the document by the model,
-    as it represents the banking division offering the product:
-    - "BNK" = Conventional Banking division
+    LEAD_MARKER represents the banking division offering the product:
+    - "BNK" = Conventional Banking division (default for ambiguous cases)
     - "IBG" = Islamic Banking Group (Shariah-compliant) division
     
-    This function only performs basic validation to ensure LEAD_MARKER is
-    one of the valid values. No keyword-based inference is performed.
+    STRATEGY: Use keyword-based heuristics to correct obvious misclassifications.
+    This prevents all products from being misclassified as one division.
     """
     if not isinstance(normalized, dict):
         return normalized
     
-    # CRITICAL CHANGE: Validation only, no keyword-based inference.
-    # Simply ensure LEAD_MARKER is one of the valid values.
-    # The model must extract LEAD_MARKER directly from the document.
-    
     current_marker = normalized.get("LEAD_MARKER", "").strip().upper()
     
-    # Validate LEAD_MARKER has a valid value
+    # If model provided a valid marker (BNK or IBG), keep it but verify with heuristics
+    # If marker is invalid or missing, infer from document signals
     if current_marker not in ("BNK", "IBG"):
-        # If LEAD_MARKER is missing or invalid, default to "N/A"
-        # The system prompt should guide the model to extract it directly
-        if not current_marker:
-            normalized["LEAD_MARKER"] = "N/A"
-        else:
-            # Invalid value (not BNK or IBG), set to N/A
-            normalized["LEAD_MARKER"] = "N/A"
+        current_marker = "N/A"
     
-    # No longer perform keyword-based inference or cascade corrections based on LEAD_MARKER
-    # Those corrections are now based on PLAN_TYPE in _crossfield_validate()
+    # PRODUCTION FIX: If all products are classified the same way, run heuristic inference
+    # This catches systemic errors where model always classifies as IBG or always as BNK
+    if doc_text and (current_marker == "N/A" or current_marker == "IBG"):
+        # Check if document has strong signals of Islamic banking
+        doc_lower = doc_text.lower()
+        
+        # IBG signals (Shariah-compliant, Islamic, Takaful)
+        ibg_keywords = [
+            "takaful",
+            "islamic banking",
+            "shariah",
+            "sharia",
+            "islamic finance",
+            "riba",
+            "murabaha",
+            "ijara",
+            "wakala",
+            "islamic advisor",
+            "shariah advisory"
+        ]
+        
+        # BNK signals (Conventional, interest-based, KIBOR, term finance)
+        bnk_keywords = [
+            "conventional",
+            "term finance",
+            "kibor",
+            "interest rate",
+            "markup rate",
+            "fixed rate",
+            "floating rate",
+            "interest-based",
+            "conventional banking"
+        ]
+        
+        ibg_signal_count = sum(1 for kw in ibg_keywords if kw in doc_lower)
+        bnk_signal_count = sum(1 for kw in bnk_keywords if kw in doc_lower)
+        
+        # Apply heuristic only if there are clear signals
+        if ibg_signal_count > 0 or bnk_signal_count > 0:
+            if ibg_signal_count > bnk_signal_count:
+                normalized["LEAD_MARKER"] = "IBG"
+            elif bnk_signal_count > ibg_signal_count:
+                normalized["LEAD_MARKER"] = "BNK"
+            else:
+                # Equal signals: Default to BNK (safer for ambiguous products)
+                normalized["LEAD_MARKER"] = "BNK"
+        else:
+            # No clear signals: Default to BNK (most banking products are conventional)
+            normalized["LEAD_MARKER"] = "BNK" if current_marker == "N/A" else current_marker
+    else:
+        # Valid marker provided, keep it
+        if current_marker != "N/A":
+            normalized["LEAD_MARKER"] = current_marker
+        else:
+            normalized["LEAD_MARKER"] = "BNK"  # Default to BNK if truly unknown
     
     return normalized
+
+
+def _validate_required_documents(required_docs: str, doc_text: str) -> str:
+    """
+    PRODUCTION FIX: Validate REQUIRED_DOCUMENTS extraction.
+    
+    Rules:
+    - Only extract from explicit "Documentation Required", "Required Documents" sections
+    - NOT from "Claims", "Claim Procedure", "How to File a Claim" sections
+    - NOT from loan documentation in insurance documents
+    - Reject if only claims-related keywords found
+    """
+    if not required_docs or required_docs == "N/A":
+        return "N/A"
+    
+    if not doc_text:
+        return required_docs  # Can't validate without doc text
+    
+    doc_lower = doc_text.lower()
+    required_docs_lower = required_docs.lower()
+    
+    # Check for claims keywords that indicate contamination
+    claims_keywords = [
+        "claim", "death certificate", "hospital certificate", 
+        "settlement", "claim procedure", "claim filing",
+        "claimant", "beneficiary", "settlement process"
+    ]
+    
+    # Check if extracted docs contain claims keywords
+    contaminated = any(kw in required_docs_lower for kw in claims_keywords)
+    
+    # Check if document has proper "Required Documents" section header
+    documentation_headers = [
+        "required documents",
+        "documentation required",
+        "upfront documents",
+        "application documents",
+        "documentation"
+    ]
+    
+    has_doc_section = any(header in doc_lower for header in documentation_headers)
+    
+    # Check if document ONLY has claims sections
+    only_claims_sections = (
+        ("claims" in doc_lower or "claim procedure" in doc_lower) 
+        and not has_doc_section
+    )
+    
+    # PRODUCTION FIX: If contaminated or only claims sections exist, return N/A
+    if contaminated or only_claims_sections:
+        return "N/A"
+    
+    return required_docs
+
+
+def _validate_tenure_options(tenure_options: str, doc_text: str) -> str:
+    """
+    PRODUCTION FIX: Validate that TENURE_OPTIONS contains preset options, not just min/max range.
+    
+    Wrong: "10-65 years" (this is a range min:10, max:65)
+    Wrong: "Minimum Term: 10 years | Maximum Term: 65 Years"
+    Correct: "1 Year | 3 Years | 5 Years | 10 Years"
+    Correct: "1M | 3M | 6M | 12M"
+    """
+    if not tenure_options or tenure_options == "N/A":
+        return "N/A"
+    
+    tenure_lower = tenure_options.lower()
+    
+    # Check if this looks like a range (min-max) rather than options
+    # Patterns for ranges:
+    range_patterns = [
+        r"^\d+\s*(?:to|-|–)\s*\d+\s*years?$",  # "10-65 years", "10 to 65 years"
+        r"minimum\s+term",  # "Minimum Term: X"
+        r"maximum\s+term",  # "Maximum Term: Y"
+    ]
+    
+    is_range = any(re.search(pattern, tenure_lower) for pattern in range_patterns)
+    
+    if is_range:
+        # This is a min/max range, not preset options
+        return "N/A"
+    
+    # Check if it looks like preset options (multiple values with separators or "Option" keywords)
+    # Valid patterns: "1|2|3|5|10" or "Option 1: 1 Year | Option 2: 3 Years"
+    has_multiple_values = ("|" in tenure_options) or ("option" in tenure_lower)
+    has_option_keyword = "option" in tenure_lower
+    
+    if not (has_multiple_values or has_option_keyword):
+        # Single value like "10 years" - not multiple options
+        return "N/A"
+    
+    return tenure_options
 
 
 def _normalize_employment_type(value: str) -> str:
@@ -2425,21 +2647,16 @@ def normalize_record(record, entry, doc_text=""):
     if "insurance" in plan_type:
         normalized["ACCOUNT_TYPE"] = "N/A"
     
-    # ===== VALIDATION LAYER DISABLED =====
-    # if "EMPLOYMENT_TYPE" in normalized and doc_text:
-    #     normalized["EMPLOYMENT_TYPE"] = _validate_employment_restrictions(
-    #         normalized.get("EMPLOYMENT_TYPE", "N/A"), doc_text
-    #     )
-    
-    # ===== VALIDATION LAYER DISABLED =====
-    # if doc_text and ("MIN_AGE" in normalized or "MAX_AGE" in normalized):
-    #     min_age, max_age = _validate_age_requirements(
-    #         normalized.get("MIN_AGE", "N/A"),
-    #         normalized.get("MAX_AGE", "N/A"),
-    #         doc_text
-    #     )
-    #     normalized["MIN_AGE"] = min_age
-    #     normalized["MAX_AGE"] = max_age
+    # PRODUCTION FIX: Re-enable age validation with strengthened keyword checking
+    # Prevents hallucinated ages from being extracted when document says "available to all"
+    if doc_text and ("MIN_AGE" in normalized or "MAX_AGE" in normalized):
+        min_age, max_age = _validate_age_requirements(
+            normalized.get("MIN_AGE", "N/A"),
+            normalized.get("MAX_AGE", "N/A"),
+            doc_text
+        )
+        normalized["MIN_AGE"] = min_age
+        normalized["MAX_AGE"] = max_age
     
     # ENABLED: Validate MIN_TERM_YEARS only if explicitly stated with minimum keyword
     if doc_text and "MIN_TERM_YEARS" in normalized:
@@ -2451,6 +2668,20 @@ def normalize_record(record, entry, doc_text=""):
             doc_text
         )
         normalized["MIN_TERM_YEARS"] = validated_min_term
+    
+    # PRODUCTION FIX: Validate REQUIRED_DOCUMENTS to reject claims section contamination
+    if doc_text and "REQUIRED_DOCUMENTS" in normalized:
+        normalized["REQUIRED_DOCUMENTS"] = _validate_required_documents(
+            normalized.get("REQUIRED_DOCUMENTS", "N/A"),
+            doc_text
+        )
+    
+    # PRODUCTION FIX: Validate TENURE_OPTIONS to distinguish options from ranges
+    if doc_text and "TENURE_OPTIONS" in normalized:
+        normalized["TENURE_OPTIONS"] = _validate_tenure_options(
+            normalized.get("TENURE_OPTIONS", "N/A"),
+            doc_text
+        )
     
     # CRITICAL FIX: Infer and correct LEAD_MARKER based on product signals
     # This catches loans incorrectly classified as insurance products

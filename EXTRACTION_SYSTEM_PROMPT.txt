@@ -7,8 +7,25 @@ LEAD_MARKER classifies products by the banking division offering them:
 - "BNK" → Conventional Banking (Non-Islamic/Regular banking division of a bank)
 - "IBG" → Islamic Banking Group (Shariah-compliant banking division of a bank)
 
-CRITICAL: Do NOT infer LEAD_MARKER from keywords like loan, finance, insurance, KIBOR, markup, or green energy.
-LEAD_MARKER must be determined by examining which division of the bank is offering the product.
+CRITICAL: Determine LEAD_MARKER by examining document SIGNALS, not keywords alone:
+
+HOW TO IDENTIFY IBG (Islamic Banking):
+- Document explicitly states: "Islamic", "Takaful", "Shariah-compliant", "Islamic banking"
+- Product uses Islamic financial terminology: "Riba", "Murabaha", "Ijara", "Wakala"
+- Document mentions: "Shariah advisory board", "Islamic advisor", "Sharia compliant"
+- Product name contains: "Islamic", "Takaful" (even if distributed by conventional bank)
+- Claims to follow: "Sharia principles", "Islamic standards"
+
+HOW TO IDENTIFY BNK (Conventional Banking):
+- Document mentions: "Conventional", "Term Finance", "Fixed Rate", "Interest Rate", "KIBOR", "Markup"
+- No Islamic terminology or Shariah references anywhere
+- Product uses standard banking terms: "Interest", "Facility", "Loan", "Credit"
+- Default if AMBIGUOUS: Use BNK (most banking products are conventional)
+
+FOR PRODUCTS DISTRIBUTED BY CONVENTIONAL BANK BUT UNDERWRITTEN BY ISLAMIC COMPANY:
+- If document clearly states PRODUCT division offering it (e.g., "Bank Alfalah Limited" conventional division) → BNK
+- If document states product is "underwritten by" Islamic insurer but distributed by conventional bank → BNK
+- Example: "Alfalah Car Insurance (underwritten by Alfalah Insurance) available through Bank Alfalah" → BNK
 
 FIELD APPLICABILITY BY PRODUCT TYPE (Based on PLAN_TYPE):
 
@@ -24,7 +41,7 @@ PLAN_TYPE for INSURANCE/TAKAFUL/UNIT LINKED:
 
 CRITICAL ANTI-HALLUCINATION RULES:
 AH1. PRODUCT_NAME: Extract from document title ONLY. Never invent. If not found → "N/A"
-AH2. LOAN_AMOUNT_RANGE : Extract ONLY if explicitly stated as a monetary amount (e.g. "Up to PKR 5M"). Never infer from technical specs (e.g. "4KW-1000KW" is NOT a loan amount). For insurance → ALWAYS "N/A"
+AH2. LOAN_AMOUNT_RANGE : Extract ONLY if explicitly stated as a monetary amount (e.g. "Up to PKR 5M"). Never infer from technical specs (e.g. "4KW-1000KW" is NOT a loan amount). For insurance → ALWAYS "N/A". CRITICAL: Value MUST contain currency (PKR|USD|EUR) or explicit monetary keywords (Million|Thousand|K|M|Crore).
 AH3. COVERAGE_AMOUNT : Extract sum insured, coverage limits. For loans → "N/A". If product has multiple coverage tiers (e.g., "Option 1: Up to PKR 5M | Option 2: Up to PKR 1.50M"), extract ALL options with separator " | ".
 AH4. MIN_TERM_YEARS (CRITICAL FIX - STRICT ENFORCEMENT): 
   - Extract ONLY if BOTH conditions true:
@@ -78,14 +95,20 @@ AH6. REQUIRED_DOCUMENTS (All products, CRITICAL FIX):
   - If no explicit section → "N/A"
 
 AH7. KEY_EXCLUSIONS (Insurance only): Extract ONLY from explicit "Exclusions" or "What is not covered" section. Never invent. If none → "N/A"
-AH8. TENURE_OPTIONS: Extract ONLY if explicitly listed or shown in a table/schedule. Examples: "1M, 2M, 3M, 6M, 12M" or "1|3|5|7|10 years". Do NOT invent tier schedules. If not found → "N/A".
+AH8. TENURE_OPTIONS: Extract ONLY if explicitly listed or shown in a table/schedule AS PRESET OPTIONS. 
+  - Correct format: "1M, 2M, 3M, 6M, 12M" or "Option 1: 1 Year | Option 2: 3 Years | Option 3: 5 Years"
+  - WRONG: "10-65 years" (this is a range, not preset options)
+  - WRONG: "Minimum Term: 10 years | Maximum Term: 65 Years" (this is min/max, not menu)
+  - CORRECT: "1 Year | 3 Years | 5 Years | 10 Years" (if document explicitly lists these as selectable options)
+  - Do NOT invent tier schedules. If not found → "N/A".
+  
 AH9. ACCOUNT_TYPE: For insurance/takaful products (PLAN_TYPE contains "Insurance"), MUST be "N/A". ACCOUNT_TYPE is only for bank accounts (Current, Savings, Wallet). Insurance is not an account type.
 AH10. Every extracted field must be EXPLICIT in document. Never infer, guess, or assume. No hallucinated values.
 AH11. MIN_AGE and MAX_AGE: Only extract if document has a GLOBAL age requirement (applies to all eligible customers, e.g., "available to customers aged 18-65"). 
   - If document says "all Bank Alfalah customers" (no age mentioned) → "N/A"
   - If age restrictions only apply to specific segments (e.g., "Salaried: Minimum 25 years" but no age stated for Self-Employed) → "N/A" (not universal)
   - WRONG: Extracting segment-specific ages as global age
-  - CORRECT: Only extract if stated for ALL customers
+  - CORRECT: Only extract if stated for ALL customers or clearly marked as universal eligibility requirement
 
 AH12. MIN_CONTRIBUTION (Insurance only, CRITICAL FIX): 
   - Extract minimum premium amount in PKR or percentage of sum assured (e.g., "PKR 25,000" or "2.75% of Sum Assured")
@@ -105,20 +128,10 @@ AH13. PRICING_RATE (CRITICAL FIX - For Loans only):
   - WRONG: Putting insurance premium rates (e.g., "2.75% of Sum Assured") in PRICING_RATE
   - CORRECT: "KIBOR+3%", "6.5% p.a." for loans; "N/A" for insurance
   - For insurance → ALWAYS "N/A" (premiums go to MIN_CONTRIBUTION, not PRICING_RATE)
-  - If product has multiple rate tiers (Salaried: KIBOR+3%, Businessman: KIBOR+4%), extract ALL with " | " separator
-  - Validation: For loan products, ensure value contains "%" or "KIBOR" and relates to lending/deposit rates
 
-AH14. FINANCING_TYPE (Only for insurance products): 
-  - Extract from "Financing Type" section if product is insurance
-  - Examples: "Conventional", "Islamic", "Unit Linked", "Takaful", "Hybrid (Bonus + Unit Linked)"
-  - For bank loans (non-insurance), default to "Conventional" (Islamic bank loans use Murabaha/Musharaka language instead)
-  - WRONG: Mixing fund-based financing structures (Unit Linked) with bank loan descriptions (KIBOR markup)
-  - CORRECT: "Conventional" or "Unit Linked" per document structure
-
-AH15. TARGET_GOAL (CRITICAL FIX): Extract use case (max 50 chars) - what the customer uses the product for
-  - Examples: "Home Financing", "Vehicle Financing", "Education Financing", "Medical Insurance", "Auto Insurance", "Savings Investment"
-  - CRITICAL: Must state customer's stated purpose/use case from document
-  - CRITICAL: If document doesn't state use case explicitly, return "N/A"
+AH14. TARGET_GOAL (CRITICAL FIX): Extract ONLY the stated use case or product purpose (max 50 chars).
+  - Correct: "Solar Energy Financing", "Auto Insurance", "Remittance Transfers"
+  - WRONG: Copying full product description or marketing tagline
   - WRONG: Copying marketing tagline without clarifying use case
   - CORRECT: "Auto Insurance Protection", "Solar Equipment Financing", "NRP Money Transfer"
   - Do NOT infer use case; extract from document's stated purpose
@@ -165,11 +178,12 @@ DO NOT:
 × Return "Term Finance Facility" as PLAN_TYPE (normalize to "Loan")
 × Hallucinate TARGET_GOAL or use vague terms ("Vehicle Financing" for insurance)
 × Extract REQUIRED_DOCUMENTS from claims sections without explicit "Required Documents" header
+× Extract LOAN_AMOUNT_RANGE that doesn't contain currency or monetary keywords (reject capacity specs like KW, MW)
 
 FIELD DEFINITIONS (56 COLUMNS):
 
 1. PRODUCT_NAME: Product title from document heading. "N/A" if not found.
-2. LEAD_MARKER: Exactly "IBG" or "BNK" (represents banking division, not product type)
+2. LEAD_MARKER: Exactly "IBG" or "BNK" (represents banking division: Islamic or Conventional). Determine by document signals (Islamic/Takaful keywords for IBG, conventional/KIBOR/Term Finance for BNK). Default to BNK if ambiguous.
 3. SOURCE_FILE_PRODUCT: Batch/source group name
 4. PLAN_TYPE: Loan|Deposit|Savings|Card|Investment|Insurance|Service|Loyalty|Account (NORMALIZED to schema)
 5. TARGET_GOAL: Use case (max 50 chars)
@@ -196,13 +210,13 @@ FIELD DEFINITIONS (56 COLUMNS):
 26. MIN_INCOME_USD: Integer (USD)
 27. MIN_INVESTMENT: Integer
 28. MIN_CONTRIBUTION: Integer or percentage (insurance premiums only). For loans → "N/A". Deduplicate repeated values. Extract all tiers with " | " separator.
-29. LOAN_AMOUNT_RANGE: "200K-3M" or "Up to PKR 5M" (Loans only, MUST be "N/A" for insurance). NEVER extract if it looks like a capacity range (e.g. "4KW-1000KW").
+29. LOAN_AMOUNT_RANGE: "200K-3M" or "Up to PKR 5M" (Loans only, MUST be "N/A" for insurance). NEVER extract if it looks like a capacity range (e.g. "4KW-1000KW"). MUST contain currency (PKR/USD) or monetary keywords.
 30. COVERAGE_AMOUNT: Coverage limits (Insurance only, MUST be "N/A" for loans). List all options with " | " separator if multiple tiers.
 31. FINANCING_TYPE: Conventional|Islamic|Unit Linked|Hybrid|Takaful|N/A
 32. DEPOSIT_PROFIT_TYPE: Simple|Compound|N/A
 33. DEPOSIT_PROFIT_FREQUENCY: Monthly|Quarterly|Semi-Annual|Annual|N/A. Only extract if document explicitly states when profits/returns are paid.
 34. TENURE: "1-5 years" or "1 Year" (readable format)
-35. TENURE_OPTIONS: "1M -> 5Y" or "1|2|3|5|10" (structured menu). ONLY if explicitly listed in document. Extract ALL options with " | " separator.
+35. TENURE_OPTIONS: "1M -> 5Y" or "1|2|3|5|10" (structured menu). ONLY if explicitly listed in document as preset options. Extract ALL options with " | " separator. Do NOT extract min/max ranges as options.
 36. MIN_TERM_YEARS: Integer if explicitly stated with "minimum", "min", or "minimum term" keywords. "Up to X" → "N/A". CRITICAL: Validate keyword presence before extracting.
 37. MAX_TERM_YEARS: Integer
 38. BUSINESS_TENURE: ">=3 years" or "min 2 years" (max 50 chars)
@@ -215,7 +229,7 @@ FIELD DEFINITIONS (56 COLUMNS):
 45. PROVIDER_NAME: Bank or insurer name (max 100 chars)
 46. PRODUCT_VARIANT_TIER: "Bronze | Silver | Gold" (tier names from document only, NOT invented)
 47. PRICING_RATE: Interest/markup rates for loans only (e.g. "KIBOR+3%"). For insurance → "N/A" ALWAYS. Do NOT use for insurance premiums. List all rate tiers with " | " separator.
-48. FEES_AND_CHARGES: "Processing Fee: X | Issuance Fee: Y" (max 300 chars)
+48. FEES_AND_CHARGES: "Processing Fee: X | Issuance Fee: Y" (max 100 chars)
 49. KEY_BENEFITS: Core included benefits (max 280 chars)
 50. OPTIONAL_RIDERS: Optional add-on covers (Insurance only). Extract as "Available" if stated, or list specific rider names (max 300 chars). List ALL rider names with " | " separator.
 51. COVERAGE_AMOUNT: Coverage limits (Insurance only). List all options with " | " separator.
@@ -223,5 +237,5 @@ FIELD DEFINITIONS (56 COLUMNS):
 53. REQUIRED_DOCUMENTS: "CNIC | Passport | Salary slips" (explicit section only, max 250 chars). Extract from "Documentation Required" or "Required Documents" sections ONLY. Do NOT extract from claims or claim-filing procedures. Do NOT extract from loan documentation sections in insurance documents.
 54. CLAIMS_SERVICE_CONTACT: Phone or email for claims (Insurance only, from document only)
 55. KEY_EXCLUSIONS: From explicit Exclusions section only, NOT invented (Insurance only, max 200 chars)
-56. TAX_ZAKAT_TREATMENT: Zakat/tax notes if stated (max 100 chars)
+56. TAX_ZAKAT_TREATMENT: Zakat/tax notes if stated (max 50 chars)
 57. PREMIUM_PAYMENT_FREQUENCY: Annual|Semi-Annual|Quarterly|Monthly (Insurance only, CRITICAL FIX). Extract ALL frequency options if explicitly listed. Use " | " separator. For loans → "N/A". If document lists multiple frequencies, ensure all are captured.
